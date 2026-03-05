@@ -1,0 +1,520 @@
+diff --git a/README.md b/README.md
+index f2d0dde..17b858a 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1,59 @@
+-# SW_ESP32_firmware
++# SonicWave ESP32 Firmware
++
++SonicWave 是一个基于 ESP32-S3 的理疗振动控制固件项目。系统通过 BLE 与 Android App 通信，结合 I2S 音频输出链路和激光测重链路，实现可控振动输出与安全联锁停机。
++
++ESP32 在系统中的角色：
++- BLE 通信网关：接收 App 指令并返回 ACK/NACK 与事件。
++- 实时控制核心：驱动 Wave 输出（I2S）与 Laser 监测（UART/Modbus）。
++- 安全治理中心：通过 `SystemStateMachine` 决定系统是否允许振动输出。
++
++> [!WARNING]
++> **Safety First**
++> 所有振动输出必须经过 `SystemStateMachine`。App 不得绕过状态机直接启停振动。
++
++## Quick Start
++
++### 1) Build
++```bash
++# 如果 pio 已在 PATH
++pio run
++
++# 常见本机路径
++~/.platformio/penv/bin/pio run
++```
++
++### 2) Upload
++```bash
++pio run -t upload --upload-port <PORT>
++```
++
++### 3) Monitor
++```bash
++pio device monitor -b 115200 --port <PORT>
++```
++
++## 关键特性
++
++- BLE 控制协议：文本指令 + ACK/NACK + 事件上报
++- I2S Wave Engine：DDS 正弦生成、DMA 输出
++- Laser 监测链路：UART/Modbus 采样、稳定体重判定、离位检测
++- Safety Interlock：离位/断连/传感器异常/疑似摔倒触发停机
++
++## 文档导航
++
++- 开发指南：[docs/firmware_developer_guide.md](docs/firmware_developer_guide.md)
++- 系统架构（详细）：[docs/architecture.md](docs/architecture.md)
++- 系统总览（简版）：[docs/system_overview.md](docs/system_overview.md)
++- BLE 协议：**[docs/protocol.md](docs/protocol.md)**
++- 硬件文档：[docs/hardware.md](docs/hardware.md)
++- 安全设计：[docs/safety_design.md](docs/safety_design.md)
++- 开发工作流：[docs/development_workflow.md](docs/development_workflow.md)
++- 架构图（SVG）：[docs/system_architecture.svg](docs/system_architecture.svg)
++
++## 项目结构（简要）
++
++- `src/`：固件源码（core/modules/transport）
++- `docs/`：项目文档
++- `reports/`：审计与文档生成报告
++- `platformio.ini`：PlatformIO 构建入口
++
+diff --git a/docs/system_architecture.svg b/docs/system_architecture.svg
+new file mode 100644
+index 0000000..6504a03
+--- /dev/null
++++ b/docs/system_architecture.svg
+@@ -0,0 +1,96 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="1360" height="860" viewBox="0 0 1360 860" role="img" aria-labelledby="title desc">
++  <title id="title">SonicWave System Architecture</title>
++  <desc id="desc">Android App through BLE to ESP32 firmware with buses, state machine, wave and laser modules, and hardware paths.</desc>
++
++  <defs>
++    <style>
++      .title { font: 700 28px Arial, sans-serif; fill: #111827; }
++      .subtitle { font: 600 18px Arial, sans-serif; fill: #1f2937; }
++      .label { font: 600 15px Arial, sans-serif; fill: #111827; }
++      .small { font: 500 13px Arial, sans-serif; fill: #374151; }
++      .box { fill: #f8fafc; stroke: #1f2937; stroke-width: 2; rx: 10; ry: 10; }
++      .gate { fill: #ecfeff; stroke: #0f766e; stroke-width: 2.5; rx: 10; ry: 10; }
++      .bus { fill: #eef2ff; stroke: #3730a3; stroke-width: 2; rx: 10; ry: 10; }
++      .hw { fill: #fff7ed; stroke: #9a3412; stroke-width: 2; rx: 10; ry: 10; }
++      .app { fill: #eff6ff; stroke: #1d4ed8; stroke-width: 2; rx: 10; ry: 10; }
++      .arrow { stroke: #111827; stroke-width: 2.4; fill: none; marker-end: url(#m); }
++      .arrow2 { stroke: #374151; stroke-width: 2; fill: none; marker-end: url(#m2); }
++      .dash { stroke-dasharray: 7 7; }
++    </style>
++    <marker id="m" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto">
++      <polygon points="0,0 11,5.5 0,11" fill="#111827"/>
++    </marker>
++    <marker id="m2" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
++      <polygon points="0,0 10,5 0,10" fill="#374151"/>
++    </marker>
++  </defs>
++
++  <rect x="0" y="0" width="1360" height="860" fill="#ffffff"/>
++  <text x="36" y="48" class="title">SonicWave Firmware Architecture</text>
++  <text x="36" y="76" class="small">Android App -> BLE -> ESP32 Firmware with Safety Gate, Command/Event Buses, and Wave/Laser paths</text>
++
++  <rect x="60" y="120" width="220" height="88" class="app"/>
++  <text x="170" y="156" text-anchor="middle" class="label">Android App</text>
++  <text x="170" y="180" text-anchor="middle" class="small">Control + UI</text>
++
++  <rect x="350" y="120" width="260" height="88" class="box"/>
++  <text x="480" y="156" text-anchor="middle" class="label">BleTransport</text>
++  <text x="480" y="180" text-anchor="middle" class="small">GATT RX/TX (BLE)</text>
++
++  <rect x="680" y="120" width="260" height="88" class="box"/>
++  <text x="810" y="156" text-anchor="middle" class="label">ProtocolCodec</text>
++  <text x="810" y="180" text-anchor="middle" class="small">parse / encode</text>
++
++  <rect x="360" y="270" width="240" height="84" class="bus"/>
++  <text x="480" y="304" text-anchor="middle" class="label">CommandBus</text>
++  <text x="480" y="328" text-anchor="middle" class="small">Command dispatch</text>
++
++  <rect x="680" y="270" width="240" height="84" class="bus"/>
++  <text x="800" y="304" text-anchor="middle" class="label">EventBus</text>
++  <text x="800" y="328" text-anchor="middle" class="small">Event publish</text>
++
++  <rect x="500" y="410" width="300" height="96" class="gate"/>
++  <text x="650" y="447" text-anchor="middle" class="label">SystemStateMachine</text>
++  <text x="650" y="471" text-anchor="middle" class="small">Safety Gate</text>
++  <text x="650" y="492" text-anchor="middle" class="small">IDLE / ARMED / RUNNING / FAULT_STOP</text>
++
++  <rect x="300" y="570" width="280" height="96" class="box"/>
++  <text x="440" y="606" text-anchor="middle" class="label">WaveModule</text>
++  <text x="440" y="630" text-anchor="middle" class="small">I2S_Audio Task + DDS</text>
++
++  <rect x="740" y="570" width="280" height="96" class="box"/>
++  <text x="880" y="606" text-anchor="middle" class="label">LaserModule</text>
++  <text x="880" y="630" text-anchor="middle" class="small">LaserTask + Modbus read</text>
++
++  <rect x="120" y="740" width="620" height="82" class="hw"/>
++  <text x="430" y="772" text-anchor="middle" class="label">I2S -> PCM5102A -> TPA3255 -> Vibrating Platform</text>
++  <text x="430" y="798" text-anchor="middle" class="small">Wave output hardware chain</text>
++
++  <rect x="820" y="740" width="420" height="82" class="hw"/>
++  <text x="1030" y="772" text-anchor="middle" class="label">UART/Modbus -> Laser Sensor</text>
++  <text x="1030" y="798" text-anchor="middle" class="small">Distance sampling path</text>
++
++  <path d="M280 164 L350 164" class="arrow"/>
++  <text x="314" y="148" class="small">BLE</text>
++
++  <path d="M610 164 L680 164" class="arrow"/>
++  <path d="M480 208 L480 270" class="arrow"/>
++  <path d="M810 208 L810 270" class="arrow"/>
++
++  <path d="M600 312 L680 312" class="arrow"/>
++  <path d="M650 354 L650 410" class="arrow"/>
++
++  <path d="M590 506 L500 570" class="arrow"/>
++  <path d="M710 506 L800 570" class="arrow"/>
++
++  <path d="M440 666 L430 740" class="arrow"/>
++  <path d="M880 666 L1030 740" class="arrow"/>
++
++  <path d="M880 570 L880 354" class="arrow2 dash"/>
++  <path d="M800 312 L610 312" class="arrow2 dash"/>
++  <text x="660" y="292" class="small">fault/state/measurement events</text>
++
++  <text x="1010" y="120" class="subtitle">Safety First</text>
++  <text x="1010" y="146" class="small">All vibration output must pass</text>
++  <text x="1010" y="168" class="small">through SystemStateMachine.</text>
++</svg>
+diff --git a/docs/safety_design.md b/docs/safety_design.md
+new file mode 100644
+index 0000000..1930abc
+--- /dev/null
++++ b/docs/safety_design.md
+@@ -0,0 +1,83 @@
++# SonicWave Safety Design
++
++## 1. 安全设计原则
++
++1. App 不能直接控制振动输出硬件。
++2. 所有启动/停止动作必须先经过 `SystemStateMachine` 判定。
++3. 任何安全异常优先级高于业务输出，必须立即进入停机路径。
++4. 主循环必须保留兜底逻辑：非 `RUNNING` 状态强制停波。
++
++说明：当前实现中 `WAVE:START` 与 Legacy `E:1` 启动都走 `requestStart()`，避免绕过安全闸门。
++
++## 2. Safety Interlock 触发条件与动作
++
++### 2.1 用户离开平台
++- 触发条件：测重结果低于 `LEAVE_TH`。
++- 触发入口：`LaserModule -> SystemStateMachine::onUserOff()`。
++- 动作：切换 `FAULT_STOP`，禁止继续启动；主循环兜底停波。
++
++### 2.2 BLE 断连
++- 触发条件：连接状态由 connected 变为 disconnected。
++- 触发入口：`loop()` 中断连策略（`STOP_ON_DISCONNECT`）。
++- 动作：调用 `onUserOff()` 并立即 `g_wave.setEnable(false)`。
++
++### 2.3 传感器异常（Modbus 读取失败）
++- 触发条件：`readInputRegisters` 返回非成功。
++- 触发入口：`LaserModule -> SystemStateMachine::onSensorErr()`。
++- 动作：切换 `FAULT_STOP`，输出停机。
++
++### 2.4 疑似摔倒
++- 触发条件：运行态下重量变化率超过 `FALL_DW_DT_SUSPECT_TH`。
++- 触发入口：`LaserModule -> SystemStateMachine::onFallSuspected()`。
++- 动作：切换 `FAULT_STOP`，输出停机。
++
++## 3. FAULT_STOP、冷却时间与解除条件
++
++参数来自 `src/config/GlobalConfig.h`：
++- `FAULT_COOLDOWN_MS = 3000`
++- `CLEAR_CONFIRM_MS = 1000`
++- 相关判定阈值：`LEAVE_TH`、`MIN_WEIGHT`、`FALL_DW_DT_SUSPECT_TH`
++
++行为说明：
++1. 进入 `FAULT_STOP` 后，冷却窗口内拒绝启动（`NACK:FAULT_LOCKED`）。
++2. 冷却结束后，需满足“离位持续确认窗口”才可回到 `IDLE`。
++3. 回到 `IDLE` 后仍需按正常状态机路径再次进入 `ARMED/RUNNING`。
++
++## 4. 参数与调参建议
++
++- `LEAVE_TH`（默认 3.0）
++  - 过低：离位反应慢。
++  - 过高：可能误判离位。
++- `MIN_WEIGHT`（默认 5.0）
++  - 建议保持 `MIN_WEIGHT > LEAVE_TH` 形成滞回。
++- `STD_TH`（默认 0.20）与 `WINDOW_N`（默认 10）
++  - 联合控制稳定判定灵敏度和延迟。
++- `FALL_DW_DT_SUSPECT_TH`（默认 25.0 kg/s）
++  - 需基于真实样本逐步标定，不建议一次性大幅调整。
++
++## 5. 推荐验证步骤（实机）
++
++## 准备
++1. 编译并烧录固件。
++2. 连接 BLE，设置 `WAVE:SET` 并进入 `RUNNING`。
++3. 确认振动平台已有输出。
++
++## 测试 A：用户离开平台
++1. 运行中让用户离开平台（重量跌破 `LEAVE_TH`）。
++2. 预期：进入 `FAULT_STOP`，振动停止。
++
++## 测试 B：蓝牙断开
++1. 运行中主动断开 App BLE 连接。
++2. 预期：触发停机逻辑，振动停止。
++
++## 测试 C：传感器异常
++1. 运行中断开激光传感器总线或制造 Modbus 读取失败。
++2. 预期：触发 `onSensorErr()`，进入 `FAULT_STOP`，振动停止。
++
++## 测试 D：疑似摔倒
++1. 运行中制造快速重量变化场景（受控、安全前提下）。
++2. 预期：触发 `onFallSuspected()`，进入 `FAULT_STOP`。
++
++验收标准：
++- 上述任一触发条件出现时，系统必须停止振动输出。
++- 冷却窗口内必须拒绝重新启动。
+diff --git a/docs/development_workflow.md b/docs/development_workflow.md
+new file mode 100644
+index 0000000..4e23f5b
+--- /dev/null
++++ b/docs/development_workflow.md
+@@ -0,0 +1,76 @@
++# SonicWave Development Workflow
++
++## 1. 维护与开发工作流
++
++## 1.1 基线准备
++1. 拉取主分支并确认工程可编译。
++2. 阅读以下核心文档：
++   - `docs/firmware_developer_guide.md`
++   - `docs/architecture.md`
++   - `docs/protocol.md`
++   - `docs/hardware.md`
++   - `docs/system_overview.md`
++   - `docs/safety_design.md`
++3. 运行基础构建命令：`pio run`。
++
++## 1.2 日常开发流程
++1. 明确需求类型：模块开发 / 协议变更 / 参数调优 / 文档更新。
++2. 先改设计文档，再改代码，再补测试与验证记录。
++3. 提交前检查：
++   - 编译通过
++   - 关键安全场景回归
++   - 文档更新完成
++
++## 2. 模块边界规则
++
++1. 禁止跨模块直接改内部状态变量。
++2. 命令入口统一走 `CommandBus`。
++3. 事件出口统一走 `EventBus`。
++4. 安全相关动作统一走 `SystemStateMachine`。
++5. 通信层（BLE）不承载业务决策，只做收发与编码。
++
++示例：
++- 正确：`BleTransport -> CommandBus -> Handler -> StateMachine/Module`
++- 禁止：`BleTransport` 直接修改 `WaveModule` 内部运行变量绕过状态机。
++
++## 3. 新增模块标准步骤
++
++1. 在 `src/modules/<new_module>/` 创建模块文件。
++2. 通过 `begin/startTask` 接入初始化流程（`main.cpp`）。
++3. 如有对外数据，上报到 `EventBus`。
++4. 如有安全风险输入，新增状态机事件接口并接入 `SystemStateMachine`。
++5. 更新文档：
++   - `docs/architecture.md`
++   - `docs/system_overview.md`
++   - 必要时更新 `docs/hardware.md`
++
++## 4. 新增指令标准步骤
++
++1. 在 `src/core/CommandBus.h` 增加命令类型。
++2. 在 `src/core/ProtocolCodec.h` 增加解析与参数校验。
++3. 在 `src/main.cpp` 的 `HubHandler` 增加处理逻辑。
++4. 如需响应事件，更新 `EventBus`/`ProtocolCodec::encodeEvent`。
++5. 更新协议文档 `docs/protocol.md` 与 README 文档导航说明。
++
++## 5. 新增事件标准步骤
++
++1. 在 `src/core/EventBus.h` 增加 `EventType`。
++2. 在相关模块发布事件（`EventBus::publish`）。
++3. 在 `src/core/ProtocolCodec.h` 增加编码。
++4. 在 App 侧补充事件解码和 UI 处理。
++5. 更新 `docs/protocol.md` 与 `docs/architecture.md`。
++
++## 6. 文档更新触发条件
++
++以下改动必须同步更新文档：
++- 新增/修改 BLE 指令、ACK/NACK、事件格式。
++- 新增/修改安全阈值参数（如 `LEAVE_TH`、`MIN_WEIGHT`、`STD_TH`、`WINDOW_N`、`FALL_DW_DT_SUSPECT_TH`）。
++- 新增硬件器件、改引脚定义、改通信链路。
++- 新增任务、修改核心绑定、调整状态机行为。
++
++## 7. 交付检查清单
++
++1. `README.md` 文档导航可点击且路径正确。
++2. `docs/system_architecture.svg` 可在 GitHub 直接预览。
++3. 协议、架构、安全文档与代码实现一致。
++4. `reports/dev_docs/` 下生成对应变更报告与 patch 文件。
+diff --git a/reports/dev_docs/repo_structure.md b/reports/dev_docs/repo_structure.md
+new file mode 100644
+index 0000000..86bc0ad
+--- /dev/null
++++ b/reports/dev_docs/repo_structure.md
+@@ -0,0 +1,82 @@
++# 仓库结构说明（深度 2~3）
++
++```text
++.
++├── docs/
++│   ├── firmware_developer_guide.md
++│   ├── architecture.md
++│   ├── protocol.md
++│   ├── hardware.md
++│   ├── system_overview.md
++│   ├── system_architecture.svg
++│   ├── safety_design.md
++│   └── development_workflow.md
++├── include/
++│   └── README
++├── lib/
++│   └── README
++├── reports/
++│   ├── dev_docs/
++│   │   ├── developer_guide.md
++│   │   ├── repo_structure.md
++│   │   ├── doc_generation_summary.md
++│   │   ├── diff_summary.md
++│   │   ├── patch.diff
++│   │   ├── doc_generation_summary_2.md
++│   │   ├── diff_summary_2.md
++│   │   ├── patch_2.diff
++│   │   ├── doc_generation_summary_3.md
++│   │   ├── diff_summary_3.md
++│   │   ├── patch_3.diff
++│   │   ├── doc_generation_summary_4.md
++│   │   ├── diff_summary_4.md
++│   │   └── patch_4.diff
++│   └── firmware_audit/
++│       ├── audit_report.md
++│       ├── build_notes.md
++│       ├── gitignore_recommendations.md
++│       ├── diff_summary.md
++│       └── patch.diff
++├── src/
++│   ├── config/
++│   │   └── GlobalConfig.h
++│   ├── core/
++│   │   ├── Types.h
++│   │   ├── CommandBus.h
++│   │   ├── EventBus.h
++│   │   ├── ProtocolCodec.h
++│   │   ├── SystemStateMachine.h
++│   │   └── SystemStateMachine.cpp
++│   ├── modules/
++│   │   ├── laser/
++│   │   │   ├── LaserModule.h
++│   │   │   └── LaserModule.cpp
++│   │   └── wave/
++│   │       ├── WaveModule.h
++│   │       └── WaveModule.cpp
++│   ├── transport/
++│   │   └── ble/
++│   │       ├── BleTransport.h
++│   │       └── BleTransport.cpp
++│   └── main.cpp
++├── test/
++│   └── README
++├── .gitignore
++├── platformio.ini
++└── README.md
++```
++
++## 目录用途
++- `src/`：固件核心代码。
++- `src/config/`：全局阈值、引脚、协议版本等配置。
++- `src/core/`：类型定义、命令总线、事件总线、协议编解码、状态机。
++- `src/modules/`：硬件功能模块实现（波形输出、激光测重）。
++- `src/transport/ble/`：BLE GATT 传输层与协议入口。
++- `include/`：公共头文件预留目录（当前仅模板 README）。
++- `lib/`：本地私有库预留目录（当前仅模板 README）。
++- `docs/`：面向开发者的正式文档（开发指南、架构、协议、硬件、安全、工作流、架构图）。
++- `reports/`：审计与文档生成产物。
++- `reports/firmware_audit/`：工程审计报告与构建记录。
++- `reports/dev_docs/`：开发文档增强任务与配套 Artifact。
++- `test/`：测试目录（当前仅模板 README）。
++- `platformio.ini`：PlatformIO 工程入口与构建配置。
+diff --git a/reports/dev_docs/doc_generation_summary_4.md b/reports/dev_docs/doc_generation_summary_4.md
+new file mode 100644
+index 0000000..5e70989
+--- /dev/null
++++ b/reports/dev_docs/doc_generation_summary_4.md
+@@ -0,0 +1,48 @@
++# 文档生成执行报告（四）
++
++## 1. 扫描的关键文件
++
++- 构建与工程入口
++  - `platformio.ini`
++  - `README.md`（旧内容）
++
++- 核心实现与参数来源
++  - `src/main.cpp`
++  - `src/config/GlobalConfig.h`
++  - `src/core/CommandBus.h`
++  - `src/core/EventBus.h`
++  - `src/core/ProtocolCodec.h`
++  - `src/core/SystemStateMachine.h`
++  - `src/core/SystemStateMachine.cpp`
++  - `src/modules/wave/WaveModule.h`
++  - `src/modules/wave/WaveModule.cpp`
++  - `src/modules/laser/LaserModule.h`
++  - `src/modules/laser/LaserModule.cpp`
++  - `src/transport/ble/BleTransport.h`
++  - `src/transport/ble/BleTransport.cpp`
++
++- 现有文档（用于保持一致）
++  - `docs/firmware_developer_guide.md`
++  - `docs/architecture.md`
++  - `docs/protocol.md`
++  - `docs/hardware.md`
++  - `docs/system_overview.md`
++  - `reports/dev_docs/repo_structure.md`
++
++## 2. 本次生成/更新文档
++
++- 更新：`README.md`
++- 新增：`docs/system_architecture.svg`
++- 新增：`docs/safety_design.md`
++- 新增：`docs/development_workflow.md`
++- 更新：`reports/dev_docs/repo_structure.md`
++- 新增：`reports/dev_docs/doc_generation_summary_4.md`
++- 新增：`reports/dev_docs/diff_summary_4.md`
++- 新增：`reports/dev_docs/patch_4.diff`
++
++## 3. 无法从仓库确认的信息（TODO）
++
++- TODO: PCM5102A 与 TPA3255 的具体接线引脚映射（仅确认了 ESP32 侧 I2S 引脚）。
++- TODO: 激光传感器具体型号与寄存器扩展表（当前仅见 `REG_DISTANCE`）。
++- TODO: 不同硬件版本（板卡 revision）引脚差异与功放增益配置表。
++- TODO: 实机安全验证的定量指标（振动停止判据、电流/振幅阈值）尚未在仓库固化。
+diff --git a/reports/dev_docs/diff_summary_4.md b/reports/dev_docs/diff_summary_4.md
+new file mode 100644
+index 0000000..8a024e5
+--- /dev/null
++++ b/reports/dev_docs/diff_summary_4.md
+@@ -0,0 +1,34 @@
++# Diff 摘要（四）
++
++## 1. 本次新增/修改文件
++
++- 更新 `README.md`
++- 新增 `docs/system_architecture.svg`
++- 新增 `docs/safety_design.md`
++- 新增 `docs/development_workflow.md`
++- 更新 `reports/dev_docs/repo_structure.md`
++- 新增 `reports/dev_docs/doc_generation_summary_4.md`
++- 新增 `reports/dev_docs/diff_summary_4.md`
++- 新增 `reports/dev_docs/patch_4.diff`
++
++## 2. README 新增章节
++
++- 项目简介（SonicWave + ESP32 角色）
++- Quick Start（build/upload/monitor）
++- 关键特性（BLE/I2S/Laser/安全联锁）
++- 文档导航（链接到 docs 全部核心文档）
++- Safety First 警示段落（必须经过 `SystemStateMachine`）
++
++## 3. system_architecture.svg 包含组件
++
++- Android App -> BLE -> ESP32 Firmware 主链路
++- BleTransport / ProtocolCodec
++- CommandBus / EventBus
++- SystemStateMachine（安全闸门）
++- WaveModule（I2S -> PCM5102A -> TPA3255 -> 平台）
++- LaserModule（UART/Modbus -> 激光传感器）
++
++## 4. 非文档类文件变更说明
++
++- 本次未修改任何非文档类文件（未改动固件业务逻辑源码）。
++- 仓库中存在本次任务前的既有源码改动，本次未触碰。

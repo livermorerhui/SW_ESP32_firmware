@@ -17,6 +17,8 @@ build/
 # VSCode
 # =========================
 .vscode/
+.idea/
+.fleet/
 
 # =========================
 # macOS
@@ -38,3 +40,12 @@ Thumbs.db
 # =========================
 *.tmp
 *.temp
+*.swp
+*.swo
+*~
+*.bak
+
+# =========================
+# Tooling metadata
+# =========================
+compile_commands.json

@@ -74,7 +74,10 @@ public:
         int comma = s.indexOf(",", eIndex);
         String sub = (comma == -1) ? s.substring(eIndex + 2) : s.substring(eIndex + 2, comma);
         out.wave.enable = (sub.toInt() != 0);
-      } else out.wave.enable = false; // “未触碰”由 handler 判断
+        out.wave.hasEnable = true;
+      } else {
+        out.wave.hasEnable = false;
+      }
       return true;
     }
 

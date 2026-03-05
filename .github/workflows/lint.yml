@@ -1,0 +1,41 @@
+name: Lint
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Markdown lint (README + docs)
+        run: |
+          npm install -g markdownlint-cli2
+          markdownlint-cli2 "README.md" "docs/**/*.md"
+
+      - name: YAML lint (GitHub workflows)
+        run: |
+          pip install yamllint
+          yamllint -d "{extends: default, rules: {document-start: disable, truthy: disable, line-length: disable}}" .github/workflows/*.yml
+
+      - name: Python lint (tools/test_runner)
+        run: |
+          pip install ruff black
+          ruff check tools/test_runner
+          black --check tools/test_runner

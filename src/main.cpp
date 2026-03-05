@@ -65,11 +65,20 @@ public:
         if (c.wave.freqHz >= 0) w->setFreq(c.wave.freqHz);
         if (c.wave.intensity >= 0) w->setIntensity(c.wave.intensity);
 
-        // 旧协议里 E:0/1 表示 enable；若没提供 E 则 parseCommand 没法区分
-        // 这里建议你旧端若要改 enable 就必须带 E: 字段
-        // 简化：只要字符串包含 E: 我们就使用 out.wave.enable（parseCommand 已设置）
-        // 由于这里拿不到原串，保守做法：让旧端总是带 E
-        w->setEnable(c.wave.enable);
+        // E 字段触碰时复用状态机联锁，避免旧协议绕过安全逻辑直接启停
+        if (c.wave.hasEnable) {
+          if (c.wave.enable) {
+            FaultCode reason = FaultCode::NONE;
+            if (!sm->requestStart(reason)) {
+              outAck = (reason == FaultCode::FAULT_LOCKED) ? "NACK:FAULT_LOCKED" : "NACK:NOT_ARMED";
+              return false;
+            }
+            w->setEnable(true);
+          } else {
+            sm->requestStop();
+            w->setEnable(false);
+          }
+        }
 
         outAck = "ACK:OK";
         return true;
@@ -111,6 +120,11 @@ void setup() {
 }
 
 void loop() {
+  if (g_fsm.state() != TopState::RUNNING) {
+    // 联锁兜底：任何非 RUNNING 态都强制停波
+    g_wave.setEnable(false);
+  }
+
   // 断连安全策略：断连 -> 停机（并进入 FAULT_STOP，避免误启动）
   static bool lastConn = false;
   bool conn = g_ble.isConnected();

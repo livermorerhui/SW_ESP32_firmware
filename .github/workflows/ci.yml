@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  build-and-sanity:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-platformio-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-platformio-
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build Firmware
+        run: pio run
+
+      - name: Collect firmware artifact
+        shell: bash
+        run: |
+          mkdir -p artifacts/firmware
+          found=0
+          while IFS= read -r -d '' f; do
+            cp "$f" "artifacts/firmware/$(basename "$(dirname "$f")")_firmware.bin"
+            found=1
+          done < <(find .pio/build -type f -name firmware.bin -print0 2>/dev/null)
+
+          if [ "$found" -eq 0 ]; then
+            echo "firmware.bin not found under .pio/build" | tee artifacts/firmware/README.txt
+          fi
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ github.sha }}
+          path: artifacts/firmware/
+
+      - name: Install test runner deps
+        run: pip install -r tools/test_runner/requirements.txt
+
+      - name: BLE runner sanity check (dry-run with example config)
+        run: python tools/test_runner/run_tests.py --config tools/test_runner/config/targets.example.yaml --suite ble
+
+      - name: Upload test runner report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-runner-report-${{ github.sha }}
+          path: tools/test_runner/reports/
+          if-no-files-found: warn

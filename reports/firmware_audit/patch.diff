@@ -1,0 +1,163 @@
+diff --git a/.gitignore b/.gitignore
+index 9b6dfa1..571016d 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -17,6 +17,8 @@ build/
+ # VSCode
+ # =========================
+ .vscode/
++.idea/
++.fleet/
+ 
+ # =========================
+ # macOS
+@@ -37,4 +39,13 @@ Thumbs.db
+ # Temporary files
+ # =========================
+ *.tmp
+-*.temp
+\ No newline at end of file
++*.temp
++*.swp
++*.swo
++*~
++*.bak
++
++# =========================
++# Tooling metadata
++# =========================
++compile_commands.json
+diff --git a/src/core/ProtocolCodec.h b/src/core/ProtocolCodec.h
+index 40720f3..fd74b2d 100644
+--- a/src/core/ProtocolCodec.h
++++ b/src/core/ProtocolCodec.h
+@@ -74,7 +74,10 @@ public:
+         int comma = s.indexOf(",", eIndex);
+         String sub = (comma == -1) ? s.substring(eIndex + 2) : s.substring(eIndex + 2, comma);
+         out.wave.enable = (sub.toInt() != 0);
+-      } else out.wave.enable = false; // “未触碰”由 handler 判断
++        out.wave.hasEnable = true;
++      } else {
++        out.wave.hasEnable = false;
++      }
+       return true;
+     }
+ 
+@@ -114,4 +117,4 @@ public:
+     }
+     return "EVT:UNKNOWN";
+   }
+-};
+\ No newline at end of file
++};
+diff --git a/src/core/SystemStateMachine.cpp b/src/core/SystemStateMachine.cpp
+index ca5285c..7137585 100644
+--- a/src/core/SystemStateMachine.cpp
++++ b/src/core/SystemStateMachine.cpp
+@@ -1,5 +1,18 @@
+ #include "SystemStateMachine.h"
+ 
++void SystemStateMachine::begin(EventBus* eb) {
++  bus = eb;
++  st = TopState::IDLE;
++  fault_ms = 0;
++  clear_window_active = false;
++  clear_candidate_ms = 0;
++  emitState();
++}
++
++TopState SystemStateMachine::state() const {
++  return st;
++}
++
+ bool SystemStateMachine::isFaultLocked() const {
+   if (st != TopState::FAULT_STOP) return false;
+   return (millis() - fault_ms) < FAULT_COOLDOWN_MS;
+@@ -104,4 +117,4 @@ void SystemStateMachine::onWeightSample(float w) {
+   } else {
+     clear_window_active = false;
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/src/core/Types.h b/src/core/Types.h
+index 4868ddc..1627b41 100644
+--- a/src/core/Types.h
++++ b/src/core/Types.h
+@@ -17,4 +17,5 @@ struct WaveParams {
+   float freqHz = 0.0f; // 0..50
+   int intensity = 0;   // 0..120
+   bool enable = false;
+-};
+\ No newline at end of file
++  bool hasEnable = false;
++};
+diff --git a/src/main.cpp b/src/main.cpp
+index 00c467c..8417af7 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -65,11 +65,20 @@ public:
+         if (c.wave.freqHz >= 0) w->setFreq(c.wave.freqHz);
+         if (c.wave.intensity >= 0) w->setIntensity(c.wave.intensity);
+ 
+-        // 旧协议里 E:0/1 表示 enable；若没提供 E 则 parseCommand 没法区分
+-        // 这里建议你旧端若要改 enable 就必须带 E: 字段
+-        // 简化：只要字符串包含 E: 我们就使用 out.wave.enable（parseCommand 已设置）
+-        // 由于这里拿不到原串，保守做法：让旧端总是带 E
+-        w->setEnable(c.wave.enable);
++        // E 字段触碰时复用状态机联锁，避免旧协议绕过安全逻辑直接启停
++        if (c.wave.hasEnable) {
++          if (c.wave.enable) {
++            FaultCode reason = FaultCode::NONE;
++            if (!sm->requestStart(reason)) {
++              outAck = (reason == FaultCode::FAULT_LOCKED) ? "NACK:FAULT_LOCKED" : "NACK:NOT_ARMED";
++              return false;
++            }
++            w->setEnable(true);
++          } else {
++            sm->requestStop();
++            w->setEnable(false);
++          }
++        }
+ 
+         outAck = "ACK:OK";
+         return true;
+@@ -111,6 +120,11 @@ void setup() {
+ }
+ 
+ void loop() {
++  if (g_fsm.state() != TopState::RUNNING) {
++    // 联锁兜底：任何非 RUNNING 态都强制停波
++    g_wave.setEnable(false);
++  }
++
+   // 断连安全策略：断连 -> 停机（并进入 FAULT_STOP，避免误启动）
+   static bool lastConn = false;
+   bool conn = g_ble.isConnected();
+@@ -123,4 +137,4 @@ void loop() {
+   lastConn = conn;
+ 
+   delay(20);
+-}
+\ No newline at end of file
++}
+diff --git a/src/transport/ble/BleTransport.h b/src/transport/ble/BleTransport.h
+index db08f05..cb30d6d 100644
+--- a/src/transport/ble/BleTransport.h
++++ b/src/transport/ble/BleTransport.h
+@@ -20,10 +20,13 @@ private:
+   void sendLine(const String& s);
+   void startAdvertisingSafe();
+ 
++  friend class MyServerCallbacks;
++  friend class MyRxCallbacks;
++
+ private:
+   CommandBus* bus = nullptr;
+   BLEServer* pServer = nullptr;
+   BLECharacteristic* pTx = nullptr;
+ 
+   volatile bool deviceConnected = false;
+-};
+\ No newline at end of file
++};

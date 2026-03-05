@@ -1,0 +1,45 @@
+name: Hardware Integration (Self-hosted)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 0 * * 0"
+
+jobs:
+  hw-safety-suite:
+    runs-on: [self-hosted, linux]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r tools/test_runner/requirements.txt
+
+      - name: Run safety suite (requires local hardware config)
+        run: python tools/test_runner/run_tests.py --config tools/test_runner/config/targets.yaml --suite safety
+
+      - name: Package latest test report
+        if: always()
+        shell: bash
+        run: |
+          latest_dir=$(ls -1dt tools/test_runner/reports/*/ 2>/dev/null | head -n 1 || true)
+          if [ -z "$latest_dir" ]; then
+            mkdir -p tools/test_runner/reports/no_report
+            echo "No report directory was generated." > tools/test_runner/reports/no_report/README.txt
+          else
+            echo "Latest report: $latest_dir"
+          fi
+
+      - name: Upload hardware integration report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hw-integration-report-${{ github.run_id }}
+          path: tools/test_runner/reports/
+          if-no-files-found: warn

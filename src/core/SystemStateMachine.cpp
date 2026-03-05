@@ -1,5 +1,18 @@
 #include "SystemStateMachine.h"
 
+void SystemStateMachine::begin(EventBus* eb) {
+  bus = eb;
+  st = TopState::IDLE;
+  fault_ms = 0;
+  clear_window_active = false;
+  clear_candidate_ms = 0;
+  emitState();
+}
+
+TopState SystemStateMachine::state() const {
+  return st;
+}
+
 bool SystemStateMachine::isFaultLocked() const {
   if (st != TopState::FAULT_STOP) return false;
   return (millis() - fault_ms) < FAULT_COOLDOWN_MS;

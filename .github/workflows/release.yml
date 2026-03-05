@@ -1,0 +1,106 @@
+name: Release Firmware
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-platformio-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-platformio-
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build Firmware
+        run: pio run
+
+      - name: Collect release assets
+        id: collect
+        shell: bash
+        run: |
+          mkdir -p release_assets
+          firmware=$(find .pio/build -type f -name firmware.bin | head -n 1)
+          if [ -z "$firmware" ]; then
+            echo "firmware.bin not found under .pio/build"
+            exit 1
+          fi
+
+          cp "$firmware" release_assets/firmware.bin
+          sha256sum release_assets/firmware.bin > release_assets/firmware.sha256
+
+          if [ -f docs/test_plan.md ]; then
+            test_plan_ref="- Test Plan: docs/test_plan.md"
+          else
+            test_plan_ref="- Test Plan: (not found in repository)"
+          fi
+
+          cat > release_assets/RELEASE_NOTES.md <<NOTES
+          ## Release Notes Template
+
+          ### Change Summary
+          - Firmware build from tag ${GITHUB_REF_NAME}
+          - See commit history and PRs for detailed changes
+
+          ### Compatibility
+          - Target: esp32-s3-devkitc-1
+          - Framework: Arduino (PlatformIO)
+
+          ### Known Issues
+          - Hardware-in-the-loop tests depend on self-hosted environment
+          - BLE field conditions may vary by platform and RF environment
+
+          ### Test Status
+          - CI firmware build: expected pass
+          - Python BLE runner sanity: expected dry-run pass in CI
+          ${test_plan_ref}
+          NOTES
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref_name }}
+          body_path: release_assets/RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+
+      - name: Upload firmware.bin
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: release_assets/firmware.bin
+          asset_name: firmware.bin
+          asset_content_type: application/octet-stream
+
+      - name: Upload firmware.sha256
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: release_assets/firmware.sha256
+          asset_name: firmware.sha256
+          asset_content_type: text/plain

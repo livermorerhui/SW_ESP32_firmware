@@ -1,0 +1,383 @@
+diff --git a/docs/hardware.md b/docs/hardware.md
+new file mode 100644
+index 0000000..10a095c
+--- /dev/null
++++ b/docs/hardware.md
+@@ -0,0 +1,94 @@
++# SonicWave Hardware Documentation
++
++## 1. 硬件系统组成
++
++SonicWave 硬件系统由以下核心器件构成：
++
++- ESP32-S3
++  - 系统主控，负责 BLE 通信、状态机控制、I2S 音频数据输出、UART 传感采样。
++- PCM5102A DAC
++  - 接收 ESP32 I2S 数字音频流，转换为模拟音频信号。
++- TPA3255 功放
++  - 对 DAC 输出信号进行功率放大，驱动振动执行端。
++- 振动平台
++  - 最终执行器，输出理疗振动。
++- 激光测距传感器
++  - 通过 UART/Modbus 提供距离数据，固件据此换算重量并判断用户状态。
++
++## 2. 硬件连接拓扑
++
++```text
++Android App
++│
++│ BLE
++▼
++ESP32-S3
++│
++├── I2S -> PCM5102A -> TPA3255 -> 振动平台
++│
++└── UART -> 激光传感器
++```
++
++说明：
++- App 与 ESP32 仅通过 BLE 交互命令和事件。
++- ESP32 通过 I2S 音频链路驱动振动输出。
++- ESP32 通过 UART(Modbus)采集激光传感器数据进行安全联锁判断。
++
++## 3. ESP32 引脚定义
++
++引脚定义来源：`src/config/GlobalConfig.h`
++
++- `I2S_BCLK_PIN = 4`
++  - I2S 位时钟（BCLK）。
++- `I2S_LRCK_PIN = 5`
++  - I2S 声道/字时钟（LRCK/WS）。
++- `I2S_DOUT_PIN = 6`
++  - I2S 数据输出（DIN 到 PCM5102A）。
++- `RX_PIN = 15`
++  - UART 接收（ESP32 接收激光传感器数据）。
++- `TX_PIN = 14`
++  - UART 发送（ESP32 发送 Modbus 请求）。
++
++## 4. 音频链路
++
++音频与振动输出链路如下：
++
++1. `WaveModule` 接收频率/强度/启停参数。
++2. 在 `I2S_Audio` 任务内使用 DDS 思路生成正弦波（查表 + 相位累加）。
++3. 生成 PCM 缓冲后调用 `i2s_write` 送入 I2S DMA。
++4. PCM5102A 将数字信号转换为模拟信号。
++5. TPA3255 对模拟信号放大。
++6. 振动平台输出机械振动。
++
++关键点：
++- 非 RUNNING 状态下系统会强制停波，避免异常输出。
++- 频率与强度在任务内有平滑过渡，降低突变冲击。
++
++## 5. 测重链路
++
++测重与用户状态判定链路如下：
++
++1. `LaserModule` 周期调用 Modbus 读取距离寄存器。
++2. 距离值通过零点/比例系数转换为重量值。
++3. 使用滑窗 (`WINDOW_N`) 与标准差阈值 (`STD_TH`) 判定稳定体重。
++4. 当重量低于 `LEAVE_TH` 判定用户离开。
++5. 在运行中若检测到异常变化率可触发跌倒怀疑。
++
++链路输出：
++- 稳定体重事件：`EVT:STABLE`
++- 参数事件：`EVT:PARAM`
++- 实时流事件：`EVT:STREAM`
++
++## 6. 安全联锁
++
++安全联锁由 `SystemStateMachine` 统一治理：
++
++- 关键状态：`IDLE` / `ARMED` / `RUNNING` / `FAULT_STOP`
++- 触发 `FAULT_STOP` 的主要场景：
++  - 用户离开检测（`onUserOff`）
++  - 传感器读取异常（`onSensorErr`）
++  - 跌倒怀疑（`onFallSuspected`）
++- `FAULT_STOP` 期间禁止启动输出，且主循环含停波兜底逻辑。
++
++设计结论：
++- 振动输出权限不应由单模块直接决定，必须通过状态机裁决，确保安全行为一致。
+diff --git a/docs/system_overview.md b/docs/system_overview.md
+new file mode 100644
+index 0000000..a8ac0df
+--- /dev/null
++++ b/docs/system_overview.md
+@@ -0,0 +1,107 @@
++# SonicWave System Overview
++
++## 1. 系统整体结构
++
++```text
++Android App
++│
++│ BLE
++▼
++ESP32 Firmware
++│
++├── Wave Engine
++│
++└── Laser Monitoring
++```
++
++系统分层说明：
++- Android App：发送控制命令，接收状态/故障/测量事件。
++- ESP32 Firmware：执行协议解析、状态机联锁、实时任务调度。
++- Wave Engine：负责振动波形合成与输出链路驱动。
++- Laser Monitoring：负责传感采样、测重计算、安全触发条件检测。
++
++## 2. 软件架构
++
++核心模块：
++
++- `BleTransport`
++  - BLE GATT 入口/出口，负责命令接收与事件发送。
++- `CommandBus`
++  - 命令分发总线，将解析后的命令交给统一处理器。
++- `EventBus`
++  - 事件发布总线，将内部状态/测量事件转发到通信层。
++- `SystemStateMachine`
++  - 安全状态治理核心，控制可运行性与故障锁定。
++- `WaveModule`
++  - I2S 音频生成与输出执行。
++- `LaserModule`
++  - Modbus 采样、重量计算、离位/异常检测。
++
++模块关系（简化）：
++
++```text
++BleTransport -> CommandBus -> Handler -> {SystemStateMachine, WaveModule, LaserModule}
++LaserModule/SystemStateMachine -> EventBus -> BleTransport -> App
++```
++
++## 3. 数据流
++
++### 3.1 App Command Flow
++
++```text
++App 指令
++  -> BLE RX
++  -> ProtocolCodec parse
++  -> CommandBus dispatch
++  -> Handler 执行
++  -> ACK/NACK 返回
++```
++
++### 3.2 Event Flow
++
++```text
++状态/测量事件
++  -> EventBus publish
++  -> BleTransport onEvent
++  -> BLE TX Notify
++  -> App 展示
++```
++
++### 3.3 Audio Data Flow
++
++```text
++参数(freq/intensity/enable)
++  -> WaveModule
++  -> DDS/平滑
++  -> I2S DMA
++  -> DAC/功放
++  -> 振动平台
++```
++
++## 4. 安全机制
++
++- Safety Interlock
++  - 启动必须通过 `SystemStateMachine::requestStart`。
++  - 非运行态由主循环停波兜底。
++
++- Fault Lock
++  - 进入 `FAULT_STOP` 后存在冷却锁定窗口（禁止立即重启）。
++
++- Auto Stop
++  - 用户离开、BLE 断连、传感器异常等场景触发自动停机。
++
++设计原则：
++- 安全相关决策集中在状态机，避免模块各自判断造成行为分裂。
++
++## 5. 扩展能力
++
++未来扩展能力：
++- EEG
++- Heart Rate
++- SpO2
++
++接入方式建议：
++1. 新增模块在 `src/modules/` 中独立实现采样任务。
++2. 常规数据通过 `EventBus` 上报。
++3. 涉及安全风险的信号通过 `SystemStateMachine` 增加事件入口。
++4. 在 BLE 协议层扩展事件编码，App 同步增加解码与展示。
+diff --git a/reports/dev_docs/repo_structure.md b/reports/dev_docs/repo_structure.md
+new file mode 100644
+index 0000000..31db62b
+--- /dev/null
++++ b/reports/dev_docs/repo_structure.md
+@@ -0,0 +1,76 @@
++# 仓库结构说明（深度 2~3）
++
++```text
++.
++├── docs/
++│   ├── firmware_developer_guide.md
++│   ├── architecture.md
++│   ├── protocol.md
++│   ├── hardware.md
++│   └── system_overview.md
++├── include/
++│   └── README
++├── lib/
++│   └── README
++├── reports/
++│   ├── dev_docs/
++│   │   ├── developer_guide.md
++│   │   ├── repo_structure.md
++│   │   ├── doc_generation_summary.md
++│   │   ├── diff_summary.md
++│   │   ├── patch.diff
++│   │   ├── doc_generation_summary_2.md
++│   │   ├── diff_summary_2.md
++│   │   ├── patch_2.diff
++│   │   ├── doc_generation_summary_3.md
++│   │   ├── diff_summary_3.md
++│   │   └── patch_3.diff
++│   └── firmware_audit/
++│       ├── audit_report.md
++│       ├── build_notes.md
++│       ├── gitignore_recommendations.md
++│       ├── diff_summary.md
++│       └── patch.diff
++├── src/
++│   ├── config/
++│   │   └── GlobalConfig.h
++│   ├── core/
++│   │   ├── Types.h
++│   │   ├── CommandBus.h
++│   │   ├── EventBus.h
++│   │   ├── ProtocolCodec.h
++│   │   ├── SystemStateMachine.h
++│   │   └── SystemStateMachine.cpp
++│   ├── modules/
++│   │   ├── laser/
++│   │   │   ├── LaserModule.h
++│   │   │   └── LaserModule.cpp
++│   │   └── wave/
++│   │       ├── WaveModule.h
++│   │       └── WaveModule.cpp
++│   ├── transport/
++│   │   └── ble/
++│   │       ├── BleTransport.h
++│   │       └── BleTransport.cpp
++│   └── main.cpp
++├── test/
++│   └── README
++├── .gitignore
++├── platformio.ini
++└── README.md
++```
++
++## 目录用途
++- `src/`：固件核心代码。
++- `src/config/`：全局阈值、引脚、协议版本等配置。
++- `src/core/`：类型定义、命令总线、事件总线、协议编解码、状态机。
++- `src/modules/`：硬件功能模块实现（波形输出、激光测重）。
++- `src/transport/ble/`：BLE GATT 传输层与协议入口。
++- `include/`：公共头文件预留目录（当前仅模板 README）。
++- `lib/`：本地私有库预留目录（当前仅模板 README）。
++- `docs/`：面向开发者的正式文档（开发指南、架构、协议、硬件、系统总览）。
++- `reports/`：审计与文档生成产物。
++- `reports/firmware_audit/`：工程审计报告与构建记录。
++- `reports/dev_docs/`：开发文档增强任务与配套 Artifact。
++- `test/`：测试目录（当前仅模板 README）。
++- `platformio.ini`：PlatformIO 工程入口与构建配置。
+diff --git a/reports/dev_docs/doc_generation_summary_3.md b/reports/dev_docs/doc_generation_summary_3.md
+new file mode 100644
+index 0000000..8356b82
+--- /dev/null
++++ b/reports/dev_docs/doc_generation_summary_3.md
+@@ -0,0 +1,56 @@
++# 文档生成执行报告（三）
++
++## 1. 本次扫描文件
++
++- 硬件与引脚配置：
++  - `src/config/GlobalConfig.h`
++
++- 架构与模块关系：
++  - `src/main.cpp`
++  - `src/core/CommandBus.h`
++  - `src/core/EventBus.h`
++  - `src/core/SystemStateMachine.h`
++  - `src/core/SystemStateMachine.cpp`
++  - `src/modules/wave/WaveModule.h`
++  - `src/modules/wave/WaveModule.cpp`
++  - `src/modules/laser/LaserModule.h`
++  - `src/modules/laser/LaserModule.cpp`
++  - `src/transport/ble/BleTransport.h`
++  - `src/transport/ble/BleTransport.cpp`
++
++- 现有文档结构：
++  - `docs/firmware_developer_guide.md`
++  - `docs/architecture.md`
++  - `docs/protocol.md`
++  - `reports/dev_docs/repo_structure.md`
++
++## 2. 本次生成/更新文件
++
++- 新增：`docs/hardware.md`
++- 新增：`docs/system_overview.md`
++- 更新：`reports/dev_docs/repo_structure.md`
++- 新增：`reports/dev_docs/doc_generation_summary_3.md`
++- 新增：`reports/dev_docs/diff_summary_3.md`
++- 新增：`reports/dev_docs/patch_3.diff`
++
++## 3. 新增章节概览
++
++`docs/hardware.md`：
++1. 硬件系统组成
++2. 硬件连接拓扑
++3. ESP32 引脚定义
++4. 音频链路
++5. 测重链路
++6. 安全联锁
++
++`docs/system_overview.md`：
++1. 系统整体结构
++2. 软件架构
++3. 数据流
++4. 安全机制
++5. 扩展能力
++
++## 4. 约束说明
++
++- 未修改 `docs/firmware_developer_guide.md`、`docs/architecture.md`、`docs/protocol.md` 的结构。
++- 本次仅文档新增与文档更新，无固件代码行为变更。
+diff --git a/reports/dev_docs/diff_summary_3.md b/reports/dev_docs/diff_summary_3.md
+new file mode 100644
+index 0000000..a9bf9f5
+--- /dev/null
++++ b/reports/dev_docs/diff_summary_3.md
+@@ -0,0 +1,20 @@
++# Diff 摘要（三）
++
++## 1. 新增文档
++
++- `docs/hardware.md`
++  - 补充 SonicWave 硬件组成、连接拓扑、引脚定义、音频链路、测重链路、安全联锁。
++
++- `docs/system_overview.md`
++  - 补充系统总览、软件模块关系、数据流、安全机制、扩展能力。
++
++## 2. 更新文档
++
++- `reports/dev_docs/repo_structure.md`
++  - 新增 `docs/hardware.md`
++  - 新增 `docs/system_overview.md`
++  - 新增本轮产物：`doc_generation_summary_3.md`、`diff_summary_3.md`、`patch_3.diff`
++
++## 3. 代码影响
++
++- 无源码改动，仅文档改动。

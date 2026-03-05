@@ -20,6 +20,9 @@ private:
   void sendLine(const String& s);
   void startAdvertisingSafe();
 
+  friend class MyServerCallbacks;
+  friend class MyRxCallbacks;
+
 private:
   CommandBus* bus = nullptr;
   BLEServer* pServer = nullptr;

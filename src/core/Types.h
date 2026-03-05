@@ -17,4 +17,5 @@ struct WaveParams {
   float freqHz = 0.0f; // 0..50
   int intensity = 0;   // 0..120
   bool enable = false;
+  bool hasEnable = false;
 };

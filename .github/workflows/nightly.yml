@@ -1,0 +1,78 @@
+name: Nightly Build
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+jobs:
+  nightly-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-platformio-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-platformio-
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build Firmware
+        run: pio run
+
+      - name: Prepare nightly artifacts
+        id: prep
+        shell: bash
+        run: |
+          stamp=$(date -u +"%Y%m%dT%H%M%SZ")
+          short_sha=$(echo "${GITHUB_SHA}" | cut -c1-8)
+          echo "stamp=${stamp}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+
+          mkdir -p artifacts/nightly reports/nightly
+
+          found=0
+          while IFS= read -r -d '' f; do
+            cp "$f" "artifacts/nightly/$(basename "$(dirname "$f")")_firmware.bin"
+            found=1
+          done < <(find .pio/build -type f -name firmware.bin -print0 2>/dev/null)
+
+          if [ "$found" -eq 0 ]; then
+            echo "firmware.bin not found under .pio/build" | tee artifacts/nightly/README.txt
+          fi
+
+          firmware_paths=$(find artifacts/nightly -maxdepth 1 -type f | sed 's#^#- #' || true)
+          cat > reports/nightly/build_report.md <<REPORT
+          # Nightly Build Report
+
+          - Commit SHA: ${GITHUB_SHA}
+          - Build Environment: ubuntu-latest + Python 3.11 + PlatformIO
+          - PIO Environment: esp32s3
+          - UTC Timestamp: ${stamp}
+          - Firmware artifacts:
+          ${firmware_paths}
+          REPORT
+
+      - name: Upload nightly firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-firmware-${{ steps.prep.outputs.stamp }}-${{ steps.prep.outputs.short_sha }}
+          path: artifacts/nightly/
+
+      - name: Upload nightly build report
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-report-${{ steps.prep.outputs.stamp }}-${{ steps.prep.outputs.short_sha }}
+          path: reports/nightly/build_report.md

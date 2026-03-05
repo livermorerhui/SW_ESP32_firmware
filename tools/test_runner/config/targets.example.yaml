@@ -1,0 +1,11 @@
+# Copy this file to targets.yaml and fill your local device settings.
+# Do NOT commit personal device information.
+
+device_name: "SonicWave_Hub"
+service_uuid: "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+rx_char_uuid: "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
+tx_char_uuid: "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
+connect_timeout_s: 8
+reconnect_retry: 2
+notify_timeout_ms: 3000
+optional_serial_port: ""
