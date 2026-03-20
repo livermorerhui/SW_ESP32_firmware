@@ -3,16 +3,24 @@
 
 // ===== Versions =====
 #define FW_VER        "SW-HUB-1.0.0"
-#define PROTO_VER     1
+#define PROTO_VER     2
 
 // ===== I2S =====
 #define I2S_PORT        I2S_NUM_0
 #define SAMPLE_RATE     16000
 #define BUFFER_LEN      128
+#define WAVE_I2S_SAMPLE_BITS 16
+#define WAVE_INTENSITY_MAX 120
 
 #define I2S_BCLK_PIN    4
 #define I2S_LRCK_PIN    5
 #define I2S_DOUT_PIN    6
+
+// ===== Wave Ramp =====
+static constexpr uint32_t RAMP_START_TIME_MS = 800UL;
+static constexpr uint32_t RAMP_STOP_TIME_MS = 500UL;
+static constexpr uint32_t RAMP_UPDATE_INTERVAL_MS = 10UL;
+static constexpr float RAMP_FREQ_STEP_HZ = 0.5f;
 
 // ===== Laser / Modbus =====
 #define RX_PIN 15
@@ -20,21 +28,55 @@
 #define MODBUS_BAUD 9600
 #define MODBUS_SLAVE_ID 1
 #define REG_DISTANCE 0x0064
+// The sensor register is currently treated as a signed fixed-point value with
+// two decimal places of displayed distance/displacement resolution.
+static constexpr int16_t LASER_VALID_MEASUREMENT_MIN_RAW = -3570;
+static constexpr int16_t LASER_VALID_MEASUREMENT_MAX_RAW = 3570;
+static constexpr uint16_t LASER_SENTINEL_OVER_RANGE_RAW = 32767;
+static constexpr float LASER_DISTANCE_RUNTIME_DIVISOR = 100.0f;
+static constexpr float LASER_DISTANCE_MM_TO_RUNTIME_UNITS =
+    1.0f / LASER_DISTANCE_RUNTIME_DIVISOR;
+static constexpr uint32_t LASER_INVALID_LOG_INTERVAL_MS = 1000UL;
 
 // ===== Scale Algo =====
 #define WINDOW_N 10
 #define MIN_WEIGHT 5.0f
 #define LEAVE_TH 3.0f
 #define STD_TH 0.20f
+#define STABLE_REARM_DISTANCE_DELTA_TH 1.0f
+#define STABLE_REARM_WEIGHT_DELTA_TH 0.5f
+#define STABLE_INVALID_GRACE_SAMPLES 2
 #define LOG_TH 1.0f
+static constexpr float CALIBRATION_TARGET_RANGE_MIN_KG = 40.0f;
+static constexpr float CALIBRATION_TARGET_RANGE_MAX_KG = 120.0f;
+static constexpr float CALIBRATION_QUADRATIC_RMSE_IMPROVEMENT_RATIO = 0.15f;
 
-// 开启实时流（用于校准/调试）
-#define DEBUG_STREAM true
+// ===== Stream telemetry policy (Phase-1 stabilization) =====
+#define DEBUG_STREAM false
+#define STREAM_KEEPALIVE_MS 500UL
+#define STREAM_DISTANCE_DELTA_TH 1.0f
+#define STREAM_WEIGHT_DELTA_TH 0.2f
+#define DEBUG_LASER_STREAM 0
+#define DEBUG_BLE_TX_VERBOSE 0
+
+// ===== Diagnostic Flags =====
+#define DIAG_DISABLE_LASER_SAFETY 0
+#define DIAG_DISABLE_WAVE_RAMP 0
 
 // ===== Safety =====
 #define FALL_DW_DT_SUSPECT_TH 25.0f   // kg/s（先用保守默认，后续真机调）
 #define FAULT_COOLDOWN_MS     3000
 #define CLEAR_CONFIRM_MS      1000
+
+// ===== Safety Policy（Task-4 对齐）=====
+// 用户离台默认走“可恢复暂停”风格：停波，但不进入异常停机。
+static constexpr bool SAFETY_POLICY_USER_LEFT_RECOVERABLE_PAUSE = true;
+// 跌倒疑似默认走“异常停机”风格：停波并进入 FAULT_STOP。
+static constexpr bool SAFETY_POLICY_FALL_ABNORMAL_STOP = true;
+// BLE 断连默认仅提醒，不强制停波；产品策略可按需改为 true。
+static constexpr bool SAFETY_POLICY_DISCONNECT_STOPS_WAVE = false;
+// 测量不可用默认仅告警，不强制停波；产品策略可按需改为 true。
+static constexpr bool SAFETY_POLICY_MEASUREMENT_UNAVAILABLE_STOPS_WAVE = false;
 
 // ===== BLE =====
 #define BLE_DEVICE_NAME "SonicWave_Hub"
@@ -42,8 +84,6 @@
 #define SERVICE_UUID           "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 #define CHAR_UUID_RX           "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
 #define CHAR_UUID_TX           "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
-
-static const bool STOP_ON_DISCONNECT = true;
 
 // ===== WDT (optional) =====
 #define ENABLE_WDT 1

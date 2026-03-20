@@ -45,7 +45,7 @@ I2S Wave Out     Modbus Distance/Weight
 - `WaveModule`
   - 初始化 I2S 与 DMA。
   - 查表合成 + 参数平滑（频率/强度）。
-  - 根据 `enable` 输出波形或静音。
+  - 由状态机控制 `start/stopSoft`，执行波形输出与软停静音。
 
 - `BleTransport`
   - 建立 BLE Service / RX / TX。
@@ -89,7 +89,7 @@ LaserModule/SystemStateMachine -> EventBus::publish
 
 - 主任务（Arduino `setup/loop`）
   - 初始化模块。
-  - 执行断连与非 RUNNING 停波兜底。
+  - 保持轻量守护循环，避免阻塞实时任务。
 
 - `I2S_Audio`（`WaveModule`）
   - `xTaskCreatePinnedToCore(..., "I2S_Audio", ..., priority=4, core=1)`
@@ -154,8 +154,8 @@ freq/intensity/enable
 
 当前实现的关键约束：
 - `WAVE:START` 与 Legacy `E:1` 启动都走 `requestStart()`。
-- 主循环中非 `RUNNING` 状态会强制 `g_wave.setEnable(false)` 作为兜底。
-- BLE 断连路径触发 `onUserOff()` + 停波。
+- 只有 `SystemStateMachine::setState()` 可以调用 `WaveModule.start/stopSoft`。
+- BLE 断连路径在 `BleTransport::onDisconnect()` 触发 `onUserOff()`，并通过状态机停波。
 
 ## 6. 扩展架构
 
@@ -178,4 +178,3 @@ NewSensorModule (Safety Related)
     -> state/fault transition
     -> EventBus fault/state notify
 ```
-

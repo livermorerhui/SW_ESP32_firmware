@@ -14,6 +14,8 @@
 说明：
 - App 通过 RX 写入字符串命令。
 - 固件通过 TX 通知 ACK/NACK 和事件。
+- TX uplink 分帧规则：**每条逻辑消息都以 `\n` 结尾**（例如 `ACK:OK\n`）。
+- Android 侧按 `\n` 做重组，解析时去掉行尾 `\r`/`\n`。
 
 ## 2. 控制指令
 
@@ -26,12 +28,13 @@
 - 错误情况：一般无参数错误；若链路异常可能无响应。
 
 ### 2.2 `WAVE:SET`
-- 格式：`WAVE:SET freq=<float> amp=<int>`
+- 推荐格式：`WAVE:SET f=<float>,i=<int>`
+- 兼容格式：`WAVE:SET freq=<float> amp=<int>`
 - 参数：
-  - `freq`: 0 ~ 50
-  - `amp`: 0 ~ 120
+  - `f` / `freq`: 0 ~ 50
+  - `i` / `amp`: 0 ~ 120
 - 示例：
-  - 请求：`WAVE:SET freq=40 amp=80`
+  - 请求：`WAVE:SET f=40,i=80`
   - 响应：`ACK:OK`
 - 错误情况：
   - 缺失参数或越界：`NACK:INVALID_PARAM`
@@ -67,6 +70,7 @@
   - `k`: scaleFactor
 - 示例：
   - 请求：`SCALE:CAL z=-22.0 k=1.0`
+  - 请求：`SCALE:CAL z=-22.0,k=1.0`
   - 响应：`ACK:OK`
 - 错误情况：
   - 缺失 `z` 或 `k`：`NACK:INVALID_PARAM`
@@ -95,6 +99,9 @@
   - 命令执行成功。
 - `ACK:CAP fw=<ver> proto=<ver>`
   - 能力查询成功返回。
+- 线上传输示例（含帧结尾）：
+  - `ACK:CAP fw=SW-HUB-1.0.0 proto=1\n`
+  - `ACK:OK\n`
 
 ### 4.2 NACK
 - `NACK:INVALID_PARAM`
@@ -102,10 +109,13 @@
 - `NACK:FAULT_LOCKED`
   - 当前处于故障锁定窗口。
 - 常见补充：
+  - `NACK:BUSY`
   - `NACK:NOT_ARMED`
   - `NACK:UNKNOWN_CMD`
   - `NACK:UNSUPPORTED`
   - `NACK:EMPTY`
+- 线上传输示例（含帧结尾）：
+  - `NACK:NOT_ARMED\n`
 
 ## 5. 事件
 
@@ -128,6 +138,13 @@
 ### 5.5 `EVT:STREAM`
 - 格式：`EVT:STREAM:<dist>,<weight>`
 - 含义：实时调试流（距离、重量）。
+
+常见 uplink 示例（解析前原始帧）：
+- `EVT:STREAM:-22.58,7.42\n`
+- `EVT:STABLE:65.20\n`
+- `EVT:PARAM:-22.00,1.0000\n`
+- `EVT:STATE RUNNING\n`
+- `EVT:FAULT 2\n`
 
 ## 6. App 与固件通信流程
 
@@ -158,3 +175,12 @@ App 生成命令字符串
 - 对 `EVT:STREAM` 采用节流显示，避免 UI 线程拥塞。
 - 对 `FAULT_STOP` 事件使用高优先级提醒并禁止继续启动。
 
+## 7. Android 传输重组与 MTU 说明
+
+- Android 传输层规则：
+  - 回调中收到的 notify 字节块先追加到残片缓冲区。
+  - 仅当检测到 `\n` 时才切出完整逻辑行并上抛给上层。
+  - 行末 `\r` 会被剥离；未完整行会保留到下一个回调继续拼接。
+- MTU：
+  - Android 在服务发现后会尝试请求更大 MTU（当前目标值 185）。
+  - MTU 请求失败不影响连接建立，仍依赖 `\n` 分帧保证正确性。

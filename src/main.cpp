@@ -15,10 +15,20 @@ static WaveModule g_wave;
 static LaserModule g_laser;
 static BleTransport g_ble;
 
-class HubHandler : public CommandHandler {
+static const char* calibrationModelTypeName(uint8_t type) {
+  switch (type) {
+    case static_cast<uint8_t>(CalibrationModelType::LINEAR):
+      return "LINEAR";
+    case static_cast<uint8_t>(CalibrationModelType::QUADRATIC):
+      return "QUADRATIC";
+  }
+  return "UNKNOWN";
+}
+
+class HubHandler : public CommandHandler, public BleDisconnectSink {
 public:
-  HubHandler(SystemStateMachine* fsm, WaveModule* wave, LaserModule* laser, BleTransport* ble)
-    : sm(fsm), w(wave), l(laser), bt(ble) {}
+  HubHandler(SystemStateMachine* fsm, WaveModule* wave, LaserModule* laser)
+    : sm(fsm), w(wave), l(laser) {}
 
   bool handle(const Command& c, String& outAck) override {
     switch (c.type) {
@@ -27,8 +37,7 @@ public:
         return true;
 
       case CmdType::WAVE_SET:
-        w->setFreq(c.wave.freqHz);
-        w->setIntensity(c.wave.intensity);
+        w->setParams(c.wave.freqHz, c.wave.intensity);
         outAck = "ACK:OK";
         return true;
 
@@ -38,14 +47,13 @@ public:
           outAck = (reason == FaultCode::FAULT_LOCKED) ? "NACK:FAULT_LOCKED" : "NACK:NOT_ARMED";
           return false;
         }
-        w->setEnable(true);
         outAck = "ACK:OK";
         return true;
       }
 
       case CmdType::WAVE_STOP:
+        Serial.println("[CMD] WAVE_STOP received");
         sm->requestStop();
-        w->setEnable(false);
         outAck = "ACK:OK";
         return true;
 
@@ -58,6 +66,69 @@ public:
         l->setParams(c.p1, c.p2);
         outAck = "ACK:OK";
         return true;
+
+      case CmdType::CAL_CAPTURE: {
+        CalibrationCapture capture{};
+        String reason;
+        if (!l->captureCalibrationPoint(c.capture.referenceWeightKg, capture, reason)) {
+          outAck = String("NACK:") + reason;
+          return false;
+        }
+        outAck = String("ACK:CAL_POINT idx=") + String(capture.index) +
+            " ts=" + String(capture.ts_ms) +
+            " d_mm=" + String(capture.distanceMm, 2) +
+            " ref_kg=" + String(capture.referenceWeightKg, 2) +
+            " pred_kg=" + String(capture.predictedWeightKg, 2) +
+            " stable=" + String(capture.stableFlag ? 1 : 0) +
+            " valid=" + String(capture.validFlag ? 1 : 0);
+        return true;
+      }
+
+      case CmdType::CAL_GET_MODEL: {
+        CalibrationModel model{};
+        l->getCalibrationModel(model);
+        outAck = String("ACK:CAL_MODEL type=") +
+            calibrationModelTypeName(static_cast<uint8_t>(model.type)) +
+            " ref=" + String(model.referenceDistance, 4) +
+            " c0=" + String(model.coefficients[0], 6) +
+            " c1=" + String(model.coefficients[1], 6) +
+            " c2=" + String(model.coefficients[2], 6);
+        return true;
+      }
+
+      case CmdType::CAL_SET_MODEL: {
+        CalibrationModel model{};
+        model.type = static_cast<CalibrationModelType>(c.model.type);
+        model.referenceDistance = c.model.referenceDistance;
+        model.coefficients[0] = c.model.coefficients[0];
+        model.coefficients[1] = c.model.coefficients[1];
+        model.coefficients[2] = c.model.coefficients[2];
+
+        String reason;
+        if (!l->setCalibrationModel(model, reason)) {
+          Serial.printf("[CAL] SET_MODEL result=failure type=%s reason=%s\n",
+              calibrationModelTypeName(static_cast<uint8_t>(model.type)),
+              reason.c_str());
+          outAck = String("NACK:CAL_SET_MODEL type=") +
+              calibrationModelTypeName(static_cast<uint8_t>(model.type)) +
+              " reason=" + reason;
+          return false;
+        }
+
+        Serial.printf("[CAL] SET_MODEL result=success type=%s ref=%.4f c0=%.6f c1=%.6f c2=%.6f\n",
+            calibrationModelTypeName(static_cast<uint8_t>(model.type)),
+            model.referenceDistance,
+            model.coefficients[0],
+            model.coefficients[1],
+            model.coefficients[2]);
+        outAck = String("ACK:CAL_SET_MODEL type=") +
+            calibrationModelTypeName(static_cast<uint8_t>(model.type)) +
+            " ref=" + String(model.referenceDistance, 4) +
+            " c0=" + String(model.coefficients[0], 6) +
+            " c1=" + String(model.coefficients[1], 6) +
+            " c2=" + String(model.coefficients[2], 6);
+        return true;
+      }
 
       case CmdType::LEGACY_FIE: {
         // 兼容旧命令：只改触碰到的字段
@@ -73,10 +144,9 @@ public:
               outAck = (reason == FaultCode::FAULT_LOCKED) ? "NACK:FAULT_LOCKED" : "NACK:NOT_ARMED";
               return false;
             }
-            w->setEnable(true);
           } else {
+            Serial.println("[CMD] WAVE_STOP received");
             sm->requestStop();
-            w->setEnable(false);
           }
         }
 
@@ -88,53 +158,48 @@ public:
     return false;
   }
 
+  void onBleDisconnect() override {
+    if (sm) sm->onBleDisconnected();
+  }
+
+  void onBleConnected() override {
+    if (sm) sm->onBleConnected();
+  }
+
 private:
   SystemStateMachine* sm;
   WaveModule* w;
   LaserModule* l;
-  BleTransport* bt;
 };
 
-static HubHandler g_handler(&g_fsm, &g_wave, &g_laser, &g_ble);
+static HubHandler g_handler(&g_fsm, &g_wave, &g_laser);
 
 void setup() {
   Serial.begin(115200);
   delay(1500);
   Serial.println("\n=== SonicWave Hub FW (Integrated) ===");
 
-  g_fsm.begin(&g_eventBus);
-
-  g_ble.begin(&g_cmdBus);
+  // Init order: bus -> state machine -> modules -> BLE transport.
   g_eventBus.setSink(&g_ble);
-  g_cmdBus.setHandler(&g_handler);
+  g_fsm.begin(&g_eventBus, &g_wave);
 
   g_wave.begin();
   g_laser.begin(&g_eventBus, &g_fsm);
   g_laser.startTask();
+  g_cmdBus.setHandler(&g_handler);
+
+  g_ble.setDisconnectSink(&g_handler);
+  g_ble.begin(&g_cmdBus);
 
   Serial.println("Ready ✅");
   Serial.println("Try: CAP?");
-  Serial.println("Try: WAVE:SET freq=40 amp=80");
+  Serial.println("Try: WAVE:SET f=40,i=80");
   Serial.println("Try: WAVE:START");
   Serial.println("Try: WAVE:STOP");
 }
 
 void loop() {
-  if (g_fsm.state() != TopState::RUNNING) {
-    // 联锁兜底：任何非 RUNNING 态都强制停波
-    g_wave.setEnable(false);
-  }
-
-  // 断连安全策略：断连 -> 停机（并进入 FAULT_STOP，避免误启动）
-  static bool lastConn = false;
-  bool conn = g_ble.isConnected();
-
-  if (lastConn && !conn && STOP_ON_DISCONNECT) {
-    Serial.println("!! disconnect -> safety stop");
-    g_fsm.onUserOff();
-    g_wave.setEnable(false);
-  }
-  lastConn = conn;
-
+  // Keep loop lightweight so FreeRTOS workers (I2S/Laser/BLE) run predictably.
+  // Safety stop is enforced by SystemStateMachine + BLE disconnect callback.
   delay(20);
 }

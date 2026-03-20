@@ -71,6 +71,6 @@
 ## 7. 交付检查清单
 
 1. `README.md` 文档导航可点击且路径正确。
-2. `docs/system_architecture.svg` 可在 GitHub 直接预览。
+2. `docs/architecture/current/system_master.svg` 可在 GitHub 直接预览（完整系统视角）。
 3. 协议、架构、安全文档与代码实现一致。
 4. `reports/dev_docs/` 下生成对应变更报告与 patch 文件。

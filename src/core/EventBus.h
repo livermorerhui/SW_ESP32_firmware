@@ -4,6 +4,7 @@
 enum class EventType : uint8_t {
   STATE,
   FAULT,
+  SAFETY,
   STABLE_WEIGHT,
   PARAMS,
   STREAM
@@ -13,6 +14,8 @@ struct Event {
   EventType type;
   TopState state = TopState::IDLE;
   FaultCode fault = FaultCode::NONE;
+  SafetySignalKind safety = SafetySignalKind::NONE;
+  bool waveStopped = false;
   float v1 = 0;     // weight/dist/zero
   float v2 = 0;     // weight/factor
   uint32_t ts_ms = 0;

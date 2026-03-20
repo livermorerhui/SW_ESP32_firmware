@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1680" height="980" viewBox="0 0 1680 980" role="img" aria-labelledby="title desc">
+  <title id="title">Android Compose + MVVM + SDK Layering</title>
+  <desc id="desc">Layered architecture from tools/android_demo including protocol module, fallback mode, and dual channels rawLines/events.</desc>
+  <defs>
+    <style>
+      .bg { fill:#f8fafc; }
+      .card { fill:#ffffff; stroke:#1f2937; stroke-width:2; rx:12; ry:12; }
+      .title { font:700 24px 'Segoe UI', Arial, sans-serif; fill:#0f172a; }
+      .h2 { font:700 18px 'Segoe UI', Arial, sans-serif; fill:#0f172a; }
+      .txt { font:14px 'Segoe UI', Arial, sans-serif; fill:#1f2937; }
+      .mono { font:13px 'Courier New', monospace; fill:#111827; }
+      .small { font:12px 'Segoe UI', Arial, sans-serif; fill:#374151; }
+      .flow { stroke:#0b7285; stroke-width:3; fill:none; marker-end:url(#arrowFlow); }
+      .event { stroke:#2563eb; stroke-width:3; fill:none; marker-end:url(#arrowEvent); }
+      .raw { stroke:#7c3aed; stroke-width:3; fill:none; marker-end:url(#arrowRaw); }
+      .codec { fill:#eef2ff; stroke:#6366f1; stroke-width:2; rx:12; ry:12; }
+      .fallback { fill:#fff7ed; stroke:#fb923c; stroke-width:2; rx:12; ry:12; }
+      .legend { fill:#f1f5f9; stroke:#cbd5e1; stroke-width:1.5; rx:10; ry:10; }
+      .dashed { stroke-dasharray:8 6; }
+    </style>
+    <marker id="arrowFlow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <polygon points="0,0 10,4 0,8" fill="#0b7285"/>
+    </marker>
+    <marker id="arrowEvent" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <polygon points="0,0 10,4 0,8" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowRaw" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <polygon points="0,0 10,4 0,8" fill="#7c3aed"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1680" height="980"/>
+  <text class="title" x="40" y="44">Android Demo Architecture: Compose + MVVM + SDK</text>
+
+  <rect class="card" x="40" y="90" width="1560" height="740"/>
+
+  <rect class="card" x="70" y="140" width="290" height="180"/>
+  <text class="h2" x="90" y="174">UI (Compose)</text>
+  <text class="mono" x="90" y="200">SonicWaveDemoApp.kt</text>
+  <text class="txt" x="90" y="226">Scan / Control / Logs 页面</text>
+  <text class="txt" x="90" y="252">collectAsStateWithLifecycle()</text>
+
+  <rect class="card" x="410" y="140" width="330" height="220"/>
+  <text class="h2" x="430" y="174">ViewModel</text>
+  <text class="mono" x="430" y="200">SonicWaveViewModel.kt</text>
+  <text class="txt" x="430" y="226">状态汇聚：uiState</text>
+  <text class="txt" x="430" y="252">命令入口：CAP?/WAVE/SCALE</text>
+  <text class="txt" x="430" y="278">订阅：connection/mode/rawLines/events</text>
+
+  <rect class="card" x="790" y="140" width="350" height="220"/>
+  <text class="h2" x="810" y="174">sonicwave-sdk</text>
+  <text class="mono" x="810" y="200">SonicWaveClient.kt</text>
+  <text class="txt" x="810" y="226">封装扫描/连接/发送/探测</text>
+  <text class="txt" x="810" y="252">SharedFlow rawLines + events</text>
+  <text class="txt" x="810" y="278">StateFlow mode PRIMARY/LEGACY</text>
+
+  <rect class="card" x="1190" y="140" width="350" height="220"/>
+  <text class="h2" x="1210" y="174">sonicwave-transport</text>
+  <text class="mono" x="1210" y="200">BluetoothGattTransport.kt</text>
+  <text class="txt" x="1210" y="226">GATT connect/discover/subscribe</text>
+  <text class="txt" x="1210" y="252">writeLine + incomingLines</text>
+  <text class="txt" x="1210" y="278">ConnectionState 流</text>
+
+  <rect class="codec" x="790" y="400" width="750" height="170"/>
+  <text class="h2" x="810" y="434">sonicwave-protocol (Pure Kotlin, independent module)</text>
+  <text class="mono" x="810" y="460">ProtocolCodec.encode(Command) / decode(line)</text>
+  <text class="txt" x="810" y="486">decode 顺序：primary -&gt; legacy -&gt; csv</text>
+  <text class="txt" x="810" y="512">Model.kt: Command/Event/DeviceState/ProtocolMode</text>
+
+  <rect class="fallback" x="410" y="400" width="330" height="240"/>
+  <text class="h2" x="430" y="434" fill="#9a3412">Codec Fallback</text>
+  <text class="txt" x="430" y="460" fill="#7c2d12">capabilityProbe(): 先发 CAP?</text>
+  <text class="txt" x="430" y="486" fill="#7c2d12">超时 -&gt; mode=LEGACY</text>
+  <text class="txt" x="430" y="512" fill="#7c2d12">send() 按 mode 选 primary/legacy 编码</text>
+  <text class="mono" x="430" y="544" fill="#7c2d12">Command.toLegacyFallback()</text>
+  <text class="mono" x="430" y="568" fill="#7c2d12">WaveSet -&gt; LegacySetPs, ...</text>
+
+  <rect class="card" x="70" y="680" width="1470" height="120"/>
+  <text class="h2" x="90" y="714">BLE + Device</text>
+  <text class="txt" x="90" y="740">Android BLE Stack (Notify/Write) -&gt; ESP32 Firmware (BleTransport)</text>
+  <text class="txt" x="90" y="766">固件返回 ACK/NACK 与事件文本行，由 transport.incomingLines 承载</text>
+
+  <path class="flow" d="M360 230 C 380 230, 390 230, 410 230"/>
+  <path class="flow" d="M740 230 C 760 230, 770 230, 790 230"/>
+  <path class="flow" d="M1140 230 C 1160 230, 1170 230, 1190 230"/>
+  <path class="flow" d="M1365 360 C 1365 430, 1365 610, 1365 680"/>
+
+  <path class="flow dashed" d="M970 360 C 970 380, 970 390, 970 400"/>
+  <path class="flow dashed" d="M640 640 C 700 640, 760 540, 810 540"/>
+
+  <path class="raw" d="M1220 680 C 1180 680, 1090 680, 970 360"/>
+  <path class="raw" d="M970 360 C 930 360, 870 360, 790 300"/>
+  <path class="raw" d="M790 300 C 720 300, 610 300, 540 300"/>
+  <text class="small" x="860" y="642" fill="#5b21b6">rawLines channel</text>
+
+  <path class="event" d="M1280 680 C 1240 680, 1100 620, 970 570"/>
+  <path class="event" d="M970 570 C 860 610, 760 640, 570 640"/>
+  <path class="event" d="M570 640 C 540 640, 540 360, 540 360"/>
+  <path class="event" d="M540 360 C 520 340, 500 330, 430 330"/>
+  <text class="small" x="980" y="610" fill="#1d4ed8">events channel (decoded Event)</text>
+
+  <rect class="legend" x="40" y="850" width="1020" height="95"/>
+  <text class="h2" x="60" y="884">Legend</text>
+  <line class="flow" x1="180" y1="880" x2="260" y2="880"/><text class="small" x="270" y="885">request/command path</text>
+  <line class="raw" x1="180" y1="910" x2="260" y2="910"/><text class="small" x="270" y="915">rawLines log path</text>
+  <line class="event" x1="560" y1="910" x2="640" y2="910"/><text class="small" x="650" y="915">decoded events path</text>
+</svg>

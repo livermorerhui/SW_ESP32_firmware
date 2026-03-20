@@ -8,6 +8,42 @@ static void wdtInitIfNeeded() {
 #endif
 }
 
+namespace {
+
+constexpr double kPhaseAccumulatorScale = 4294967296.0;
+constexpr float kAmplitudeEpsilon = 0.0005f;
+
+const char* waveCommFormatName() {
+  return "I2S";
+}
+
+float amplitudeStepPerTick(bool rampUp) {
+#if DIAG_DISABLE_WAVE_RAMP
+  return 1.0f;
+#else
+  const uint32_t rampTimeMs = rampUp ? RAMP_START_TIME_MS : RAMP_STOP_TIME_MS;
+  if (rampTimeMs == 0 || RAMP_UPDATE_INTERVAL_MS == 0) {
+    return 1.0f;
+  }
+
+  const float step =
+      static_cast<float>(RAMP_UPDATE_INTERVAL_MS) / static_cast<float>(rampTimeMs);
+  return (step > 1.0f) ? 1.0f : step;
+#endif
+}
+
+uint32_t frequencyStepPerTick() {
+#if DIAG_DISABLE_WAVE_RAMP
+  return UINT32_MAX;
+#else
+  const uint32_t step =
+      static_cast<uint32_t>((RAMP_FREQ_STEP_HZ * kPhaseAccumulatorScale) / SAMPLE_RATE);
+  return (step == 0) ? 1U : step;
+#endif
+}
+
+}  // namespace
+
 void WaveModule::initLut() {
   for (int i = 0; i < 256; i++) {
     sine_lut[i] = (int16_t)(sin(i * 2.0 * PI / 256.0) * MAX_AMPLITUDE);
@@ -15,29 +51,60 @@ void WaveModule::initLut() {
 }
 
 void WaveModule::initI2S() {
-  i2s_config_t i2s_config = {
-    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-    .sample_rate = SAMPLE_RATE,
-    .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
-    .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
-    .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-    .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-    .dma_buf_count = 4,
-    .dma_buf_len = BUFFER_LEN,
-    .use_apll = false,
-    .tx_desc_auto_clear = true
-  };
+  i2s_config_t i2s_config = {};
+  i2s_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
+  i2s_config.sample_rate = SAMPLE_RATE;
+  i2s_config.bits_per_sample = (i2s_bits_per_sample_t)WAVE_I2S_SAMPLE_BITS;
+  i2s_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
+  i2s_config.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+  i2s_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
+  i2s_config.dma_buf_count = 4;
+  i2s_config.dma_buf_len = BUFFER_LEN;
+  i2s_config.use_apll = false;
+  i2s_config.tx_desc_auto_clear = true;
 
-  i2s_pin_config_t pin_config = {
-    .bck_io_num = I2S_BCLK_PIN,
-    .ws_io_num = I2S_LRCK_PIN,
-    .data_out_num = I2S_DOUT_PIN,
-    .data_in_num = I2S_PIN_NO_CHANGE
-  };
+  i2s_pin_config_t pin_config = {};
+  pin_config.bck_io_num = I2S_BCLK_PIN;
+  pin_config.ws_io_num = I2S_LRCK_PIN;
+  pin_config.data_out_num = I2S_DOUT_PIN;
+  pin_config.data_in_num = I2S_PIN_NO_CHANGE;
+#ifdef ESP_IDF_VERSION_MAJOR
+  pin_config.mck_io_num = I2S_PIN_NO_CHANGE;
+#endif
 
   i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
   i2s_set_pin(I2S_PORT, &pin_config);
+  i2s_set_clk(I2S_PORT,
+              SAMPLE_RATE,
+              (i2s_bits_per_sample_t)WAVE_I2S_SAMPLE_BITS,
+              I2S_CHANNEL_STEREO);
   i2s_zero_dma_buffer(I2S_PORT);
+
+  Serial.printf("[I2S] sample_rate=%d bits=%d stereo=LR format=%s\n",
+                SAMPLE_RATE,
+                WAVE_I2S_SAMPLE_BITS,
+                waveCommFormatName());
+}
+
+uint32_t WaveModule::phaseIncrementFromHz(float hz) {
+  return static_cast<uint32_t>((hz * kPhaseAccumulatorScale) / SAMPLE_RATE);
+}
+
+float WaveModule::phaseIncrementToHz(uint32_t phaseInc) {
+  return static_cast<float>((static_cast<double>(phaseInc) * SAMPLE_RATE) /
+                            kPhaseAccumulatorScale);
+}
+
+float WaveModule::intensityToAmplitude(int intensity) {
+  if (intensity < 0) intensity = 0;
+  if (intensity > WAVE_INTENSITY_MAX) intensity = WAVE_INTENSITY_MAX;
+  return static_cast<float>(intensity) / static_cast<float>(WAVE_INTENSITY_MAX);
+}
+
+float WaveModule::clampUnit(float value) {
+  if (value < 0.0f) return 0.0f;
+  if (value > 1.0f) return 1.0f;
+  return value;
 }
 
 void WaveModule::begin() {
@@ -45,21 +112,63 @@ void WaveModule::begin() {
   initI2S();
   wdtInitIfNeeded();
 
-  // default STOP
+#if DIAG_DISABLE_WAVE_RAMP
+  Serial.println("[DIAG] Wave startup ramp disabled");
+#endif
+
+  // Default to STOP state. Phase accumulator lives in task context and is
+  // intentionally not reset on start/stop to keep waveform phase continuous.
   portENTER_CRITICAL(&mux);
   target_phase_inc = 0;
   target_intensity = 0;
-  output_enable = false;
+  run_requested = false;
+  run_state = false;
   display_freq = 0.0f;
   portEXIT_CRITICAL(&mux);
 
+  i2s_stop(I2S_PORT);
   xTaskCreatePinnedToCore(taskThunk, "I2S_Audio", 4096, this, 4, NULL, 1);
   Serial.println("[OK] WaveModule started");
 }
 
+void WaveModule::setParams(float hz, int inten) {
+  setFreq(hz);
+  setIntensity(inten);
+}
+
+void WaveModule::start() {
+  float hz;
+  int intensity;
+
+  portENTER_CRITICAL(&mux);
+  hz = display_freq;
+  intensity = target_intensity;
+  portEXIT_CRITICAL(&mux);
+
+  Serial.printf("[WAVE] start freq=%.2f intensity=%d\n", hz, intensity);
+  setEnable(true);
+}
+
+void WaveModule::stopSoft() {
+  bool wasRequested = false;
+
+  portENTER_CRITICAL(&mux);
+  wasRequested = run_requested;
+  run_requested = false;
+  portEXIT_CRITICAL(&mux);
+
+  if (wasRequested) {
+    Serial.println("[WAVE] stop requested");
+  }
+}
+
+bool WaveModule::isRunning() const {
+  return run_state;
+}
+
 void WaveModule::setEnable(bool en) {
   portENTER_CRITICAL(&mux);
-  output_enable = en;
+  run_requested = en;
   portEXIT_CRITICAL(&mux);
 }
 
@@ -67,7 +176,7 @@ void WaveModule::setFreq(float new_freq) {
   if (new_freq < 0) new_freq = 0;
   if (new_freq > 50.0f) new_freq = 50.0f;
 
-  uint32_t new_inc = (uint32_t)((new_freq * 4294967296.0) / SAMPLE_RATE);
+  uint32_t new_inc = phaseIncrementFromHz(new_freq);
 
   portENTER_CRITICAL(&mux);
   target_phase_inc = new_inc;
@@ -77,7 +186,7 @@ void WaveModule::setFreq(float new_freq) {
 
 void WaveModule::setIntensity(int new_intensity) {
   if (new_intensity < 0) new_intensity = 0;
-  if (new_intensity > 120) new_intensity = 120;
+  if (new_intensity > WAVE_INTENSITY_MAX) new_intensity = WAVE_INTENSITY_MAX;
 
   portENTER_CRITICAL(&mux);
   target_intensity = new_intensity;
@@ -99,66 +208,216 @@ void WaveModule::audioTask() {
   esp_task_wdt_add(NULL);
 #endif
 
-  int32_t audio_buffer[BUFFER_LEN * 2];
-  size_t bytes_written = 0;
-
+  int16_t audio_buffer[BUFFER_LEN * 2];
   uint32_t phase_acc = 0;
-  uint32_t inc_smoothed = 0;
-  int intensity_smoothed = 0;
+  uint32_t current_phase_inc = 0;
+  float current_amplitude = 0.0f;
+  bool i2s_active = false;
+  bool last_run_state = false;
+  RampState ramp_state = RampState::IDLE;
+  RampState last_logged_amp_state = RampState::IDLE;
+  bool freq_ramp_logged = false;
+  uint32_t last_ramp_update_ms = millis();
 
-  const int INT_STEP_PER_BUF = 2;
-  const uint32_t INC_STEP_PER_BUF = 100000;
+  auto setRunState = [&](bool running) {
+    if (running == last_run_state) return;
+    portENTER_CRITICAL(&mux);
+    run_state = running;
+    portEXIT_CRITICAL(&mux);
+    last_run_state = running;
+  };
 
   while (true) {
 #if ENABLE_WDT
     esp_task_wdt_reset();
 #endif
 
-    uint32_t inc_target;
-    int intensity_target;
-    bool en;
+    uint32_t target_phase_inc;
+    int target_intensity;
+    bool req_run;
 
     portENTER_CRITICAL(&mux);
-    inc_target = target_phase_inc;
-    intensity_target = target_intensity;
-    en = output_enable;
+    target_phase_inc = this->target_phase_inc;
+    target_intensity = this->target_intensity;
+    req_run = run_requested;
     portEXIT_CRITICAL(&mux);
 
-    if (!en) {
-      intensity_target = 0;
-      inc_target = 0;
-    }
+    const float target_amplitude =
+        req_run ? intensityToAmplitude(target_intensity) : 0.0f;
 
-    if (intensity_smoothed < intensity_target) {
-      intensity_smoothed = min(intensity_smoothed + INT_STEP_PER_BUF, intensity_target);
-    } else if (intensity_smoothed > intensity_target) {
-      intensity_smoothed = max(intensity_smoothed - INT_STEP_PER_BUF, intensity_target);
-    }
-
-    int32_t diff = (int32_t)inc_target - (int32_t)inc_smoothed;
-    if (diff > (int32_t)INC_STEP_PER_BUF) diff = (int32_t)INC_STEP_PER_BUF;
-    if (diff < -(int32_t)INC_STEP_PER_BUF) diff = -(int32_t)INC_STEP_PER_BUF;
-    inc_smoothed = (uint32_t)((int32_t)inc_smoothed + diff);
-
-    if (intensity_smoothed == 0 || inc_smoothed == 0) {
-      memset(audio_buffer, 0, sizeof(audio_buffer));
+    uint32_t now = millis();
+    uint32_t ramp_ticks = 0;
+    if (RAMP_UPDATE_INTERVAL_MS == 0) {
+      ramp_ticks = 1;
+      last_ramp_update_ms = now;
     } else {
-      for (int i = 0; i < BUFFER_LEN; i++) {
-        phase_acc += inc_smoothed;
-        uint8_t idx = (uint8_t)(phase_acc >> 24);
-
-        int16_t base_val = sine_lut[idx];
-        int32_t scaled = (int32_t)base_val * (int32_t)intensity_smoothed;
-        scaled /= 120;
-        if (scaled > 32767) scaled = 32767;
-        if (scaled < -32768) scaled = -32768;
-
-        int32_t out32 = ((int32_t)((int16_t)scaled)) << 16;
-        audio_buffer[i * 2]     = out32;
-        audio_buffer[i * 2 + 1] = out32;
+      const uint32_t elapsed_ms = now - last_ramp_update_ms;
+      ramp_ticks = elapsed_ms / RAMP_UPDATE_INTERVAL_MS;
+      if (ramp_ticks > 0) {
+        last_ramp_update_ms += ramp_ticks * RAMP_UPDATE_INTERVAL_MS;
       }
     }
 
+    const bool start_pending = req_run &&
+        target_amplitude > kAmplitudeEpsilon &&
+        target_phase_inc > 0 &&
+        !i2s_active &&
+        current_amplitude <= kAmplitudeEpsilon;
+    if (start_pending && ramp_ticks == 0) {
+      ramp_ticks = 1;
+      last_ramp_update_ms = now;
+    }
+
+    if (!req_run && current_amplitude <= kAmplitudeEpsilon && !i2s_active) {
+      current_phase_inc = target_phase_inc;
+      if (freq_ramp_logged) {
+        Serial.printf("[WAVE] freq ramp complete freq=%.2f\n",
+                      phaseIncrementToHz(current_phase_inc));
+        freq_ramp_logged = false;
+      }
+    }
+
+    const bool amp_ramp_up =
+        target_amplitude > (current_amplitude + kAmplitudeEpsilon);
+    const bool amp_ramp_down =
+        current_amplitude > (target_amplitude + kAmplitudeEpsilon);
+
+    if (amp_ramp_up) {
+      if (last_logged_amp_state != RampState::RAMP_UP) {
+        Serial.printf("[WAVE] ramp start target_amp=%.3f state=RAMP_UP\n",
+                      target_amplitude);
+        last_logged_amp_state = RampState::RAMP_UP;
+      }
+    } else if (amp_ramp_down) {
+      if (last_logged_amp_state != RampState::RAMP_DOWN) {
+        if (!req_run && target_amplitude <= kAmplitudeEpsilon) {
+          Serial.println("[WAVE] ramp stop");
+        } else {
+          Serial.printf("[WAVE] ramp start target_amp=%.3f state=RAMP_DOWN\n",
+                        target_amplitude);
+        }
+        last_logged_amp_state = RampState::RAMP_DOWN;
+      }
+    } else if (last_logged_amp_state != RampState::IDLE) {
+      Serial.printf("[WAVE] ramp complete amp=%.3f\n", clampUnit(current_amplitude));
+      last_logged_amp_state = RampState::IDLE;
+    }
+
+    const bool freq_ramp_needed =
+        (target_phase_inc != current_phase_inc) && (req_run || i2s_active);
+    if (freq_ramp_needed && !freq_ramp_logged) {
+      Serial.printf("[WAVE] freq ramp start current=%.2f target=%.2f\n",
+                    phaseIncrementToHz(current_phase_inc),
+                    phaseIncrementToHz(target_phase_inc));
+      freq_ramp_logged = true;
+    } else if (!freq_ramp_needed && freq_ramp_logged) {
+      Serial.printf("[WAVE] freq ramp complete freq=%.2f\n",
+                    phaseIncrementToHz(current_phase_inc));
+      freq_ramp_logged = false;
+    }
+
+    const float amp_step_up = amplitudeStepPerTick(true);
+    const float amp_step_down = amplitudeStepPerTick(false);
+    const uint32_t freq_step = frequencyStepPerTick();
+
+    for (uint32_t tick = 0; tick < ramp_ticks; ++tick) {
+      if (current_amplitude < target_amplitude) {
+        current_amplitude += amp_step_up;
+        if (current_amplitude > target_amplitude) {
+          current_amplitude = target_amplitude;
+        }
+      } else if (current_amplitude > target_amplitude) {
+        current_amplitude -= amp_step_down;
+        if (current_amplitude < target_amplitude) {
+          current_amplitude = target_amplitude;
+        }
+      }
+
+      if (current_phase_inc < target_phase_inc) {
+        const uint32_t delta = target_phase_inc - current_phase_inc;
+        current_phase_inc += (delta > freq_step) ? freq_step : delta;
+      } else if (current_phase_inc > target_phase_inc) {
+        const uint32_t delta = current_phase_inc - target_phase_inc;
+        current_phase_inc -= (delta > freq_step) ? freq_step : delta;
+      }
+    }
+
+    const bool amplitude_active = current_amplitude > kAmplitudeEpsilon;
+    const bool frequency_active = current_phase_inc > 0;
+
+    if (amp_ramp_down) {
+      ramp_state = RampState::RAMP_DOWN;
+    } else if (amp_ramp_up) {
+      ramp_state = RampState::RAMP_UP;
+    } else if (freq_ramp_needed) {
+      ramp_state = RampState::RAMP_FREQ;
+    } else {
+      ramp_state = RampState::IDLE;
+    }
+
+    const bool should_emit = amplitude_active && frequency_active;
+    const bool should_start_i2s =
+        !i2s_active &&
+        ((req_run && target_amplitude > kAmplitudeEpsilon && target_phase_inc > 0) ||
+         should_emit);
+
+    if (should_start_i2s) {
+      i2s_zero_dma_buffer(I2S_PORT);
+      i2s_start(I2S_PORT);
+      i2s_active = true;
+    }
+
+    if (!i2s_active) {
+      setRunState(false);
+      vTaskDelay(pdMS_TO_TICKS(RAMP_UPDATE_INTERVAL_MS == 0 ? 1 : RAMP_UPDATE_INTERVAL_MS));
+      continue;
+    }
+
+    if (!should_emit) {
+      memset(audio_buffer, 0, sizeof(audio_buffer));
+      size_t bytes_written = 0;
+      i2s_write(I2S_PORT,
+                audio_buffer,
+                sizeof(audio_buffer),
+                &bytes_written,
+                portMAX_DELAY);
+
+      if (!req_run && current_amplitude <= kAmplitudeEpsilon) {
+        i2s_zero_dma_buffer(I2S_PORT);
+        i2s_stop(I2S_PORT);
+        i2s_active = false;
+        current_amplitude = 0.0f;
+        setRunState(false);
+        ramp_state = RampState::IDLE;
+        vTaskDelay(pdMS_TO_TICKS(RAMP_UPDATE_INTERVAL_MS == 0 ? 1 : RAMP_UPDATE_INTERVAL_MS));
+        continue;
+      }
+
+      setRunState(false);
+      continue;
+    }
+
+    const int32_t envelope_q15 =
+        static_cast<int32_t>(lroundf(clampUnit(current_amplitude) * 32767.0f));
+    for (int i = 0; i < BUFFER_LEN; i++) {
+      phase_acc += current_phase_inc;
+      uint8_t idx = static_cast<uint8_t>(phase_acc >> 24);
+
+      const int16_t base_val = sine_lut[idx];
+      int32_t scaled = static_cast<int32_t>(base_val) * envelope_q15;
+      scaled /= 32767;
+      if (scaled > 32767) scaled = 32767;
+      if (scaled < -32768) scaled = -32768;
+
+      const int16_t sample = static_cast<int16_t>(scaled);
+      audio_buffer[i * 2]     = sample;
+      audio_buffer[i * 2 + 1] = sample;
+    }
+
+    size_t bytes_written = 0;
     i2s_write(I2S_PORT, audio_buffer, sizeof(audio_buffer), &bytes_written, portMAX_DELAY);
+    setRunState(true);
+
+    (void)ramp_state;
   }
 }

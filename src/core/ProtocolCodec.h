@@ -10,17 +10,39 @@ public:
     String s = in; s.trim();
     if (s.length() == 0) { err = "EMPTY"; return false; }
 
+    auto readParam = [&](const String& key, String& valueOut) -> bool {
+      int idx = s.indexOf(key);
+      if (idx < 0) return false;
+      int beg = idx + key.length();
+      int end = s.length();
+
+      int comma = s.indexOf(',', beg);
+      if (comma >= 0 && comma < end) end = comma;
+      int space = s.indexOf(' ', beg);
+      if (space >= 0 && space < end) end = space;
+
+      valueOut = s.substring(beg, end);
+      valueOut.trim();
+      return valueOut.length() > 0;
+    };
+
     // CAP
     if (s.equalsIgnoreCase("CAP?")) { out.type = CmdType::CAP_QUERY; return true; }
 
-    // New protocol
+    // New protocol.
+    // Accept both:
+    //  - WAVE:SET f=<float>,i=<int>   (v1 minimal set)
+    //  - WAVE:SET freq=<float> amp=<int> (compat)
     if (s.startsWith("WAVE:SET")) {
       out.type = CmdType::WAVE_SET;
-      int fi = s.indexOf("freq=");
-      int ai = s.indexOf("amp=");
-      if (fi < 0 || ai < 0) { err = "INVALID_PARAM"; return false; }
-      float f = s.substring(fi + 5).toFloat();
-      int a = s.substring(ai + 4).toInt();
+
+      String fStr, iStr;
+      bool hasF = readParam("f=", fStr) || readParam("freq=", fStr);
+      bool hasI = readParam("i=", iStr) || readParam("amp=", iStr);
+      if (!hasF || !hasI) { err = "INVALID_PARAM"; return false; }
+
+      float f = fStr.toFloat();
+      int a = iStr.toInt();
       if (f < 0 || f > 50.0f || a < 0 || a > 120) { err = "INVALID_PARAM"; return false; }
       out.wave.freqHz = f; out.wave.intensity = a;
       return true;
@@ -28,13 +50,56 @@ public:
     if (s.equalsIgnoreCase("WAVE:START")) { out.type = CmdType::WAVE_START; return true; }
     if (s.equalsIgnoreCase("WAVE:STOP"))  { out.type = CmdType::WAVE_STOP;  return true; }
     if (s.equalsIgnoreCase("SCALE:ZERO")) { out.type = CmdType::SCALE_ZERO; return true; }
+    if (s.equalsIgnoreCase("CAL:ZERO"))   { out.type = CmdType::SCALE_ZERO; return true; }
     if (s.startsWith("SCALE:CAL")) {
       out.type = CmdType::SCALE_CAL;
-      int zi = s.indexOf("z=");
-      int ki = s.indexOf("k=");
-      if (zi < 0 || ki < 0) { err = "INVALID_PARAM"; return false; }
-      out.p1 = s.substring(zi + 2).toFloat();
-      out.p2 = s.substring(ki + 2).toFloat();
+      String zStr, kStr;
+      bool hasZ = readParam("z=", zStr);
+      bool hasK = readParam("k=", kStr);
+      if (!hasZ || !hasK) { err = "INVALID_PARAM"; return false; }
+      out.p1 = zStr.toFloat();
+      out.p2 = kStr.toFloat();
+      return true;
+    }
+    if (s.startsWith("CAL:CAPTURE")) {
+      out.type = CmdType::CAL_CAPTURE;
+      String wStr;
+      bool hasW = readParam("w=", wStr) || readParam("ref=", wStr);
+      if (!hasW) { err = "INVALID_PARAM"; return false; }
+      out.capture.referenceWeightKg = wStr.toFloat();
+      return true;
+    }
+    if (s.equalsIgnoreCase("CAL:GET_MODEL")) {
+      out.type = CmdType::CAL_GET_MODEL;
+      return true;
+    }
+    if (s.startsWith("CAL:SET_MODEL")) {
+      out.type = CmdType::CAL_SET_MODEL;
+
+      String typeStr, refStr, c0Str, c1Str, c2Str;
+      bool hasType = readParam("type=", typeStr) || readParam("t=", typeStr);
+      bool hasRef = readParam("ref=", refStr);
+      bool hasC0 = readParam("c0=", c0Str) || readParam("a=", c0Str);
+      bool hasC1 = readParam("c1=", c1Str) || readParam("b=", c1Str);
+      bool hasC2 = readParam("c2=", c2Str) || readParam("c=", c2Str);
+      if (!hasType || !hasRef || !hasC0 || !hasC1 || !hasC2) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+
+      if (typeStr.equalsIgnoreCase("LINEAR") || typeStr == "1") {
+        out.model.type = 1;
+      } else if (typeStr.equalsIgnoreCase("QUADRATIC") || typeStr == "2") {
+        out.model.type = 2;
+      } else {
+        err = "INVALID_PARAM";
+        return false;
+      }
+
+      out.model.referenceDistance = refStr.toFloat();
+      out.model.coefficients[0] = c0Str.toFloat();
+      out.model.coefficients[1] = c1Str.toFloat();
+      out.model.coefficients[2] = c2Str.toFloat();
       return true;
     }
 
@@ -97,6 +162,18 @@ public:
       case EventType::FAULT:
         s = "EVT:FAULT ";
         s += String((uint16_t)e.fault);
+        return s;
+      case EventType::SAFETY:
+        s = "EVT:SAFETY reason=";
+        s += faultCodeName(e.fault);
+        s += " code=";
+        s += String((uint16_t)e.fault);
+        s += " effect=";
+        s += safetySignalName(e.safety);
+        s += " state=";
+        s += topStateName(e.state);
+        s += " wave=";
+        s += e.waveStopped ? "STOPPED" : "RUNNING";
         return s;
       case EventType::STABLE_WEIGHT:
         s = "EVT:STABLE:";

@@ -19,11 +19,15 @@ build/
 .vscode/
 .idea/
 .fleet/
+*.iml
+.gradle/
+**/build/
 
 # =========================
 # macOS
 # =========================
 .DS_Store
+**/.DS_Store
 
 # =========================
 # Windows
@@ -49,3 +53,8 @@ Thumbs.db
 # Tooling metadata
 # =========================
 compile_commands.json
+
+# =========================
+# Development audit/task reports
+# =========================
+reports/

@@ -34,6 +34,33 @@ pio run -t upload --upload-port <PORT>
 pio device monitor -b 115200 --port <PORT>
 ```
 
+## Android Demo (`tools/android_demo`)
+
+### Open In Android Studio
+1. Open Android Studio.
+2. Choose `Open` and select `tools/android_demo`.
+3. Set Gradle JDK to `17` in project settings.
+
+### Build / Run
+```bash
+cd tools/android_demo
+./gradlew :app-demo:assembleDebug
+```
+
+Install/run `app-demo` from Android Studio on a BLE-capable Android device.
+
+### One-Click Validation Flow
+Use the demo app controls in this order:
+- `CAP?`
+- `WAVE:SET f=<freq>,i=<intensity>`
+- `WAVE:START`
+- `WAVE:STOP`
+- `SCALE:ZERO`
+- `(Optional) observe EVT:STREAM / CSV`
+
+Disconnect note:
+- BLE disconnect may not always deliver a final `EVT` to app, but firmware still performs safety stop on disconnect.
+
 ## 关键特性
 
 - BLE 控制协议：文本指令 + ACK/NACK + 事件上报
@@ -51,7 +78,16 @@ pio device monitor -b 115200 --port <PORT>
 - 硬件文档：[docs/hardware.md](docs/hardware.md)
 - 安全设计：[docs/safety_design.md](docs/safety_design.md)
 - 开发工作流：[docs/development_workflow.md](docs/development_workflow.md)
-- 架构图（SVG）：[docs/system_architecture.svg](docs/system_architecture.svg)
+- 架构图索引（新）：[docs/architecture/diagrams.md](docs/architecture/diagrams.md)
+- 架构图索引（兼容入口）：[docs/diagrams.md](docs/diagrams.md)
+
+## Architecture Diagrams
+
+- 图谱索引入口：[`docs/architecture/diagrams.md`](docs/architecture/diagrams.md)
+- 系统总览图：[`docs/architecture/current/system_master.svg`](docs/architecture/current/system_master.svg)
+- 固件运行图：[`docs/architecture/current/firmware_runtime.svg`](docs/architecture/current/firmware_runtime.svg)
+- Android MVVM 图：[`docs/architecture/current/android_mvvm.svg`](docs/architecture/current/android_mvvm.svg)
+- BLE 时序图：[`docs/architecture/current/ble_sequence.svg`](docs/architecture/current/ble_sequence.svg)
 
 ## 项目结构（简要）
 

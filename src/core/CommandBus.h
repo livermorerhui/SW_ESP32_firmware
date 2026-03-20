@@ -8,7 +8,20 @@ enum class CmdType : uint8_t {
   WAVE_STOP,
   SCALE_ZERO,
   SCALE_CAL,
+  CAL_CAPTURE,
+  CAL_GET_MODEL,
+  CAL_SET_MODEL,
   LEGACY_FIE     // 兼容 F/I/E 组合命令
+};
+
+struct CalibrationCaptureRequest {
+  float referenceWeightKg = 0.0f;
+};
+
+struct CalibrationModelCommand {
+  uint8_t type = 1;
+  float referenceDistance = 0.0f;
+  float coefficients[3] = {0.0f, 1.0f, 0.0f};
 };
 
 struct Command {
@@ -16,6 +29,8 @@ struct Command {
   WaveParams wave{};
   float p1 = 0; // zero
   float p2 = 0; // factor
+  CalibrationCaptureRequest capture{};
+  CalibrationModelCommand model{};
 };
 
 class CommandHandler {

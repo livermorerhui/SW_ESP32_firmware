@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1880" height="1320" viewBox="0 0 1880 1320" role="img" aria-labelledby="title desc">
+  <title id="title">SonicWave BLE Sequence</title>
+  <desc id="desc">Typical BLE sequences from Android demo transport and ESP32 firmware implementation.</desc>
+  <defs>
+    <style>
+      .bg { fill:#f8fafc; }
+      .title { font:700 24px 'Segoe UI', Arial, sans-serif; fill:#0f172a; }
+      .h2 { font:700 18px 'Segoe UI', Arial, sans-serif; fill:#0f172a; }
+      .txt { font:14px 'Segoe UI', Arial, sans-serif; fill:#1f2937; }
+      .mono { font:13px 'Courier New', monospace; fill:#111827; }
+      .line { stroke:#94a3b8; stroke-width:1.5; stroke-dasharray:8 6; }
+      .box { fill:#ffffff; stroke:#1f2937; stroke-width:2; rx:10; ry:10; }
+      .seq { stroke:#0b7285; stroke-width:2.5; fill:none; marker-end:url(#arrow); }
+      .rsp { stroke:#2563eb; stroke-width:2.5; fill:none; marker-end:url(#arrowBlue); }
+      .safe { stroke:#c92a2a; stroke-width:2.5; fill:none; marker-end:url(#arrowRed); }
+      .note { fill:#fff7ed; stroke:#fdba74; stroke-width:1.5; rx:10; ry:10; }
+      .warn { fill:#fef2f2; stroke:#f87171; stroke-width:1.5; rx:10; ry:10; }
+      .sep { stroke:#cbd5e1; stroke-width:2; }
+    </style>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <polygon points="0,0 10,4 0,8" fill="#0b7285"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <polygon points="0,0 10,4 0,8" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <polygon points="0,0 10,4 0,8" fill="#c92a2a"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1880" height="1320"/>
+  <text class="title" x="40" y="46">BLE Sequences (Android Demo ↔ ESP32 Firmware)</text>
+
+  <rect class="box" x="60" y="80" width="220" height="44"/>
+  <text class="h2" x="80" y="109">Android UI/VM</text>
+  <rect class="box" x="360" y="80" width="220" height="44"/>
+  <text class="h2" x="380" y="109">SDK/Transport</text>
+  <rect class="box" x="680" y="80" width="240" height="44"/>
+  <text class="h2" x="700" y="109">BLE Stack/GATT</text>
+  <rect class="box" x="1040" y="80" width="250" height="44"/>
+  <text class="h2" x="1060" y="109">ESP32 BleTransport</text>
+  <rect class="box" x="1380" y="80" width="220" height="44"/>
+  <text class="h2" x="1400" y="109">Command/FSM</text>
+  <rect class="box" x="1660" y="80" width="180" height="44"/>
+  <text class="h2" x="1680" y="109">Wave/Laser</text>
+
+  <line class="line" x1="170" y1="130" x2="170" y2="1260"/>
+  <line class="line" x1="470" y1="130" x2="470" y2="1260"/>
+  <line class="line" x1="800" y1="130" x2="800" y2="1260"/>
+  <line class="line" x1="1165" y1="130" x2="1165" y2="1260"/>
+  <line class="line" x1="1490" y1="130" x2="1490" y2="1260"/>
+  <line class="line" x1="1750" y1="130" x2="1750" y2="1260"/>
+
+  <text class="h2" x="60" y="165">1) Connect → Discover → Subscribe Notify → CAP?</text>
+  <path class="seq" d="M170 195 L470 195"/><text class="mono" x="220" y="188">connect(deviceId)</text>
+  <path class="seq" d="M470 225 L800 225"/><text class="mono" x="560" y="218">connectGatt + discoverServices</text>
+  <path class="seq" d="M800 255 L1165 255"/><text class="mono" x="900" y="248">RX/TX found + CCCD notify enable</text>
+  <path class="rsp" d="M1165 285 L470 285"/><text class="mono" x="790" y="278">ConnectionState.Connected</text>
+  <path class="seq" d="M170 315 L470 315"/><text class="mono" x="240" y="308">probe CAP?</text>
+  <path class="seq" d="M470 345 L800 345"/><text class="mono" x="585" y="338">writeLine("CAP?\\n")</text>
+  <path class="seq" d="M800 375 L1165 375"/><text class="mono" x="920" y="368">RX onWrite</text>
+  <path class="seq" d="M1165 405 L1490 405"/><text class="mono" x="1235" y="398">parse CAP_QUERY</text>
+  <path class="rsp" d="M1490 435 L1165 435"/><text class="mono" x="1280" y="428">ACK:CAP fw=... proto=1</text>
+  <path class="rsp" d="M1165 465 L800 465"/><text class="mono" x="935" y="458">TX notify line</text>
+  <path class="rsp" d="M800 495 L470 495"/><text class="mono" x="560" y="488">incomingLines/rawLines</text>
+
+  <line class="sep" x1="40" y1="535" x2="1840" y2="535"/>
+  <text class="h2" x="60" y="565">2) WAVE:SET → WAVE:START → EVT/ACK</text>
+  <path class="seq" d="M170 595 L470 595"/><text class="mono" x="220" y="588">WAVE:SET</text>
+  <path class="seq" d="M470 625 L800 625"/><text class="mono" x="550" y="618">writeLine</text>
+  <path class="seq" d="M800 655 L1165 655"/><text class="mono" x="915" y="648">onWrite parse</text>
+  <path class="seq" d="M1165 685 L1490 685"/><text class="mono" x="1200" y="678">dispatch WAVE_SET</text>
+  <path class="rsp" d="M1490 715 L1165 715"/><text class="mono" x="1355" y="708">ACK:OK</text>
+  <path class="rsp" d="M1165 745 L470 745"/><text class="mono" x="810" y="738">notify ACK</text>
+
+  <path class="seq" d="M170 785 L470 785"/><text class="mono" x="220" y="778">WAVE:START</text>
+  <path class="seq" d="M470 815 L800 815"/><text class="mono" x="550" y="808">writeLine</text>
+  <path class="seq" d="M800 845 L1165 845"/><text class="mono" x="915" y="838">parse START</text>
+  <path class="seq" d="M1165 875 L1490 875"/><text class="mono" x="1200" y="868">requestStart() via FSM</text>
+  <path class="safe" d="M1490 905 L1750 905"/><text class="mono" x="1540" y="898">setState(RUNNING)-&gt;Wave.start()</text>
+  <path class="rsp" d="M1490 935 L1165 935"/><text class="mono" x="1355" y="928">ACK:OK</text>
+  <path class="rsp" d="M1490 965 L1165 965"/><text class="mono" x="1270" y="958">EVT:STATE RUNNING</text>
+  <path class="rsp" d="M1165 995 L470 995"/><text class="mono" x="820" y="988">notify ACK + EVT</text>
+
+  <line class="sep" x1="40" y1="1035" x2="1840" y2="1035"/>
+  <text class="h2" x="60" y="1065">3) WAVE:STOP（淡出） + 4) 安全联锁（Laser / Disconnect）</text>
+  <path class="seq" d="M170 1095 L470 1095"/><text class="mono" x="220" y="1088">WAVE:STOP</text>
+  <path class="seq" d="M470 1125 L1165 1125"/><text class="mono" x="770" y="1118">writeLine -&gt; parse STOP</text>
+  <path class="seq" d="M1165 1155 L1490 1155"/><text class="mono" x="1205" y="1148">requestStop()</text>
+  <path class="safe" d="M1490 1185 L1750 1185"/><text class="mono" x="1525" y="1178">setState(IDLE)-&gt;stopSoft() fade</text>
+  <path class="rsp" d="M1490 1215 L470 1215"/><text class="mono" x="860" y="1208">ACK:OK + EVT:STATE IDLE</text>
+
+  <rect class="note" x="1060" y="1048" width="760" height="98"/>
+  <text class="txt" x="1080" y="1074">Safety interlock from Laser:</text>
+  <text class="mono" x="1080" y="1098">LaserTask detects USER_OFF / SENSOR_ERR / FALL_SUSPECTED -&gt; FSM FAULT_STOP -&gt; stopSoft() -&gt; EVT:FAULT/STATE</text>
+  <text class="txt" x="1080" y="1122">BLE disconnect path also calls onUserOff(); events are generated, but notify may be lost because link is already down.</text>
+
+  <rect class="warn" x="60" y="1240" width="1120" height="60"/>
+  <text class="txt" x="80" y="1265" fill="#7f1d1d">实现注记：Disconnect 分支在 firmware 内触发安全停机；由于 `deviceConnected=false`，`EVT:*` 不保证送达 App（src/transport/ble/BleTransport.cpp）。</text>
+</svg>

@@ -5,9 +5,9 @@
 1. App 不能直接控制振动输出硬件。
 2. 所有启动/停止动作必须先经过 `SystemStateMachine` 判定。
 3. 任何安全异常优先级高于业务输出，必须立即进入停机路径。
-4. 主循环必须保留兜底逻辑：非 `RUNNING` 状态强制停波。
+4. `SystemStateMachine` 是唯一允许调用 `WaveModule.start()/stopSoft()` 的闸门。
 
-说明：当前实现中 `WAVE:START` 与 Legacy `E:1` 启动都走 `requestStart()`，避免绕过安全闸门。
+说明：当前实现中 `WAVE:START` 与 Legacy `E:1` 启动都走 `requestStart()`，禁止直接 BLE 命令绕过安全闸门。
 
 ## 2. Safety Interlock 触发条件与动作
 
@@ -18,8 +18,8 @@
 
 ### 2.2 BLE 断连
 - 触发条件：连接状态由 connected 变为 disconnected。
-- 触发入口：`loop()` 中断连策略（`STOP_ON_DISCONNECT`）。
-- 动作：调用 `onUserOff()` 并立即 `g_wave.setEnable(false)`。
+- 触发入口：`BleTransport::onDisconnect()` 回调（`STOP_ON_DISCONNECT`）。
+- 动作：通过断连回调通知状态机 `onUserOff()`，状态机切入 `FAULT_STOP` 并执行停波。
 
 ### 2.3 传感器异常（Modbus 读取失败）
 - 触发条件：`readInputRegisters` 返回非成功。
