@@ -29,6 +29,14 @@ class ProtocolCodecTest {
                 ),
             ),
         )
+        assertEquals(
+            "DEBUG:FALL_STOP enabled=0",
+            ProtocolCodec.encode(Command.FallStopProtectionSet(enabled = false)),
+        )
+        assertEquals(
+            "DEBUG:MOTION_SAMPLING enabled=1",
+            ProtocolCodec.encode(Command.MotionSamplingModeSet(enabled = true)),
+        )
     }
 
     @Test
@@ -42,10 +50,16 @@ class ProtocolCodecTest {
 
     @Test
     fun decodeCapabilityAck() {
-        val event = ProtocolCodec.decode("ACK:CAP fw=SW-HUB-1.0.0 proto=1")
+        val event = ProtocolCodec.decode(
+            "ACK:CAP fw=SW-HUB-1.0.0 proto=1 fall_stop_enabled=0 fall_stop_mode=DETECT_ONLY motion_sampling_mode=1 fall_action_suppressed=1",
+        )
         val cap = assertIs<Event.Capabilities>(event)
         assertEquals("SW-HUB-1.0.0", cap.values["FW"])
         assertEquals("1", cap.values["PROTO"])
+        assertEquals("0", cap.values["FALL_STOP_ENABLED"])
+        assertEquals("DETECT_ONLY", cap.values["FALL_STOP_MODE"])
+        assertEquals("1", cap.values["MOTION_SAMPLING_MODE"])
+        assertEquals("1", cap.values["FALL_ACTION_SUPPRESSED"])
     }
 
     @Test

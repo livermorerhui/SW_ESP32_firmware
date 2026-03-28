@@ -20,6 +20,8 @@ sealed class Command {
         val c1: Float,
         val c2: Float,
     ) : Command()
+    data class FallStopProtectionSet(val enabled: Boolean) : Command()
+    data class MotionSamplingModeSet(val enabled: Boolean) : Command()
 
     // Legacy commands for fallback mode.
     data object LegacyZero : Command()
@@ -61,6 +63,29 @@ enum class CalibrationModelType {
 sealed class Event {
     data class State(val state: DeviceState) : Event()
     data class Fault(val code: Int?, val reason: String) : Event()
+    // 基线型主判断 verification contract。
+    // 这里的字段应优先视为 firmware truth，而不是前端派生值。
+    data class BaselineMain(
+        val baselineReady: Boolean,
+        val stableWeightKg: Float?,
+        val ma7WeightKg: Float?,
+        val deviationKg: Float?,
+        val ratio: Float?,
+        val mainState: String,
+        val abnormalDurationMs: Long?,
+        val dangerDurationMs: Long?,
+        val stopReason: String,
+        val stopSource: String,
+        val raw: String,
+    ) : Event()
+    data class Stop(
+        val stopReason: String,
+        val stopSource: String,
+        val code: Int?,
+        val effect: SafetyEffect,
+        val state: DeviceState,
+        val raw: String,
+    ) : Event()
     data class Safety(
         val reason: String,
         val code: Int?,

@@ -33,7 +33,12 @@ public:
   bool handle(const Command& c, String& outAck) override {
     switch (c.type) {
       case CmdType::CAP_QUERY:
-        outAck = String("ACK:CAP fw=") + FW_VER + " proto=" + String(PROTO_VER);
+        outAck = String("ACK:CAP fw=") + FW_VER +
+            " proto=" + String(PROTO_VER) +
+            " fall_stop_enabled=" + String(sm->fallStopEnabled() ? 1 : 0) +
+            " fall_stop_mode=" + String(sm->fallStopModeName()) +
+            " motion_sampling_mode=" + String(sm->motionSamplingModeEnabled() ? 1 : 0) +
+            " fall_action_suppressed=" + String(sm->fallStopEnabled() ? 0 : 1);
         return true;
 
       case CmdType::WAVE_SET:
@@ -130,6 +135,20 @@ public:
         return true;
       }
 
+      case CmdType::FALL_STOP_SET:
+        sm->setFallStopEnabled(c.fallStop.enabled);
+        outAck = String("ACK:FALL_STOP enabled=") +
+            String(c.fallStop.enabled ? 1 : 0) +
+            " mode=" + String(sm->fallStopModeName());
+        return true;
+
+      case CmdType::MOTION_SAMPLING_MODE_SET:
+        sm->setMotionSamplingMode(c.motionSamplingMode.enabled);
+        outAck = String("ACK:MOTION_SAMPLING enabled=") +
+            String(c.motionSamplingMode.enabled ? 1 : 0) +
+            " fall_action_suppressed=" + String(sm->fallStopEnabled() ? 0 : 1);
+        return true;
+
       case CmdType::LEGACY_FIE: {
         // 兼容旧命令：只改触碰到的字段
         // freqHz = -1 表示没提供
@@ -184,7 +203,7 @@ void setup() {
   g_fsm.begin(&g_eventBus, &g_wave);
 
   g_wave.begin();
-  g_laser.begin(&g_eventBus, &g_fsm);
+  g_laser.begin(&g_eventBus, &g_fsm, &g_wave);
   g_laser.startTask();
   g_cmdBus.setHandler(&g_handler);
 

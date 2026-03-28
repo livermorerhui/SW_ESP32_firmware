@@ -1,4 +1,5 @@
 #include "BleTransport.h"
+#include "core/LogMarkers.h"
 #include <string.h>
 
 static BleTransport* g_self = nullptr;
@@ -6,14 +7,14 @@ static BleTransport* g_self = nullptr;
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer*) override {
     if (g_self) g_self->deviceConnected = true;
-    Serial.println("🔗 BLE connected");
+    Serial.printf("%s BLE connected\n", LogMarker::kBleConnected);
     if (g_self) {
       g_self->enqueueConnectEvent();
     }
   }
   void onDisconnect(BLEServer*) override {
     if (g_self) g_self->deviceConnected = false;
-    Serial.println("❌ BLE disconnected");
+    Serial.printf("%s BLE disconnected\n", LogMarker::kBleDisconnected);
     if (g_self) {
       g_self->enqueueDisconnectEvent();
     }

@@ -5,6 +5,23 @@
 
 class ProtocolCodec {
 public:
+  // 本轮只做最小兼容增强，不改 stop/state owner，也不删 Demo 旧链。
+  // formal current branch 仍通过 Event.Fault.reason 识别关键停波语义，
+  // 因此这里只在目标场景给 EVT:FAULT 追加 reason 文本，同时保留 numeric code
+  // 作为前缀，避免误伤 Demo / legacy parser 现有对数字 fault 的依赖。
+  // 这是一层阶段性桥接，不代表最终 canonical 协议；后续统一治理应在
+  // formal 正式切到 STOP/SAFETY/BASELINE owner 后再做。
+  static const char* minimalCompatFaultReason(FaultCode code) {
+    switch (code) {
+      case FaultCode::USER_LEFT_PLATFORM:
+        return "USER_LEFT_PLATFORM";
+      case FaultCode::FALL_SUSPECTED:
+        return "FALL_SUSPECTED";
+      default:
+        return nullptr;
+    }
+  }
+
   // 返回 true = 成功解析
   static bool parseCommand(const String& in, Command& out, String& err) {
     String s = in; s.trim();
@@ -24,6 +41,26 @@ public:
       valueOut = s.substring(beg, end);
       valueOut.trim();
       return valueOut.length() > 0;
+    };
+
+    auto parseBoolValue = [&](const String& raw, bool& valueOut) -> bool {
+      if (raw.equalsIgnoreCase("1") ||
+          raw.equalsIgnoreCase("true") ||
+          raw.equalsIgnoreCase("on") ||
+          raw.equalsIgnoreCase("enable") ||
+          raw.equalsIgnoreCase("enabled")) {
+        valueOut = true;
+        return true;
+      }
+      if (raw.equalsIgnoreCase("0") ||
+          raw.equalsIgnoreCase("false") ||
+          raw.equalsIgnoreCase("off") ||
+          raw.equalsIgnoreCase("disable") ||
+          raw.equalsIgnoreCase("disabled")) {
+        valueOut = false;
+        return true;
+      }
+      return false;
     };
 
     // CAP
@@ -102,6 +139,36 @@ public:
       out.model.coefficients[2] = c2Str.toFloat();
       return true;
     }
+    if (s.startsWith("DEBUG:FALL_STOP")) {
+      out.type = CmdType::FALL_STOP_SET;
+
+      String enabledStr;
+      bool hasEnabled = readParam("enabled=", enabledStr) || readParam("mode=", enabledStr);
+      if (!hasEnabled) { err = "INVALID_PARAM"; return false; }
+
+      bool enabled = false;
+      if (!parseBoolValue(enabledStr, enabled)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+      out.fallStop.enabled = enabled;
+      return true;
+    }
+    if (s.startsWith("DEBUG:MOTION_SAMPLING")) {
+      out.type = CmdType::MOTION_SAMPLING_MODE_SET;
+
+      String enabledStr;
+      bool hasEnabled = readParam("enabled=", enabledStr) || readParam("mode=", enabledStr);
+      if (!hasEnabled) { err = "INVALID_PARAM"; return false; }
+
+      bool enabled = false;
+      if (!parseBoolValue(enabledStr, enabled)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+      out.motionSamplingMode.enabled = enabled;
+      return true;
+    }
 
     // Legacy scale
     if (s.equalsIgnoreCase("ZERO")) { out.type = CmdType::SCALE_ZERO; return true; }
@@ -162,6 +229,13 @@ public:
       case EventType::FAULT:
         s = "EVT:FAULT ";
         s += String((uint16_t)e.fault);
+        if (const char* compatReason = minimalCompatFaultReason(e.fault)) {
+          s += " reason=";
+          s += compatReason;
+          Serial.printf("[FAULT_COMPAT] export code=%u reason=%s route=EVT:FAULT\n",
+                        static_cast<unsigned>(e.fault),
+                        compatReason);
+        }
         return s;
       case EventType::SAFETY:
         s = "EVT:SAFETY reason=";
@@ -190,6 +264,42 @@ public:
         s += String(e.v1, 2);
         s += ",";
         s += String(e.v2, 2);
+        return s;
+      case EventType::BASELINE_MAIN:
+        s = "EVT:BASELINE ";
+        s += "baseline_ready=";
+        s += e.baselineReady ? "1" : "0";
+        s += " stable_weight=";
+        s += String(e.stableWeightKg, 2);
+        s += " ma7=";
+        s += String(e.ma7WeightKg, 2);
+        s += " deviation=";
+        s += String(e.deviationKg, 2);
+        s += " ratio=";
+        s += String(e.ratio, 4);
+        s += " main_state=";
+        s += (e.mainState[0] != '\0') ? e.mainState : "BASELINE_PENDING";
+        s += " abnormal_duration_ms=";
+        s += String(e.abnormalDurationMs);
+        s += " danger_duration_ms=";
+        s += String(e.dangerDurationMs);
+        s += " stop_reason=";
+        s += (e.stopReasonText[0] != '\0') ? e.stopReasonText : "NONE";
+        s += " stop_source=";
+        s += (e.stopSourceText[0] != '\0') ? e.stopSourceText : "NONE";
+        return s;
+      case EventType::STOP:
+        s = "EVT:STOP ";
+        s += "stop_reason=";
+        s += (e.stopReasonText[0] != '\0') ? e.stopReasonText : "NONE";
+        s += " stop_source=";
+        s += (e.stopSourceText[0] != '\0') ? e.stopSourceText : "NONE";
+        s += " code=";
+        s += String((uint16_t)e.fault);
+        s += " effect=";
+        s += safetySignalName(e.safety);
+        s += " state=";
+        s += topStateName(e.state);
         return s;
     }
     return "EVT:UNKNOWN";

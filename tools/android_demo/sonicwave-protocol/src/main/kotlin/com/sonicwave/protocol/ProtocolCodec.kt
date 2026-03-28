@@ -15,6 +15,8 @@ object ProtocolCodec {
             "CAL:SET_MODEL type=${command.type.name},ref=${command.referenceDistance}," +
                 "c0=${command.c0},c1=${command.c1},c2=${command.c2}"
         }
+        is Command.FallStopProtectionSet -> "DEBUG:FALL_STOP enabled=${if (command.enabled) 1 else 0}"
+        is Command.MotionSamplingModeSet -> "DEBUG:MOTION_SAMPLING enabled=${if (command.enabled) 1 else 0}"
         Command.LegacyZero -> "ZERO"
         is Command.LegacySetPs -> "SET_PS:${command.zeroDistance},${command.scaleFactor}"
         is Command.LegacyWaveFie -> encodeLegacyWaveFie(command)
@@ -29,6 +31,8 @@ object ProtocolCodec {
         parseCalibrationModel(raw)?.let { return it }
         parseCalibrationSetModelResult(raw)?.let { return it }
         parseCalibrationPoint(raw)?.let { return it }
+        parseBaseline(raw)?.let { return it }
+        parseStop(raw)?.let { return it }
         parseSafety(raw)?.let { return it }
         parseState(raw)?.let { return it }
         parseFault(raw)?.let { return it }
@@ -132,6 +136,37 @@ object ProtocolCodec {
         val code = INTEGER_REGEX.find(payload)?.value?.toIntOrNull()
         val reason = payload.ifBlank { "UNKNOWN" }
         return Event.Fault(code = code, reason = reason)
+    }
+
+    private fun parseBaseline(raw: String): Event.BaselineMain? {
+        val payload = namedPayload(raw, "BASELINE") ?: return null
+        val kv = parseKeyValuePayload(payload)
+        return Event.BaselineMain(
+            baselineReady = parseBooleanFlag(kv["BASELINE_READY"]) ?: false,
+            stableWeightKg = kv["STABLE_WEIGHT"]?.toFloatOrNull(),
+            ma7WeightKg = kv["MA7"]?.toFloatOrNull(),
+            deviationKg = kv["DEVIATION"]?.toFloatOrNull(),
+            ratio = kv["RATIO"]?.toFloatOrNull(),
+            mainState = kv["MAIN_STATE"] ?: "BASELINE_PENDING",
+            abnormalDurationMs = kv["ABNORMAL_DURATION_MS"]?.toLongOrNull(),
+            dangerDurationMs = kv["DANGER_DURATION_MS"]?.toLongOrNull(),
+            stopReason = kv["STOP_REASON"] ?: "NONE",
+            stopSource = kv["STOP_SOURCE"] ?: "NONE",
+            raw = raw,
+        )
+    }
+
+    private fun parseStop(raw: String): Event.Stop? {
+        val payload = namedPayload(raw, "STOP") ?: return null
+        val kv = parseKeyValuePayload(payload)
+        return Event.Stop(
+            stopReason = kv["STOP_REASON"] ?: "NONE",
+            stopSource = kv["STOP_SOURCE"] ?: "NONE",
+            code = kv["CODE"]?.toIntOrNull() ?: INTEGER_REGEX.find(payload)?.value?.toIntOrNull(),
+            effect = parseSafetyEffect(kv["EFFECT"]),
+            state = parseDeviceState(kv["STATE"]),
+            raw = raw,
+        )
     }
 
     private fun parseSafety(raw: String): Event.Safety? {
