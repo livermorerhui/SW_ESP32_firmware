@@ -40,11 +40,12 @@ import com.sonicwave.demo.ScanState
 import com.sonicwave.demo.UiState
 import com.sonicwave.demo.ui.components.CalibrationToolsSection
 import com.sonicwave.demo.ui.components.DeviceConnectSection
+import com.sonicwave.demo.ui.components.FallStopProtectionSection
 import com.sonicwave.demo.ui.components.RawConsoleSection
-import com.sonicwave.demo.ui.components.StableWeightSection
 import com.sonicwave.demo.ui.components.SystemStatusSection
 import com.sonicwave.demo.ui.components.TelemetryChartSection
-import com.sonicwave.demo.ui.components.WaveSection
+import com.sonicwave.demo.ui.components.TestSessionSection
+import com.sonicwave.demo.ui.components.WaveControlBottomBar
 import com.sonicwave.transport.BleScanResult
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -78,6 +79,19 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
                 },
             )
         },
+        bottomBar = {
+            WaveControlBottomBar(
+                uiState = uiState,
+                onFreqInputChange = viewModel::updateFreqInput,
+                onIntensityInputChange = viewModel::updateIntensityInput,
+                onFreqInputCommit = viewModel::commitFreqInput,
+                onIntensityInputCommit = viewModel::commitIntensityInput,
+                onFreqPresetSelected = viewModel::setPresetFrequency,
+                onIntensityPresetSelected = viewModel::setPresetIntensity,
+                onStart = viewModel::sendWaveStart,
+                onStop = viewModel::sendWaveStop,
+            )
+        },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -96,20 +110,24 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
                 )
             }
 
-            WaveSection(
-                uiState = uiState,
-                onFreqInputChange = viewModel::updateFreqInput,
-                onIntensityInputChange = viewModel::updateIntensityInput,
-                onPresetSelected = viewModel::setPresetFrequency,
-                onStart = viewModel::sendWaveStart,
-                onStop = viewModel::sendWaveStop,
-            )
-
             SystemStatusSection(uiState = uiState)
 
-            StableWeightSection(uiState = uiState)
+            FallStopProtectionSection(
+                uiState = uiState,
+                onToggleEnabled = viewModel::setFallStopProtectionEnabled,
+            )
 
-            TelemetryChartSection(telemetryPoints = uiState.telemetryPoints)
+            TelemetryChartSection(
+                telemetryPoints = uiState.telemetryPoints,
+                stableWeight = uiState.stableWeight,
+                stableWeightActive = uiState.stableWeightActive,
+            )
+
+            TestSessionSection(
+                uiState = uiState,
+                onClearSession = viewModel::clearTestSession,
+                onExportSession = viewModel::exportTestSession,
+            )
 
             CalibrationToolsSection(
                 uiState = uiState,

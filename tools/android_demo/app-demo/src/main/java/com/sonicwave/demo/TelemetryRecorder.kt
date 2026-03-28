@@ -30,7 +30,8 @@ class TelemetryRecorder(private val context: Context) {
 
     fun appendRow(session: RecordingSession, point: TelemetryPointUi) {
         session.writer.append(
-            "${point.timestampMs},${point.distance},${point.weight},${if (point.stableFlag) 1 else 0}\n",
+            "${point.timestampMs},${point.distance},${point.unstableWeight}," +
+                "${point.ma3 ?: ""},${point.ma5 ?: ""},${point.ma7 ?: ""},${point.stableWeight ?: ""},${if (point.stableFlag) 1 else 0}\n",
         )
         session.writer.flush()
     }
@@ -63,7 +64,7 @@ class TelemetryRecorder(private val context: Context) {
         val stream = resolver.openOutputStream(uri)
             ?: error("Failed to open output stream for $uri")
         val writer = BufferedWriter(OutputStreamWriter(stream))
-        writer.append("timestamp,distance,weight,stable\n")
+        writer.append("timestamp,distance,unstableWeight,ma3,ma5,ma7,stableWeight,stable\n")
         writer.flush()
         return RecordingSession(
             displayName = fileName,
@@ -81,7 +82,7 @@ class TelemetryRecorder(private val context: Context) {
         }
         val file = File(dir, fileName)
         val writer = file.bufferedWriter()
-        writer.append("timestamp,distance,weight,stable\n")
+        writer.append("timestamp,distance,unstableWeight,ma3,ma5,ma7,stableWeight,stable\n")
         writer.flush()
         return RecordingSession(
             displayName = fileName,
