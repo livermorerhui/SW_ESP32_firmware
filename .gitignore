@@ -58,3 +58,30 @@ compile_commands.json
 # Development audit/task reports
 # =========================
 reports/
+
+# =========================
+# 律动数据采集，分析结果
+# =========================
+data/
+律动数据分析-界定律动情况/
+
+# =========================
+# Codex / local assistant temp files
+# =========================
+.codex_tmp/
+
+# =========================
+# Python cache
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.python-version
+
+# =========================
+# Local analysis / export output
+# =========================
+analysis_output/
+exports/
+captures/

@@ -66,3 +66,97 @@ Recommended minimal direction:
 5. avoid classifying a single vibration-driven spike as a fall
 
 This is safer than simply raising the threshold blindly, because it preserves sensitivity while reducing single-frame false positives.
+
+## Motion Safety Framework Direction
+
+This document now serves two purposes:
+
+- preserve the current firmware baseline clearly
+- point to the next-stage modular direction without pretending the final thresholds are already known
+
+The recommended next step is not a blind threshold change. It is:
+
+1. define a motion safety state framework first
+2. modularize leave-platform detection
+3. modularize fall detection
+4. add Demo APP debug sampling so real motion data can be collected and labeled
+5. derive compact runtime parameters from real samples
+6. land those parameters into firmware in a parameterized form
+
+## Recommended Separation
+
+### Leave-platform path
+
+Leave-platform should become a dedicated detector module with:
+
+- candidate stage
+- confirmation stage
+- hysteresis / recovery stage
+- action output stage
+
+It should use multiple signals when available:
+
+- direct distance / displacement
+- model-derived weight
+- sample validity
+- running state
+
+### Fall path
+
+Fall should become a separate detector module with:
+
+- candidate stage
+- confirmation stage
+- classification stage
+- action output stage
+
+It should not be treated as a single-frame spike rule. The future design should evaluate short-window evidence and distinguish:
+
+- normal vibration spike
+- leave-platform
+- fall-like abnormal event
+
+## Measurement Truth
+
+Important architecture boundary:
+
+- laser directly measures distance / displacement
+- weight is derived through the deployed calibration model
+
+This means future fall and leave analysis should be allowed to look at both:
+
+- direct distance-side behavior
+- derived weight-side behavior
+
+instead of assuming one derived-weight threshold is always enough.
+
+## Debug-First Parameter Derivation
+
+The future threshold set should come from real motion samples rather than guessed constants.
+
+Recommended workflow:
+
+1. record representative debug sampling sessions in the Demo APP
+2. label segments such as:
+   - `静止站立`
+   - `正常律动`
+   - `离台`
+   - `异常动作`
+   - `疑似摔倒`
+3. inspect tables and charts
+4. derive candidate thresholds, windows, and hysteresis values
+5. validate false positives / false negatives
+6. land only the final compact parameters in firmware
+
+See `docs/system/motion_safety_framework.md` for the full framework definition.
+
+## Related Leave-Closure Note
+
+Audit-MOTION-1C did not change leave detection thresholds.
+
+It fixed the separate action-closure bug where `USER_LEFT_PLATFORM` could already be emitted with `RECOVERABLE_PAUSE`, but the running waveform path was not being closed immediately.
+
+That fix was intentionally kept separate from fall logic:
+
+- sampling mode still suppresses fall-triggered stop only
+- leave-platform action closure still remains active

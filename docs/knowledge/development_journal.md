@@ -1,5 +1,41 @@
 # Development Journal
 
+## 2026-03-21 - Task-MOTION-EXPORT-AUTOMATION 导出会话自动化（采样标签与自动命名）
+
+Summary:
+
+- 在 Demo APP 的 Motion-Safety Sampling Tool 中，把原来的“直接导出”流程改成“先填标签，再导出”
+- 统一了 CSV / JSON 文件名，减少人工重命名和样本交接歧义
+- 给 JSON metadata 增加了结构化标签与上下文字段，方便后续脚本直接读样本语义
+- 保持采样、运行时 safety、sampling mode、stop / pause 行为不变
+
+Implementation notes:
+
+- 在 `MotionSamplingSection.kt` 中新增轻量导出标签表单：
+  - 主标签：`NORMAL_USE` / `FALL_DURING_USE`
+  - 细分类标签：`NORMAL_VIBRATION`、`LEAVE_PLATFORM`、`PARTIAL_LEAVE`、`FALL_ON_PLATFORM`、`FALL_OFF_PLATFORM`、`LEFT_RIGHT_SWAY`、`SQUAT_STAND`、`RAPID_UNLOAD`、`OTHER_DISTURBANCE`
+  - 备注：可选文本输入
+- 在 `UiModels.kt` 中定义导出标签枚举和新的 `MotionSamplingExportRequest`
+- 在 `MotionSamplingExporter.kt` 中：
+  - 统一 CSV / JSON 的基础文件名
+  - 把主标签、细分类、备注、频率、强度、导出时间写入 JSON metadata
+  - 保留旧的 `scenarioLabel` / `scenarioCategory` 兼容字段
+- 在 `DemoViewModel.kt` 中保持原导出主链路不变，只更新导出完成后的会话摘要回显
+- 所有新增注释都明确强调：
+  - 这是导出自动化增强
+  - 不改变运行时 safety 判定逻辑
+
+Documentation notes:
+
+- 更新了 `docs/system/motion_sampling_tool.md`
+- 更新了 `docs/project_status.md`
+- 补充了 `reports/task_motion_export_automation/`
+
+Verification:
+
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+- `tools/android_demo ./gradlew :sonicwave-protocol:test`
+
 ## 2026-03-13 - Task-4A Firmware Safety Alignment
 
 Summary:
@@ -44,6 +80,287 @@ Implementation notes:
 - extended the demo status panel to show safety reason, effect, runtime state, wave state, engineering meaning, and signal source
 - added transport-derived `BLE_DISCONNECTED` visibility for reconnect-needed debugging when disconnect happens before any safety line is observed
 - kept auto-adjust and attribution out of the demo because the current demo architecture does not already expose the SW APP product controller or usage-data path
+
+Verification:
+
+- `tools/android_demo ./gradlew :sonicwave-protocol:test`
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+
+## 2026-03-20 - Task-MOTION-1B Session Labeling, Metadata, and Export Action Polish
+
+Summary:
+
+- refined the motion-sampling export flow so the operator explicitly labels the scenario at export time
+- enriched the session snapshot and JSON metadata with the missing wave/sampling/model context
+- improved file naming so exported sessions are easier to identify later
+- strengthened export/clear semantics so unexported sessions are harder to lose accidentally
+
+Implementation notes:
+
+- extended `MotionSamplingSessionUi` with:
+  - wave frequency/intensity snapshot
+  - sampling-mode flag
+  - running-at-session-start flag
+  - last export scenario and timestamp
+- changed `MotionSamplingExporter` to build filenames from:
+  - scenario label
+  - frequency
+  - intensity
+  - export timestamp
+- added an export dialog in `MotionSamplingSection` with fixed scenario options and a custom-text path
+- changed the action row so export is green/primary and clear is red/destructive
+- added a stopped-but-unexported recommendation plus a confirmation dialog before discarding an unexported session
+- kept start/stop sampling, row capture, charts, and runtime leave/fall behavior unchanged
+
+Documentation notes:
+
+- updated `docs/project_status.md`
+- updated `docs/system/motion_sampling_tool.md`
+- added the report pack under `reports/task_motion_1b_session_export_polish/`
+
+Verification:
+
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+
+## 2026-03-20 - Task-STATE-UI-1 System Status Hierarchy Cleanup
+
+Summary:
+
+- refactored the Demo APP system-status section so `状态` becomes the primary top-level signal
+- kept `安全原因` and `影响` prominent as the main explanation layer
+- demoted `运行态` and especially `波形态` to a lower-priority engineering reference area
+- preserved fault/code/source/meaning details below the primary interpretation layer
+
+Implementation notes:
+
+- replaced the previous equal-weight status grid with a clearer hierarchy:
+  - primary heading: `当前主状态`
+  - large hero card for `状态`
+  - primary supporting cards for `安全原因` and `影响`
+  - secondary heading: `工程参考状态`
+  - lower-emphasis cards for `运行态` and `波形态`
+- removed the top-level `故障` peer card and preserved fault information in the details text area instead
+- updated the status-section hint text so it explicitly describes the new trust/usefulness order
+
+Documentation notes:
+
+- updated `docs/project_status.md`
+- updated `docs/system/demo_app_calibration_guide_zh.md`
+- added the report pack under `reports/task_state_ui_1_hierarchy_cleanup/`
+
+Verification:
+
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+
+## 2026-03-20 - Task-WAVE-UI-1A Bottom Wave Bar Layout and Preset Highlight Polish
+
+Summary:
+
+- polished the fixed bottom wave-control bar without changing its working interaction logic
+- reduced the visual dominance of the frequency and intensity input fields so the bar reads more like a compact control strip
+- strengthened the selected preset state by changing the preset highlight to orange
+- preserved the current start/stop logic, connection-dependent behavior, and existing status descriptions
+
+Implementation notes:
+
+- updated `WaveControlBottomBar` instead of changing the broader screen structure
+- reduced the relative width/visual weight of the two input fields and slightly tightened their presentation
+- increased row spacing and rebalanced the row weights so preset chips and start/stop buttons stand out more clearly
+- applied a stronger orange selected-state color to both frequency and intensity preset chips
+- left the existing start/stop enable logic and current status-hint text unchanged
+
+Documentation notes:
+
+- updated `docs/project_status.md`
+- added the report pack under `reports/task_wave_ui_1a_bar_polish/`
+
+Verification:
+
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+
+## 2026-03-20 - Task-MOTION-1A Sampling Mode Fall Action Suppression
+
+Summary:
+
+- added a controlled engineering motion-sampling mode so repeated false fall triggers no longer immediately interrupt waveform output during data collection
+- kept fall detection itself alive and observable instead of silently disabling it
+- left `USER_LEFT_PLATFORM` behavior untouched so leave/fall semantics do not blur together
+
+Implementation notes:
+
+- confirmed the action split:
+  - `LaserModule` still raises `onUserOff()` and `onFallSuspected()`
+  - `SystemStateMachine` still owns stop/pause behavior
+- added a dedicated firmware command/config path:
+  - `DEBUG:MOTION_SAMPLING enabled=0|1`
+- extended capability reporting so the current firmware mode can be observed through:
+  - `motion_sampling_mode`
+  - `fall_action_suppressed`
+- in sampling mode:
+  - `onFallSuspected()` still runs
+  - fall visibility is still emitted as fault/safety output
+  - fall stop action is downgraded to non-stopping observability
+  - bounded suppression diagnostics are rate-limited to avoid log spam
+- in normal mode:
+  - fall behavior stays on the original blocking/pause path
+- leave-platform behavior was intentionally preserved with no suppression changes
+- added a Demo APP control/visibility layer in the motion-sampling section:
+  - enable mode
+  - disable mode
+  - explicit status banner showing whether fall stop suppression is active
+  - capability parsing to reflect firmware state in the UI
+
+Documentation notes:
+
+- updated `docs/project_status.md`
+- updated `docs/system/motion_safety_framework.md`
+- updated `docs/system/motion_sampling_tool.md`
+- added the report pack under `reports/task_motion_1a_sampling_fall_suppression/`
+
+Verification:
+
+- `tools/android_demo ./gradlew :sonicwave-protocol:test`
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+- `pio run` could not be executed here because `pio` is unavailable in the current environment
+
+## 2026-03-20 - Task-WAVE-UI-1 Fixed Bottom Wave Control Bar
+
+Summary:
+
+- moved the high-frequency wave controls out of the scrollable content and into a lightweight fixed bottom bar
+- kept the implementation compact instead of turning the bottom area into a large heavy control panel
+- preserved the existing wave command behavior while making start/stop and parameter edits persistently reachable
+
+Implementation notes:
+
+- added a reusable `WaveControlBottomBar` component to the Demo APP
+- mounted it through `Scaffold.bottomBar`, so the rest of the engineering page keeps scrolling above it
+- replaced the old scroll-area wave card as the primary wave-control surface
+- implemented the intended two-row structure:
+  - Row 1:
+    - frequency input
+    - `20`
+    - `30`
+    - `40`
+    - `START`
+  - Row 2:
+    - intensity input
+    - `60`
+    - `80`
+    - `100`
+    - `STOP`
+- presets act as quick-fill helpers only:
+  - manual frequency and intensity entry still remain fully usable
+- refined button visuals and enable rules:
+  - start uses green when startable
+  - stop uses red while running
+  - disabled states are gray and visually consistent with behavior
+  - invalid manual values now disable start until corrected
+- added a concise current-state hint above the bar for faster debugging comprehension
+- added bounded `[WAVE_UI]` diagnostics for preset clicks
+
+Documentation notes:
+
+- updated `docs/project_status.md`
+- updated `docs/system/demo_app_calibration_guide_zh.md`
+- added the report pack under `reports/task_wave_ui_1_fixed_bottom_bar/`
+
+Verification:
+
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+
+## 2026-03-20 - Audit-MOTION-1C Leave-Platform Pause-to-Stop Action Closure
+
+Summary:
+
+- audited the already-working leave detection path and confirmed the bug was not in detection
+- found that `USER_LEFT_PLATFORM` was reaching `RECOVERABLE_PAUSE`, but the running waveform path was not being closed immediately
+- applied the smallest fix by reusing the existing internal stop-request path when recoverable pause is entered from `RUNNING`
+
+Implementation notes:
+
+- current path before the fix was:
+  - leave detected in `LaserModule`
+  - `onUserOff()` called
+  - `enterRecoverablePause(USER_LEFT_PLATFORM, ...)` latched the pause reason
+  - `syncReadyState()` then refused to leave `RUNNING`
+  - visibility was emitted as `RECOVERABLE_PAUSE` while state/wave could still report `RUNNING`
+  - actual stop later depended on an external `WAVE:STOP`
+- the minimal reliable closure fix was added in `SystemStateMachine::enterRecoverablePause(...)`
+- when recoverable pause is entered while the machine is still `RUNNING`, the code now:
+  - logs bounded leave-closure diagnostics
+  - calls `requestStop()`
+  - reuses the existing internal stop/state-exit path instead of inventing a second stop mechanism
+- this keeps the action chain explicit:
+  - `USER_LEFT_PLATFORM`
+  - `RECOVERABLE_PAUSE`
+  - automatic running-path closure
+- sampling/debug mode remains isolated to fall suppression:
+  - it does not interfere with leave closure
+
+Documentation notes:
+
+- updated `docs/project_status.md`
+- updated `docs/system/motion_safety_framework.md`
+- updated `docs/system/fall_detection_logic.md`
+- added the report pack under `reports/audit_motion_1c_leave_action_closure/`
+
+Verification:
+
+- `tools/android_demo ./gradlew :sonicwave-protocol:test`
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+- `pio run` could not be executed here because `pio` is unavailable in the current environment
+
+## 2026-03-20 - Task-MOTION-1 Motion-Safety Sampling Tool MVP
+
+Summary:
+
+- built the first usable Motion-Safety Sampling Tool MVP inside the Demo APP engineering surface
+- kept the task focused on record / view / export, without redesigning firmware leave/fall logic
+- reused the existing live stream and runtime/safety UI state as the source of truth for captured rows
+
+Implementation notes:
+
+- added a new `MotionSamplingSection` to the Demo APP main engineering screen
+- added explicit motion-sampling session controls:
+  - start
+  - stop
+  - clear unsaved session
+  - export session
+- introduced a dedicated motion-sampling session model separate from the existing calibration telemetry recorder
+- sampling rows are captured from `onStreamSample(...)` and stored as structured time-series data instead of raw log text
+- the recorded row schema includes:
+  - timestamps and elapsed time
+  - live distance
+  - live weight
+  - nullable stable weight
+  - measurement validity
+  - runtime state
+  - wave state
+  - safety effect/reason codes
+  - connection state
+  - nullable model / marker / future motion-safety fields
+  - nullable `ddDt` and `dwDt` extension values
+- the session remains reviewable after stop because MVP storage is:
+  - in-memory active session
+  - explicit export when the operator decides to save it
+- added recorded-session review UI:
+  - session id / timestamps / row count
+  - last recorded values
+  - recent row preview
+  - session-based chart rendering
+- added export through `MotionSamplingExporter`:
+  - CSV rows for analysis
+  - JSON metadata sidecar for schema version, model metadata, and future extensibility hints
+  - target output in `Downloads/SonicWave/`
+- added bounded `[MOTION_SAMPLE]` diagnostics without high-frequency per-row log spam
+
+Documentation notes:
+
+- updated `docs/project_status.md`
+- updated `docs/system/motion_safety_framework.md`
+- added `docs/system/motion_sampling_tool.md`
+- added the report pack under `reports/task_motion_1_sampling_mvp/`
 
 Verification:
 
@@ -118,6 +435,53 @@ Verification:
 
 - `tools/android_demo ./gradlew :sonicwave-protocol:test`
 - `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+
+## 2026-03-20 - Design-MOTION-SAFETY Motion Safety Framework and Debug Sampling Design
+
+Summary:
+
+- defined the next-stage motion safety framework around the real current firmware baseline instead of jumping to guessed thresholds
+- kept the public runtime contract unchanged:
+  - `IDLE / ARMED / RUNNING / FAULT_STOP`
+  - `EVT:STATE / EVT:FAULT / EVT:SAFETY`
+- defined a separate internal/debug-facing motion safety layer with states for:
+  - empty
+  - occupied idle
+  - running occupied
+  - leave candidate / left platform
+  - fall candidate / fall confirmed
+  - recovering
+- documented that laser directly measures distance while weight is model-derived, and both are useful for safety analysis
+
+Implementation notes:
+
+- audited the current baseline:
+  - leave-platform is currently derived-weight hysteresis plus edge trigger
+  - fall suspicion is currently a single-frame derived-weight rate threshold during `RUNNING`
+  - Demo APP currently only records raw telemetry rows as `timestamp,distance,weight,stable`
+- defined modular detector structure for both leave-platform and fall:
+  - candidate
+  - confirmation
+  - classification or recovery
+  - action output
+- defined the Demo APP debug sampling direction as an evolution of the existing telemetry recorder and chart path, not a separate app
+- chose row-based time-series as the primary record format, with charts as secondary visualization
+- chose:
+  - CSV for per-sample export
+  - JSON for session metadata, labels, markers, and analysis context
+- defined compact firmware parameter categories rather than final numeric thresholds
+
+Documentation notes:
+
+- updated `docs/project_status.md`
+- updated `docs/system/fall_detection_logic.md`
+- added `docs/system/motion_safety_framework.md`
+- added the report pack under `reports/design_motion_safety_framework/`
+
+Verification:
+
+- documentation/design task only
+- no firmware or Demo APP logic change was applied in this step
 
 ## 2026-03-19 - Audit-C4b-VERIFY Write-Model ACK Chain Verification
 
@@ -698,3 +1062,47 @@ Verification:
 
 - `tools/android_demo ./gradlew :sonicwave-protocol:test`
 - `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+
+## 2026-03-21 - Task-MOTION-ANALYSIS-1 Moving-Average Research Overlay
+
+Summary:
+
+- added a lightweight moving-average research overlay inside the Demo APP motion-sampling review surface
+- kept the task focused on post-capture comparison of raw vs smoothed curves
+- left firmware leave/fall ownership and runtime safety behavior untouched
+
+Implementation notes:
+
+- confirmed the active Demo APP source-of-truth path under `tools/android_demo/app-demo/`
+- kept the UI changes local to `MotionSamplingSection`
+- added one shared MA point-count input with:
+  - default `5`
+  - presets `3 / 5 / 7`
+  - valid range `1..50`
+  - automatic recompute when the applied value changes
+- derived moving-average values only from the captured in-memory session rows already shown in the sampling tool
+- kept raw captured rows intact and computed MA data as local derived UI series rather than mutating:
+  - `MotionSamplingRowUi`
+  - `MotionSamplingSessionUi`
+  - export payloads
+- extended the combined session chart so raw and MA curves are visible together for:
+  - distance
+  - live weight
+- added explicit latest `MA(n)` readouts next to the existing raw latest-value summary
+- left `stableWeightKg` out of the overlay MVP because it is nullable and tied to stable-visibility state instead of continuous row coverage
+- added concise research-only copy so the MA overlay is not mistaken for current runtime safety logic
+- confirmed the runtime boundary stayed unchanged:
+  - `LaserModule` still raises leave/fall conditions
+  - `SystemStateMachine` still owns stop/pause effects
+  - `DemoViewModel`, exporters, and protocol models were not touched for this overlay
+
+Documentation notes:
+
+- updated `docs/project_status.md`
+- updated `docs/system/motion_sampling_tool.md`
+- added the Task-MOTION-ANALYSIS-1 report pack under `reports/task_motion_analysis_1_ma_overlay/`
+
+Verification:
+
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+- `tools/android_demo ./gradlew :sonicwave-protocol:test`
