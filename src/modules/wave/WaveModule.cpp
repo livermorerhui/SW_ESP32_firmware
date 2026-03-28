@@ -1,4 +1,5 @@
 #include "WaveModule.h"
+#include "core/LogMarkers.h"
 #include <math.h>
 #include "esp_task_wdt.h"
 
@@ -145,7 +146,7 @@ void WaveModule::start() {
   intensity = target_intensity;
   portEXIT_CRITICAL(&mux);
 
-  Serial.printf("[WAVE] start freq=%.2f intensity=%d\n", hz, intensity);
+  Serial.printf("%s [WAVE] start freq=%.2f intensity=%d\n", LogMarker::kWave, hz, intensity);
   setEnable(true);
 }
 
@@ -158,12 +159,21 @@ void WaveModule::stopSoft() {
   portEXIT_CRITICAL(&mux);
 
   if (wasRequested) {
-    Serial.println("[WAVE] stop requested");
+    Serial.printf("%s [WAVE] stop requested\n", LogMarker::kWave);
   }
 }
 
 bool WaveModule::isRunning() const {
   return run_state;
+}
+
+void WaveModule::getSummaryParams(float& hz, int& intensity, float& intensityNormalized) {
+  portENTER_CRITICAL(&mux);
+  hz = display_freq;
+  intensity = target_intensity;
+  portEXIT_CRITICAL(&mux);
+
+  intensityNormalized = intensityToAmplitude(intensity);
 }
 
 void WaveModule::setEnable(bool en) {
@@ -271,7 +281,8 @@ void WaveModule::audioTask() {
     if (!req_run && current_amplitude <= kAmplitudeEpsilon && !i2s_active) {
       current_phase_inc = target_phase_inc;
       if (freq_ramp_logged) {
-        Serial.printf("[WAVE] freq ramp complete freq=%.2f\n",
+        Serial.printf("%s [WAVE] freq ramp complete freq=%.2f\n",
+                      LogMarker::kWave,
                       phaseIncrementToHz(current_phase_inc));
         freq_ramp_logged = false;
       }
@@ -284,34 +295,38 @@ void WaveModule::audioTask() {
 
     if (amp_ramp_up) {
       if (last_logged_amp_state != RampState::RAMP_UP) {
-        Serial.printf("[WAVE] ramp start target_amp=%.3f state=RAMP_UP\n",
+        Serial.printf("%s [WAVE] ramp start target_amp=%.3f state=RAMP_UP\n",
+                      LogMarker::kWave,
                       target_amplitude);
         last_logged_amp_state = RampState::RAMP_UP;
       }
     } else if (amp_ramp_down) {
       if (last_logged_amp_state != RampState::RAMP_DOWN) {
         if (!req_run && target_amplitude <= kAmplitudeEpsilon) {
-          Serial.println("[WAVE] ramp stop");
+          Serial.printf("%s [WAVE] ramp stop\n", LogMarker::kWave);
         } else {
-          Serial.printf("[WAVE] ramp start target_amp=%.3f state=RAMP_DOWN\n",
+          Serial.printf("%s [WAVE] ramp start target_amp=%.3f state=RAMP_DOWN\n",
+                        LogMarker::kWave,
                         target_amplitude);
         }
         last_logged_amp_state = RampState::RAMP_DOWN;
       }
     } else if (last_logged_amp_state != RampState::IDLE) {
-      Serial.printf("[WAVE] ramp complete amp=%.3f\n", clampUnit(current_amplitude));
+      Serial.printf("%s [WAVE] ramp complete amp=%.3f\n", LogMarker::kWave, clampUnit(current_amplitude));
       last_logged_amp_state = RampState::IDLE;
     }
 
     const bool freq_ramp_needed =
         (target_phase_inc != current_phase_inc) && (req_run || i2s_active);
     if (freq_ramp_needed && !freq_ramp_logged) {
-      Serial.printf("[WAVE] freq ramp start current=%.2f target=%.2f\n",
+      Serial.printf("%s [WAVE] freq ramp start current=%.2f target=%.2f\n",
+                    LogMarker::kWave,
                     phaseIncrementToHz(current_phase_inc),
                     phaseIncrementToHz(target_phase_inc));
       freq_ramp_logged = true;
     } else if (!freq_ramp_needed && freq_ramp_logged) {
-      Serial.printf("[WAVE] freq ramp complete freq=%.2f\n",
+      Serial.printf("%s [WAVE] freq ramp complete freq=%.2f\n",
+                    LogMarker::kWave,
                     phaseIncrementToHz(current_phase_inc));
       freq_ramp_logged = false;
     }

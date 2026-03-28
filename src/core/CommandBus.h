@@ -11,6 +11,8 @@ enum class CmdType : uint8_t {
   CAL_CAPTURE,
   CAL_GET_MODEL,
   CAL_SET_MODEL,
+  FALL_STOP_SET,
+  MOTION_SAMPLING_MODE_SET,
   LEGACY_FIE     // 兼容 F/I/E 组合命令
 };
 
@@ -24,6 +26,14 @@ struct CalibrationModelCommand {
   float coefficients[3] = {0.0f, 1.0f, 0.0f};
 };
 
+struct MotionSamplingModeCommand {
+  bool enabled = false;
+};
+
+struct FallStopCommand {
+  bool enabled = true;
+};
+
 struct Command {
   CmdType type = CmdType::CAP_QUERY;
   WaveParams wave{};
@@ -31,6 +41,8 @@ struct Command {
   float p2 = 0; // factor
   CalibrationCaptureRequest capture{};
   CalibrationModelCommand model{};
+  FallStopCommand fallStop{};
+  MotionSamplingModeCommand motionSamplingMode{};
 };
 
 class CommandHandler {

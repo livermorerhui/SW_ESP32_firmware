@@ -15,6 +15,8 @@ public:
   void start();
   void stopSoft();
   bool isRunning() const;
+  // Read-only snapshot used by firmware-side test summaries.
+  void getSummaryParams(float& hz, int& intensity, float& intensityNormalized);
 
   // Compatibility wrappers used by legacy command path.
   void setFreq(float hz);        // 0..50

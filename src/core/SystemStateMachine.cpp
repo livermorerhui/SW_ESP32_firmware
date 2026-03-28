@@ -1,4 +1,5 @@
 #include "SystemStateMachine.h"
+#include "core/LogMarkers.h"
 #include "modules/wave/WaveModule.h"
 
 namespace {
@@ -52,9 +53,18 @@ void SystemStateMachine::begin(EventBus* eb, WaveModule* waveModule) {
   fault_ms = 0;
   clear_window_active = false;
   clear_candidate_ms = 0;
+  fall_stop_enabled = FALL_STOP_ENABLED_DEFAULT;
+  motion_sampling_mode_enabled = false;
+  last_suppressed_fall_notice_ms = 0;
   runtime_ready = false;
+  start_ready = false;
+  start_ready_stable_weight_kg = 0.0f;
   sensor_healthy = false;
   sensor_state_known = false;
+  pending_stop_reason_text = nullptr;
+  pending_stop_source = VerificationStopSource::NONE;
+  last_stop_reason_text = "NONE";
+  last_stop_source = VerificationStopSource::NONE;
   emitState();
 }
 
@@ -68,6 +78,98 @@ bool SystemStateMachine::isFaultLocked() const {
 
 FaultCode SystemStateMachine::activeFault() const {
   return visibleReasonCode();
+}
+
+bool SystemStateMachine::fallStopEnabled() const {
+  return fall_stop_enabled;
+}
+
+const char* SystemStateMachine::fallStopModeName() const {
+  return fall_stop_enabled ? "ENABLED_STOP" : "DETECT_ONLY";
+}
+
+bool SystemStateMachine::motionSamplingModeEnabled() const {
+  return motion_sampling_mode_enabled;
+}
+
+bool SystemStateMachine::startReady() const {
+  return start_ready;
+}
+
+bool SystemStateMachine::leaveDetectionEnabled() const {
+  // leave 判定必须和正式 start readiness 对齐。
+  // 这里不用 runtime_ready 直接做 owner，避免再次把 presence 误当成“已站稳可运行”。
+  // 这只是本阶段的固件侧收口，不代表 stable/runtime/leave 全语义治理已经结束。
+  return st == TopState::RUNNING && start_ready;
+}
+
+const char* SystemStateMachine::lastStopReasonText() const {
+  return last_stop_reason_text ? last_stop_reason_text : "NONE";
+}
+
+const char* SystemStateMachine::lastStopSourceText() const {
+  return verificationStopSourceName(last_stop_source);
+}
+
+void SystemStateMachine::rememberStopContext(
+    const char* stopReasonText,
+    VerificationStopSource stopSource) {
+  last_stop_reason_text = stopReasonText ? stopReasonText : "NONE";
+  last_stop_source = stopSource;
+}
+
+void SystemStateMachine::clearPendingStopContext() {
+  pending_stop_reason_text = nullptr;
+  pending_stop_source = VerificationStopSource::NONE;
+}
+
+const char* SystemStateMachine::resolvedStopReasonText(
+    FaultCode code,
+    const char* fallback) const {
+  if (pending_stop_reason_text && pending_stop_reason_text[0] != '\0') {
+    return pending_stop_reason_text;
+  }
+  if (fallback && fallback[0] != '\0') {
+    return fallback;
+  }
+  if (code != FaultCode::NONE) {
+    return faultCodeName(code);
+  }
+  return "MANUAL_STOP";
+}
+
+VerificationStopSource SystemStateMachine::resolvedStopSource(
+    VerificationStopSource fallback) const {
+  if (pending_stop_source != VerificationStopSource::NONE) {
+    return pending_stop_source;
+  }
+  if (fallback != VerificationStopSource::NONE) {
+    return fallback;
+  }
+  return VerificationStopSource::USER_MANUAL_OTHER;
+}
+
+bool SystemStateMachine::canEnterArmedState() const {
+  return runtime_ready && start_ready && pause_reason_code == FaultCode::NONE;
+}
+
+void SystemStateMachine::emitStopEvent(
+    FaultCode code,
+    SafetySignalKind safety,
+    TopState targetState,
+    const char* stopReasonText,
+    VerificationStopSource stopSource) {
+  if (!bus) return;
+
+  Event e{};
+  e.type = EventType::STOP;
+  e.fault = code;
+  e.safety = safety;
+  e.state = targetState;
+  e.ts_ms = millis();
+  strlcpy(e.stopReasonText, stopReasonText ? stopReasonText : "NONE", sizeof(e.stopReasonText));
+  strlcpy(e.stopSourceText, verificationStopSourceName(stopSource), sizeof(e.stopSourceText));
+  bus->publish(e);
 }
 
 void SystemStateMachine::emitState() {
@@ -138,7 +240,7 @@ void SystemStateMachine::setState(TopState s) {
     else wave->stopSoft();
   }
 
-  Serial.printf("[FSM] STATE %s -> %s\n", topStateName(prev), topStateName(st));
+  Serial.printf("%s [FSM] STATE %s -> %s\n", LogMarker::kFsm, topStateName(prev), topStateName(st));
   emitState();
 }
 
@@ -146,11 +248,13 @@ void SystemStateMachine::setWarningFault(FaultCode code, const char* detail) {
   if (warning_fault_code == code) return;
 
   warning_fault_code = code;
-  Serial.printf("[FSM] SAFETY reason=%s effect=%s detail=%s\n",
+  Serial.printf("%s [FSM] SAFETY reason=%s effect=%s detail=%s\n",
+                LogMarker::kSafety,
                 faultCodeName(code),
                 safetySignalName(SafetySignalKind::WARNING_ONLY),
                 detail ? detail : "n/a");
-  Serial.printf("[FAULT] WARN name=%s origin=%s severity=%s detail=%s\n",
+  Serial.printf("%s [FAULT] WARN name=%s origin=%s severity=%s detail=%s\n",
+                LogMarker::kSafety,
                 faultCodeName(code),
                 originName(faultOrigin(code)),
                 severityName(FaultSeverity::WARNING_ONLY),
@@ -165,7 +269,8 @@ void SystemStateMachine::clearWarningFault(FaultCode code, const char* detail) {
   if (warning_fault_code != code) return;
 
   warning_fault_code = FaultCode::NONE;
-  Serial.printf("[FAULT] CLEAR severity=%s name=%s detail=%s\n",
+  Serial.printf("%s [FAULT] CLEAR severity=%s name=%s detail=%s\n",
+                LogMarker::kClear,
                 severityName(FaultSeverity::WARNING_ONLY),
                 faultCodeName(code),
                 detail ? detail : "n/a");
@@ -178,6 +283,7 @@ void SystemStateMachine::clearWarningFault(FaultCode code, const char* detail) {
 void SystemStateMachine::enterBlockingFault(FaultCode code, const char* detail) {
   uint32_t now = millis();
   bool isNewFault = (blocking_fault_code != code);
+  const bool wasRunning = (st == TopState::RUNNING);
 
   blocking_fault_code = code;
   fault_ms = now;
@@ -186,19 +292,31 @@ void SystemStateMachine::enterBlockingFault(FaultCode code, const char* detail) 
   pause_reason_code = FaultCode::NONE;
 
   if (isNewFault) {
-    Serial.printf("[FSM] SAFETY reason=%s effect=%s detail=%s\n",
+    Serial.printf("%s [FSM] SAFETY reason=%s effect=%s detail=%s\n",
+                  LogMarker::kSafety,
                   faultCodeName(code),
                   safetySignalName(SafetySignalKind::ABNORMAL_STOP),
                   detail ? detail : "n/a");
-    Serial.printf("[FAULT] BLOCK name=%s origin=%s severity=%s detail=%s\n",
+    Serial.printf("%s [FAULT] BLOCK name=%s origin=%s severity=%s detail=%s\n",
+                  LogMarker::kFaultBlock,
                   faultCodeName(code),
                   originName(faultOrigin(code)),
                   severityName(FaultSeverity::BLOCKING_FAULT),
                   detail ? detail : "n/a");
-    Serial.printf("[FSM] FAULT ENTER reason=%s detail=%s\n",
+    Serial.printf("%s [FSM] FAULT ENTER reason=%s detail=%s\n",
+                  LogMarker::kFaultBlock,
                   faultCodeName(code),
                   detail ? detail : "n/a");
   }
+
+  if (wasRunning) {
+    const char* stopReasonText = resolvedStopReasonText(code, faultCodeName(code));
+    const VerificationStopSource stopSource =
+        resolvedStopSource(VerificationStopSource::FORMAL_SAFETY_OTHER);
+    rememberStopContext(stopReasonText, stopSource);
+    emitStopEvent(code, SafetySignalKind::ABNORMAL_STOP, TopState::FAULT_STOP, stopReasonText, stopSource);
+  }
+  clearPendingStopContext();
 
   setState(TopState::FAULT_STOP);
   if (isNewFault) {
@@ -213,10 +331,22 @@ void SystemStateMachine::enterRecoverablePause(FaultCode code, const char* detai
   clear_window_active = false;
   clear_candidate_ms = 0;
 
-  Serial.printf("[FSM] SAFETY reason=%s effect=%s detail=%s\n",
+  Serial.printf("%s [FSM] SAFETY reason=%s effect=%s detail=%s\n",
+                LogMarker::kSafety,
                 faultCodeName(code),
                 safetySignalName(SafetySignalKind::RECOVERABLE_PAUSE),
                 detail ? detail : "n/a");
+
+  if (code == FaultCode::USER_LEFT_PLATFORM) {
+    Serial.printf("%s [LEAVE] confirmed action=RECOVERABLE_PAUSE\n", LogMarker::kSafety);
+  }
+
+  if (st == TopState::RUNNING) {
+    Serial.printf("%s [FSM] RECOVERABLE_PAUSE closing running path source=%s\n",
+                  LogMarker::kSafety,
+                  faultCodeName(code));
+    requestStop();
+  }
 
   syncReadyState();
   emitVisibleSignals();
@@ -225,7 +355,7 @@ void SystemStateMachine::enterRecoverablePause(FaultCode code, const char* detai
 bool SystemStateMachine::recoveryConditionMet() const {
   switch (blocking_fault_code) {
     case FaultCode::USER_LEFT_PLATFORM:
-      return runtime_ready;
+      return runtime_ready && start_ready;
     case FaultCode::FALL_SUSPECTED:
       return !runtime_ready;
     case FaultCode::BLE_DISCONNECTED:
@@ -240,7 +370,8 @@ bool SystemStateMachine::recoveryConditionMet() const {
 const char* SystemStateMachine::recoveryDetail() const {
   switch (blocking_fault_code) {
     case FaultCode::USER_LEFT_PLATFORM:
-      return runtime_ready ? "runtime_ready=1" : "runtime_ready=0";
+      if (!runtime_ready) return "runtime_ready=0";
+      return start_ready ? "baseline_ready=1" : "baseline_ready=0";
     case FaultCode::FALL_SUSPECTED:
       return runtime_ready ? "await_runtime_clear" : "runtime_ready=0";
     case FaultCode::BLE_DISCONNECTED:
@@ -258,11 +389,13 @@ void SystemStateMachine::clearBlockingFault(const char* detail) {
   clear_window_active = false;
   clear_candidate_ms = 0;
 
-  Serial.printf("[FAULT] CLEAR severity=%s name=%s detail=%s\n",
+  Serial.printf("%s [FAULT] CLEAR severity=%s name=%s detail=%s\n",
+                LogMarker::kClear,
                 severityName(FaultSeverity::BLOCKING_FAULT),
                 faultCodeName(cleared),
                 detail ? detail : "n/a");
-  Serial.printf("[FSM] FAULT CLEAR reason=%s detail=%s\n",
+  Serial.printf("%s [FSM] FAULT CLEAR reason=%s detail=%s\n",
+                LogMarker::kClear,
                 faultCodeName(cleared),
                 detail ? detail : "n/a");
 
@@ -274,7 +407,8 @@ void SystemStateMachine::clearRecoverablePause(FaultCode code, const char* detai
   if (pause_reason_code != code) return;
 
   pause_reason_code = FaultCode::NONE;
-  Serial.printf("[FSM] SAFETY CLEAR reason=%s effect=%s detail=%s\n",
+  Serial.printf("%s [FSM] SAFETY CLEAR reason=%s effect=%s detail=%s\n",
+                LogMarker::kClear,
                 faultCodeName(code),
                 safetySignalName(SafetySignalKind::RECOVERABLE_PAUSE),
                 detail ? detail : "n/a");
@@ -314,7 +448,11 @@ void SystemStateMachine::syncReadyState() {
   }
 
   if (st == TopState::RUNNING) return;
-  setState(runtime_ready ? TopState::ARMED : TopState::IDLE);
+  if (pause_reason_code != FaultCode::NONE) {
+    setState(TopState::IDLE);
+    return;
+  }
+  setState(canEnterArmedState() ? TopState::ARMED : TopState::IDLE);
 }
 
 void SystemStateMachine::onUserOn() {
@@ -323,6 +461,28 @@ void SystemStateMachine::onUserOn() {
 
 void SystemStateMachine::onUserOff() {
   runtime_ready = false;
+
+  if (!leaveDetectionEnabled()) {
+    Serial.printf(
+        "%s [LEAVE] suppress enabled=0 reason=%s state=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d\n",
+        LogMarker::kSafety,
+        start_ready ? "not_running" : "baseline_not_ready",
+        topStateName(st),
+        start_ready ? 1 : 0,
+        start_ready_stable_weight_kg,
+        runtime_ready ? 1 : 0);
+    syncReadyState();
+    return;
+  }
+
+  Serial.printf(
+      "%s [LEAVE] trigger enabled=1 state=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d policy=%s\n",
+      LogMarker::kSafety,
+      topStateName(st),
+      start_ready ? 1 : 0,
+      start_ready_stable_weight_kg,
+      runtime_ready ? 1 : 0,
+      SAFETY_POLICY_USER_LEFT_RECOVERABLE_PAUSE ? "RECOVERABLE_PAUSE" : "BLOCKING_FAULT");
 
   if (SAFETY_POLICY_USER_LEFT_RECOVERABLE_PAUSE) {
     enterRecoverablePause(FaultCode::USER_LEFT_PLATFORM, "user_left_platform");
@@ -349,12 +509,76 @@ void SystemStateMachine::onBleDisconnected() {
 }
 
 void SystemStateMachine::onFallSuspected() {
+  applyFallSuspectedAction(decideFallSuspectedAction());
+}
+
+void SystemStateMachine::setFallStopEnabled(bool enabled) {
+  if (fall_stop_enabled == enabled) return;
+
+  fall_stop_enabled = enabled;
+  last_suppressed_fall_notice_ms = 0;
+  Serial.printf("%s [FALL_STOP] enabled=%d mode=%s\n",
+                LogMarker::kSafety,
+                enabled ? 1 : 0,
+                fallStopModeName());
+}
+
+FallStopActionDecision SystemStateMachine::decideFallSuspectedAction() const {
+  FallStopActionDecision decision{};
+  decision.stopCandidateDetected = true;
+  decision.fallStopEnabled = fall_stop_enabled;
+  decision.stopReason = FaultCode::FALL_SUSPECTED;
+
+  if (!fall_stop_enabled) {
+    decision.shouldExecuteStop = false;
+    decision.stopSuppressedBySwitch = true;
+    decision.safetySignal = SafetySignalKind::WARNING_ONLY;
+    decision.detail = "fall_stop_disabled";
+    return decision;
+  }
+
+  decision.shouldExecuteStop = true;
   if (SAFETY_POLICY_FALL_ABNORMAL_STOP) {
-    enterBlockingFault(FaultCode::FALL_SUSPECTED, "fall_stop_active");
+    decision.safetySignal = SafetySignalKind::ABNORMAL_STOP;
+    decision.detail = "fall_stop_active";
+    return decision;
+  }
+
+  decision.safetySignal = SafetySignalKind::RECOVERABLE_PAUSE;
+  decision.detail = "fall_pause_override";
+  return decision;
+}
+
+void SystemStateMachine::applyFallSuspectedAction(const FallStopActionDecision& decision) {
+  if (!decision.stopCandidateDetected) return;
+
+  if (decision.stopSuppressedBySwitch) {
+    const uint32_t now = millis();
+    if (last_suppressed_fall_notice_ms == 0 ||
+        now - last_suppressed_fall_notice_ms >= MOTION_SAMPLING_SUPPRESSED_FALL_NOTICE_INTERVAL_MS) {
+      last_suppressed_fall_notice_ms = now;
+      emitSafety(decision.stopReason, SafetySignalKind::WARNING_ONLY);
+    }
     return;
   }
 
-  enterRecoverablePause(FaultCode::FALL_SUSPECTED, "fall_pause_override");
+  last_suppressed_fall_notice_ms = 0;
+  pending_stop_reason_text = decision.verificationStopReason;
+  pending_stop_source = decision.verificationStopSource;
+  if (decision.safetySignal == SafetySignalKind::ABNORMAL_STOP) {
+    enterBlockingFault(decision.stopReason, decision.detail);
+    return;
+  }
+
+  enterRecoverablePause(decision.stopReason, decision.detail);
+}
+
+void SystemStateMachine::setMotionSamplingMode(bool enabled) {
+  if (motion_sampling_mode_enabled == enabled) return;
+
+  motion_sampling_mode_enabled = enabled;
+  last_suppressed_fall_notice_ms = 0;
+  Serial.printf("[MOTION_SAMPLE_MODE] enabled=%s\n", enabled ? "true" : "false");
 }
 
 void SystemStateMachine::onSensorErr() {
@@ -362,10 +586,54 @@ void SystemStateMachine::onSensorErr() {
 }
 
 void SystemStateMachine::setRuntimeReady(bool ready) {
+  const bool changed = (runtime_ready != ready);
   runtime_ready = ready;
 
-  if (pause_reason_code == FaultCode::USER_LEFT_PLATFORM && ready) {
-    clearRecoverablePause(FaultCode::USER_LEFT_PLATFORM, "runtime_ready=1");
+  if (changed) {
+    Serial.printf(
+        "%s [READY] runtime_ready=%d user_present=%d baseline_ready=%d stable_weight_kg=%.2f note=presence_only\n",
+        LogMarker::kFsm,
+        runtime_ready ? 1 : 0,
+        runtime_ready ? 1 : 0,
+        start_ready ? 1 : 0,
+        start_ready_stable_weight_kg);
+  }
+
+  if (pause_reason_code == FaultCode::USER_LEFT_PLATFORM && runtime_ready && start_ready) {
+    clearRecoverablePause(FaultCode::USER_LEFT_PLATFORM, "runtime_ready=1 baseline_ready=1");
+    return;
+  }
+
+  uint32_t now = millis();
+  if (blocking_fault_code != FaultCode::NONE) {
+    maybeClearBlockingFault(now);
+    return;
+  }
+
+  syncReadyState();
+}
+
+void SystemStateMachine::setStartReadiness(bool ready, float stableWeightKg) {
+  const float nextStableWeightKg = ready ? stableWeightKg : 0.0f;
+  const bool changed =
+      (start_ready != ready) ||
+      (ready && start_ready_stable_weight_kg != nextStableWeightKg);
+
+  start_ready = ready;
+  start_ready_stable_weight_kg = nextStableWeightKg;
+
+  if (changed) {
+    Serial.printf(
+        "%s [READY] baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d leave_enabled=%d note=formal_start_gate\n",
+        LogMarker::kBaselineReady,
+        start_ready ? 1 : 0,
+        start_ready_stable_weight_kg,
+        runtime_ready ? 1 : 0,
+        leaveDetectionEnabled() ? 1 : 0);
+  }
+
+  if (pause_reason_code == FaultCode::USER_LEFT_PLATFORM && runtime_ready && start_ready) {
+    clearRecoverablePause(FaultCode::USER_LEFT_PLATFORM, "runtime_ready=1 baseline_ready=1");
     return;
   }
 
@@ -414,7 +682,8 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
 
   if (blocking_fault_code != FaultCode::NONE) {
     reason = FaultCode::FAULT_LOCKED;
-    Serial.printf("[FSM] START REJECT reason=FAULT_LOCKED detail=%s active_fault=%s\n",
+    Serial.printf("%s [FSM] START REJECT reason=FAULT_LOCKED detail=%s active_fault=%s\n",
+                  LogMarker::kFsm,
                   recoveryDetail(),
                   faultCodeName(blocking_fault_code));
     return false;
@@ -422,37 +691,89 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
 
   if (pause_reason_code != FaultCode::NONE) {
     reason = FaultCode::NOT_ARMED;
-    Serial.printf("[FSM] START REJECT reason=NOT_ARMED detail=pause_reason=%s\n",
-                  faultCodeName(pause_reason_code));
+    Serial.printf(
+        "%s [FSM] START REJECT reason=NOT_ARMED detail=pause_reason=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d userPresent=%d leave_enabled=%d\n",
+                  LogMarker::kFsm,
+                  faultCodeName(pause_reason_code),
+                  start_ready ? 1 : 0,
+                  start_ready_stable_weight_kg,
+                  runtime_ready ? 1 : 0,
+                  runtime_ready ? 1 : 0,
+                  leaveDetectionEnabled() ? 1 : 0);
     return false;
   }
 
-  Serial.printf("[FSM] START ALLOW runtime_ready=%d warning=%s\n",
+  if (!runtime_ready || !start_ready) {
+    reason = FaultCode::NOT_ARMED;
+    Serial.printf(
+        "%s [FSM] START REJECT reason=NOT_ARMED detail=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d userPresent=%d leave_enabled=%d warning=%s\n",
+        LogMarker::kFsm,
+        runtime_ready ? "baseline_not_ready" : "user_not_present",
+        start_ready ? 1 : 0,
+        start_ready_stable_weight_kg,
+        runtime_ready ? 1 : 0,
+        runtime_ready ? 1 : 0,
+        leaveDetectionEnabled() ? 1 : 0,
+        faultCodeName(warning_fault_code));
+    return false;
+  }
+
+  Serial.printf(
+      "%s [FSM] START ALLOW baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d userPresent=%d leave_enabled=%d warning=%s\n",
+                LogMarker::kFsm,
+                start_ready ? 1 : 0,
+                start_ready_stable_weight_kg,
                 runtime_ready ? 1 : 0,
+                runtime_ready ? 1 : 0,
+                leaveDetectionEnabled() ? 1 : 0,
                 faultCodeName(warning_fault_code));
+  rememberStopContext("NONE", VerificationStopSource::NONE);
   setState(TopState::RUNNING);
   reason = FaultCode::NONE;
   return true;
 }
 
 void SystemStateMachine::requestStop() {
-  Serial.printf("[FSM] STOP REQUEST state=%s runtime_ready=%d active_block=%s active_visible=%s\n",
+  const bool wasRunning = (st == TopState::RUNNING);
+  Serial.printf(
+      "%s [FSM] STOP REQUEST state=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d active_block=%s active_visible=%s\n",
+                LogMarker::kFsm,
                 topStateName(st),
+                start_ready ? 1 : 0,
+                start_ready_stable_weight_kg,
                 runtime_ready ? 1 : 0,
                 faultCodeName(blocking_fault_code),
                 faultCodeName(visibleReasonCode()));
 
   if (blocking_fault_code != FaultCode::NONE) {
-    Serial.printf("[FSM] STOP while fault latched active_fault=%s\n", faultCodeName(blocking_fault_code));
+    Serial.printf("%s [FSM] STOP while fault latched active_fault=%s\n",
+                  LogMarker::kFsm,
+                  faultCodeName(blocking_fault_code));
     if (wave) wave->stopSoft();
     setState(TopState::FAULT_STOP);
     return;
   }
 
-  TopState target = runtime_ready ? TopState::ARMED : TopState::IDLE;
+  TopState target = canEnterArmedState() ? TopState::ARMED : TopState::IDLE;
+  if (wasRunning) {
+    const FaultCode stopCode =
+        (pause_reason_code != FaultCode::NONE) ? pause_reason_code : FaultCode::NONE;
+    const char* stopReasonText = resolvedStopReasonText(
+        stopCode,
+        (pause_reason_code != FaultCode::NONE) ? faultCodeName(pause_reason_code) : "MANUAL_STOP");
+    const VerificationStopSource stopSource = resolvedStopSource(
+        (pause_reason_code != FaultCode::NONE)
+            ? VerificationStopSource::FORMAL_SAFETY_OTHER
+            : VerificationStopSource::USER_MANUAL_OTHER);
+    const SafetySignalKind stopEffect =
+        (pause_reason_code != FaultCode::NONE) ? SafetySignalKind::RECOVERABLE_PAUSE : SafetySignalKind::NONE;
+    rememberStopContext(stopReasonText, stopSource);
+    emitStopEvent(stopCode, stopEffect, target, stopReasonText, stopSource);
+  }
+  clearPendingStopContext();
   if (st == target) {
     if (wave) wave->stopSoft();
-    Serial.printf("[FSM] STOP RESULT state=%s\n", topStateName(st));
+    Serial.printf("%s [FSM] STOP RESULT state=%s\n", LogMarker::kFsm, topStateName(st));
     return;
   }
 

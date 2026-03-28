@@ -5,6 +5,9 @@
 #include "config/GlobalConfig.h"
 #include "core/EventBus.h"
 #include "core/SystemStateMachine.h"
+#include "modules/laser/RhythmStateJudge.h"
+
+class WaveModule;
 
 enum class CalibrationModelType : uint8_t {
   LINEAR = 1,
@@ -29,7 +32,7 @@ struct CalibrationCapture {
 
 class LaserModule {
 public:
-  void begin(EventBus* eb, SystemStateMachine* fsm);
+  void begin(EventBus* eb, SystemStateMachine* fsm, WaveModule* waveModule);
   void startTask();
 
   // Command hooks（由统一命令处理器调用）
@@ -69,9 +72,31 @@ private:
   void beginStableCandidate(float distance, float weight);
   void updateStableState(float distance, float weight, uint32_t now);
   void handleInvalidMeasurement(const char* reason);
-  void latchStable(uint32_t now);
+  void latchStable(uint32_t now, const char* mode, float stddev);
   void resetStableTracking(const char* reason, bool logIfActive);
   bool shouldClearLatchedStable(float distance, float weight, const char*& reason) const;
+  bool shouldUseFastStableBuildReadInterval() const;
+  bool shouldLatchStableEarly(float latestWeight, float& stddev, float& latestDelta) const;
+  void logRhythmStateUpdate(const RhythmStateUpdateResult& result) const;
+  void emitBaselineReadyLog(uint32_t now) const;
+  void publishBaselineMainVerification(uint32_t now, const RhythmStateUpdateResult& result) const;
+  void handleRunSummaryState(TopState currentTopState,
+                             uint32_t now,
+                             float distance,
+                             float weight,
+                             const RhythmStateUpdateResult& rhythmResult);
+  void handleFallStopCandidate(const RhythmStateUpdateResult& rhythmResult);
+  void logFallStopSuppressed(const RhythmStateUpdateResult& rhythmResult,
+                             const FallStopActionDecision& actionDecision) const;
+  void startRunSummary(uint32_t now, const RhythmStateUpdateResult& rhythmResult);
+  void accumulateRunSummary(uint32_t now,
+                            float distance,
+                            float weight,
+                            const RhythmStateUpdateResult& rhythmResult);
+  void finishRunSummary(uint32_t now,
+                        FaultCode stopReason,
+                        const RhythmStateUpdateResult& rhythmResult);
+  bool computeRunAverage(uint8_t window, float& avgWeight, float& avgDistance) const;
 
   float getMean(const float* values) const;
   float getStdDev(const float* values) const;
@@ -83,8 +108,49 @@ private:
     STABLE_LATCHED
   };
 
+  struct RangeTracker {
+    bool valid = false;
+    float min = 0.0f;
+    float max = 0.0f;
+  };
+
+  // Per-run evidence stays local so stop/abort summaries can stay concise.
+  struct RunSummaryState {
+    bool active = false;
+    uint32_t nextTestId = 1;
+    uint32_t testId = 0;
+    uint32_t startedAtMs = 0;
+    uint32_t samples = 0;
+    bool baselineReady = false;
+    float freqHz = 0.0f;
+    int intensity = 0;
+    float intensityNormalized = 0.0f;
+    float baselineWeightKg = 0.0f;
+    float baselineDistance = 0.0f;
+    bool fallStopEnabled = FALL_STOP_ENABLED_DEFAULT;
+    RhythmStateStatus lastRhythmStatus = RhythmStateStatus::BASELINE_PENDING;
+    const char* lastRhythmReason = "baseline_pending";
+    RangeTracker weightKgRange{};
+    RangeTracker distanceRange{};
+    RangeTracker ma3WeightKgRange{};
+    RangeTracker ma3DistanceRange{};
+    RangeTracker ma5WeightKgRange{};
+    RangeTracker ma5DistanceRange{};
+    RangeTracker ma7WeightKgRange{};
+    RangeTracker ma7DistanceRange{};
+    uint16_t advisoryCount = 0;
+    RiskAdvisoryType lastAdvisoryType = RiskAdvisoryType::NONE;
+    RiskAdvisoryLevel lastAdvisoryLevel = RiskAdvisoryLevel::NONE;
+    const char* lastAdvisoryReason = "none";
+    float recentWeightKg[7]{};
+    float recentDistance[7]{};
+    uint8_t recentHead = 0;
+    uint8_t recentCount = 0;
+  };
+
   EventBus* bus = nullptr;
   SystemStateMachine* sm = nullptr;
+  WaveModule* wave = nullptr;
 
   ModbusMaster node;
   Preferences preferences;
@@ -98,11 +164,15 @@ private:
   float distanceBuffer[WINDOW_N]{};
   int bufHead = 0, bufCount = 0;
   StableState stableState = StableState::UNSTABLE;
+  // stable_weight 生命周期入口：
+  // 仅在未律动且稳定站立时锁定，确认离台后才允许清空并重建。
   float stableBaselineDistance = 0.0f;
   float stableBaselineDistanceMm = 0.0f;
   float stableBaselineWeight = 0.0f;
   uint32_t stableLatchedAtMs = 0;
   uint8_t invalidStableSamples = 0;
+  uint32_t stableCandidateStartedAtMs = 0;
+  bool stableEarlyCheckpointLogged = false;
 
   // 静默日志
   float lastLogDist = -999.0f;
@@ -111,9 +181,6 @@ private:
   volatile bool needZero = false;
   volatile bool needSendParams = false;
 
-  // for fall detect
-  float lastWeight = 0.0f;
-  uint32_t lastMs = 0;
   volatile float latestWeightKg = 0.0f;
   bool userPresent = false;
   bool hasStreamSample = false;
@@ -124,4 +191,9 @@ private:
   uint32_t lastValidityLogMs = 0;
   const char* lastInvalidReason = nullptr;
   uint32_t calibrationCaptureCounter = 0;
+  // Primary Judgment Owner：
+  // MA7 / deviation / ratio / main_state / duration 统一由 RhythmStateJudge 维护。
+  RhythmStateJudge rhythmStateJudge{};
+  RunSummaryState runSummary{};
+  TopState lastObservedTopState = TopState::IDLE;
 };
