@@ -40,6 +40,7 @@ import com.sonicwave.demo.ScanState
 import com.sonicwave.demo.UiState
 import com.sonicwave.demo.ui.components.CalibrationToolsSection
 import com.sonicwave.demo.ui.components.DeviceConnectSection
+import com.sonicwave.demo.ui.components.DeviceProfileSection
 import com.sonicwave.demo.ui.components.FallStopProtectionSection
 import com.sonicwave.demo.ui.components.RawConsoleSection
 import com.sonicwave.demo.ui.components.SystemStatusSection
@@ -103,6 +104,13 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
         ) {
             DeviceConnectSection(uiState = uiState)
 
+            DeviceProfileSection(
+                uiState = uiState,
+                onPlatformModelSelected = viewModel::updateSelectedPlatformModel,
+                onLaserInstalledSelected = viewModel::updateSelectedLaserInstalled,
+                onWriteDeviceConfig = viewModel::sendDeviceConfig,
+            )
+
             if (uiState.permissionState is PermissionState.Missing) {
                 PermissionCard(
                     permissionState = uiState.permissionState,
@@ -117,17 +125,12 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
                 onToggleEnabled = viewModel::setFallStopProtectionEnabled,
             )
 
-            TelemetryChartSection(
-                telemetryPoints = uiState.telemetryPoints,
+            TelemetryChartSectionHost(
+                viewModel = viewModel,
                 stableWeight = uiState.stableWeight,
                 stableWeightActive = uiState.stableWeightActive,
             )
-
-            TestSessionSection(
-                uiState = uiState,
-                onClearSession = viewModel::clearTestSession,
-                onExportSession = viewModel::exportTestSession,
-            )
+            TestSessionSectionHost(viewModel = viewModel)
 
             CalibrationToolsSection(
                 uiState = uiState,
@@ -151,10 +154,7 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
                 onToggleVerboseStreamLogs = viewModel::toggleVerboseStreamLogs,
             )
 
-            RawConsoleSection(
-                rawLogLines = uiState.rawLogLines,
-                onClear = viewModel::clearRawLog,
-            )
+            RawConsoleSectionHost(viewModel = viewModel)
         }
     }
 
@@ -166,6 +166,43 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
             )
         }
     }
+}
+
+@Composable
+private fun TelemetryChartSectionHost(
+    viewModel: DemoViewModel,
+    stableWeight: Float?,
+    stableWeightActive: Boolean,
+) {
+    val measurementDisplayState by viewModel.measurementDisplayState.collectAsStateWithLifecycle()
+    TelemetryChartSection(
+        telemetryPoints = measurementDisplayState.telemetryPoints,
+        stableWeight = stableWeight,
+        stableWeightActive = stableWeightActive,
+    )
+}
+
+@Composable
+private fun TestSessionSectionHost(
+    viewModel: DemoViewModel,
+) {
+    val panelState by viewModel.testSessionPanelState.collectAsStateWithLifecycle()
+    TestSessionSection(
+        panelState = panelState,
+        onClearSession = viewModel::clearTestSession,
+        onExportSession = viewModel::exportTestSession,
+    )
+}
+
+@Composable
+private fun RawConsoleSectionHost(
+    viewModel: DemoViewModel,
+) {
+    val rawConsoleState by viewModel.rawConsoleState.collectAsStateWithLifecycle()
+    RawConsoleSection(
+        rawLogLines = rawConsoleState.rawLogLines,
+        onClear = viewModel::clearRawLog,
+    )
 }
 
 @Composable

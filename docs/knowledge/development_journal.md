@@ -1,5 +1,64 @@
 # Development Journal
 
+## 2026-04-02 - Phase 1 Exit Passed And Phase 2 Approved
+
+Summary:
+
+- completed the on-site Phase 1 validation closeout on April 2, 2026
+- confirmed the Demo APP start button behavior now matches the intended gate contract
+- recorded the formal phase decision as:
+  - `Phase 1 Exit Decision = Passed`
+  - `Can Proceed to Phase 2 = Yes`
+
+Key evidence:
+
+- without stable weight, the start button stayed gray and non-clickable
+- after stable weight was established, the start button turned green quickly and became clickable
+- the Demo APP interaction experience matched the expected Phase 1 behavior
+
+Conclusion:
+
+- Phase 1 is closed
+- Phase 2 can start on the current validated baseline
+
+Documentation notes:
+
+- updated `docs/project_status.md`
+- updated `docs/roadmap_v1.md`
+
+## 2026-04-01 - Phase 1 Real-Device Validation And Exit Decision
+
+Historical note: this 2026-04-01 pending decision was superseded by the 2026-04-02 Phase 1 exit pass.
+
+Summary:
+
+- ran a real-device BLE + serial validation pass against the attached `SonicWave_Hub` bench unit
+- confirmed the checked-in source and protocol tests expect:
+  - `SNAPSHOT.wave_output_active`
+  - `EVT:WAVE_OUTPUT active=<0|1>`
+- confirmed the attached real device did not currently expose either signal
+- confirmed the attached bench unit was `platform_model=BASE` and `laser_installed=0`, so measurement-plane exit validation could not be completed on this hardware profile
+- recorded the honest phase decision at that time as:
+  - `Phase 1 Exit = Pending`
+  - `Can Proceed to Phase 2 = No`
+
+Key evidence:
+
+- BLE `ACK:CAP` returned `fw=SW-HUB-1.0.0 proto=2 platform_model=BASE laser_installed=0`
+- real-device `SNAPSHOT` restored `top_state`, but omitted `wave_output_active`
+- start path emitted `EVT:STATE RUNNING` and `ACK:OK`, but no `EVT:WAVE_OUTPUT`
+- stop path emitted `EVT:STOP` and `EVT:STATE ARMED`, but no `EVT:WAVE_OUTPUT`
+- default serial on the bench image still emitted repeated `measurement_bypass=1 reason=no_laser_config` lines, which also did not match current source logging cadence
+
+Conclusion:
+
+- the most likely mismatch is between the flashed bench firmware image and the current worktree, not between the current source files themselves
+- Phase 1 cannot be honestly exited until bench firmware is reflashed to the current contract and rerun on a measurement-capable device/profile
+
+Artifacts:
+
+- `reports/tasks/phase1_real_device_validation/`
+
 ## 2026-03-21 - Task-MOTION-EXPORT-AUTOMATION 导出会话自动化（采样标签与自动命名）
 
 Summary:

@@ -1,5 +1,6 @@
 #include "BleTransport.h"
 #include "core/LogMarkers.h"
+#include "core/SystemStateMachine.h"
 #include <string.h>
 
 static BleTransport* g_self = nullptr;
@@ -47,7 +48,7 @@ void BleTransport::begin(CommandBus* cb) {
   g_self = this;
 
   controlQueue = xQueueCreate(8, sizeof(ControlMsg));
-  txQueue = xQueueCreate(16, sizeof(TxMsg));
+  txQueue = xQueueCreate(96, sizeof(TxMsg));
   xTaskCreatePinnedToCore(controlTaskThunk, "BleCtrl", 4096, this, 3, &controlTaskHandle, 1);
   xTaskCreatePinnedToCore(txTaskThunk, "BleTx", 4096, this, 3, &txTaskHandle, 1);
 
@@ -132,47 +133,30 @@ bool BleTransport::enqueueTxLineRaw(const char* s) {
   TxMsg msg{};
   msg.type = TxMsg::Type::LINE;
   strlcpy(msg.line, s, sizeof(msg.line));
-  return xQueueSend(txQueue, &msg, 0) == pdTRUE;
+  const bool ok = xQueueSend(txQueue, &msg, pdMS_TO_TICKS(10)) == pdTRUE;
+  if (!ok) {
+    Serial.printf(
+        "[LAYER:MEASUREMENT_CARRIER] queue_overflow=1 policy=ordered_no_overwrite dropped_prefix=%s\n",
+        s);
+  }
+  return ok;
 }
 
-bool BleTransport::enqueueStreamFlush() {
-  if (!txQueue) return false;
+bool BleTransport::tryHandleDirectQuery(const String& s) {
+  if (!ProtocolCodec::isSnapshotQuery(s)) {
+    return false;
+  }
 
-  TxMsg msg{};
-  msg.type = TxMsg::Type::STREAM_FLUSH;
-  if (xQueueSend(txQueue, &msg, 0) == pdTRUE) {
+  const SystemStateMachine* snapshotOwner = SystemStateMachine::activeInstance();
+  if (!snapshotOwner) {
+    enqueueTxLineRaw("NACK:BUSY");
     return true;
   }
 
-  portENTER_CRITICAL(&streamMux);
-  streamFlushQueued = false;
-  portEXIT_CRITICAL(&streamMux);
-  return false;
-}
-
-bool BleTransport::loadPendingStream(char* out, size_t outSize, uint32_t& version) {
-  if (!out || outSize == 0) return false;
-
-  bool hasPayload = false;
-  portENTER_CRITICAL(&streamMux);
-  hasPayload = latestStreamPayload[0] != '\0';
-  if (hasPayload) {
-    strlcpy(out, latestStreamPayload, outSize);
-    version = latestStreamVersion;
+  if (!enqueueTxLine(ProtocolCodec::encodeSnapshot(snapshotOwner->snapshot()))) {
+    enqueueTxLineRaw("NACK:BUSY");
   }
-  portEXIT_CRITICAL(&streamMux);
-  return hasPayload;
-}
-
-bool BleTransport::completePendingStream(uint32_t version) {
-  bool done = false;
-  portENTER_CRITICAL(&streamMux);
-  if (latestStreamVersion == version) {
-    streamFlushQueued = false;
-    done = true;
-  }
-  portEXIT_CRITICAL(&streamMux);
-  return done;
+  return true;
 }
 
 void BleTransport::sendLineNow(const char* s) {
@@ -235,6 +219,10 @@ void BleTransport::controlTaskLoop() {
     }
 
     String in = msg.line;
+    if (tryHandleDirectQuery(in)) {
+      continue;
+    }
+
     Command cmd{};
     String err;
     if (!ProtocolCodec::parseCommand(in, cmd, err)) {
@@ -255,55 +243,15 @@ void BleTransport::controlTaskLoop() {
 
 void BleTransport::txTaskLoop() {
   TxMsg msg{};
-  char streamPayload[sizeof(TxMsg::line)];
 
   while (true) {
     if (xQueueReceive(txQueue, &msg, portMAX_DELAY) != pdTRUE) {
       continue;
     }
-
-    if (msg.type == TxMsg::Type::LINE) {
-      sendLineNow(msg.line);
-      continue;
-    }
-
-    while (true) {
-      uint32_t version = 0;
-      if (!loadPendingStream(streamPayload, sizeof(streamPayload), version)) {
-        portENTER_CRITICAL(&streamMux);
-        streamFlushQueued = false;
-        portEXIT_CRITICAL(&streamMux);
-        break;
-      }
-
-      sendLineNow(streamPayload);
-      if (completePendingStream(version)) {
-        break;
-      }
-    }
+    sendLineNow(msg.line);
   }
 }
 
 void BleTransport::onEvent(const Event& e) {
-  if (e.type == EventType::STREAM) {
-    String encoded = ProtocolCodec::encodeEvent(e);
-    bool shouldEnqueue = false;
-
-    portENTER_CRITICAL(&streamMux);
-    strlcpy(latestStreamPayload, encoded.c_str(), sizeof(latestStreamPayload));
-    ++latestStreamVersion;
-    if (!streamFlushQueued) {
-      streamFlushQueued = true;
-      shouldEnqueue = true;
-    }
-    portEXIT_CRITICAL(&streamMux);
-
-    if (shouldEnqueue) {
-      enqueueStreamFlush();
-    }
-    return;
-  }
-
-  // Unified encoding path for non-stream events.
   enqueueTxLine(ProtocolCodec::encodeEvent(e));
 }

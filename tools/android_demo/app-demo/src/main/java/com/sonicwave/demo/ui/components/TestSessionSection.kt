@@ -34,11 +34,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.sonicwave.demo.R
 import com.sonicwave.demo.TestSessionExportRequest
+import com.sonicwave.demo.TestSessionPanelUiState
 import com.sonicwave.demo.TestSessionPrimaryLabel
 import com.sonicwave.demo.TestSessionSecondaryLabel
 import com.sonicwave.demo.TestSessionStatusUi
 import com.sonicwave.demo.TestSessionUi
-import com.sonicwave.demo.UiState
 import com.sonicwave.demo.buildTestSessionExportFileName
 import com.sonicwave.demo.buildTestSessionHzIntensityLabel
 import com.sonicwave.demo.displayNameZh
@@ -50,12 +50,12 @@ import java.util.Locale
 
 @Composable
 fun TestSessionSection(
-    uiState: UiState,
+    panelState: TestSessionPanelUiState,
     onClearSession: () -> Unit,
     onExportSession: (TestSessionExportRequest) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val session = uiState.testSession
+    val session = panelState.session
     val status = session?.status ?: TestSessionStatusUi.IDLE
     val sampleCount = session?.samples?.size ?: 0
     val canClear = session != null && status != TestSessionStatusUi.RECORDING
@@ -102,14 +102,14 @@ fun TestSessionSection(
         }
     }.orEmpty()
     val durationText by produceState(
-        initialValue = formatDuration(currentDurationMs(uiState)),
+        initialValue = formatDuration(currentDurationMs(panelState)),
         status,
         session?.startedAtMs,
         session?.endedAtMs,
         session?.summary?.durationMs,
     ) {
         while (true) {
-            value = formatDuration(currentDurationMs(uiState))
+            value = formatDuration(currentDurationMs(panelState))
             if (status != TestSessionStatusUi.RECORDING || session == null) {
                 break
             }
@@ -160,7 +160,7 @@ fun TestSessionSection(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            uiState.testSessionNotice?.let { message ->
+            panelState.notice?.let { message ->
                 Text(
                     text = message,
                     style = MaterialTheme.typography.bodySmall,
@@ -407,8 +407,8 @@ private fun TestSessionExportPreviewCard(
     }
 }
 
-private fun currentDurationMs(uiState: UiState): Long {
-    val session = uiState.testSession ?: return 0L
+private fun currentDurationMs(panelState: TestSessionPanelUiState): Long {
+    val session = panelState.session ?: return 0L
     return when (session.status) {
         TestSessionStatusUi.IDLE -> 0L
         TestSessionStatusUi.RECORDING -> (System.currentTimeMillis() - session.startedAtMs).coerceAtLeast(0L)

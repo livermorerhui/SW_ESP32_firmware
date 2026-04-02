@@ -64,6 +64,7 @@ fun TelemetryChartSection(
     // so the noisier live rhythm channels start hidden until explicitly enabled.
     var showRhythmDistance by rememberSaveable { mutableStateOf(false) }
     var showRhythmWeight by rememberSaveable { mutableStateOf(false) }
+    var showMa12 by rememberSaveable { mutableStateOf(true) }
     var showMa3 by rememberSaveable { mutableStateOf(true) }
     var showMa5 by rememberSaveable { mutableStateOf(true) }
     var showMa7 by rememberSaveable { mutableStateOf(true) }
@@ -88,6 +89,13 @@ fun TelemetryChartSection(
         unit = TelemetryUnit.KG,
         strokeWidth = 3.2f,
         selector = { it.rhythmWeight },
+    )
+    val ma12Series = TelemetrySeriesDefinition(
+        labelRes = R.string.legend_ma12,
+        color = Color(0xFF7C3AED),
+        unit = TelemetryUnit.KG,
+        strokeWidth = 2.8f,
+        selector = { it.ma12 },
     )
     val ma3Series = TelemetrySeriesDefinition(
         labelRes = R.string.legend_ma3,
@@ -127,6 +135,10 @@ fun TelemetryChartSection(
         latestValue = stableWeight.takeIf { stableWeightActive },
         showsWindow = false,
     )
+    val ma12Summary = TelemetrySummaryDefinition(
+        series = ma12Series,
+        latestValue = telemetryPoints.lastNotNullOfOrNull(ma12Series.selector),
+    )
     val ma3Summary = TelemetrySummaryDefinition(
         series = ma3Series,
         latestValue = telemetryPoints.lastNotNullOfOrNull(ma3Series.selector),
@@ -141,14 +153,16 @@ fun TelemetryChartSection(
     )
     val summaryRows = listOf(
         listOf(rhythmDistanceSummary, rhythmWeightSummary),
-        listOf(stableWeightSummary, ma3Summary),
-        listOf(ma5Summary, ma7Summary),
+        listOf(stableWeightSummary, ma12Summary),
+        listOf(ma3Summary, ma5Summary),
+        listOf(ma7Summary),
     )
 
     val showDistanceFamily = showRhythmDistance
     val visibleWeightSeries = buildList {
         if (showStableWeight) add(stableWeightSeries)
         if (showRhythmWeight) add(rhythmWeightSeries)
+        if (showMa12) add(ma12Series)
         if (showMa3) add(ma3Series)
         if (showMa5) add(ma5Series)
         if (showMa7) add(ma7Series)
@@ -218,6 +232,11 @@ fun TelemetryChartSection(
                 )
                 OverlayChipRow(
                     chips = listOf(
+                        OverlayChipUi(
+                            label = stringResource(ma12Series.labelRes),
+                            selected = showMa12,
+                            onClick = { showMa12 = !showMa12 },
+                        ),
                         OverlayChipUi(
                             label = stringResource(ma3Series.labelRes),
                             selected = showMa3,

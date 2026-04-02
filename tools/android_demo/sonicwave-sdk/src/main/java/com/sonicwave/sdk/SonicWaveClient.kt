@@ -182,6 +182,7 @@ class SonicWaveClient(
 
     private fun Command.toLegacyFallback(): Command = when (this) {
         Command.CapabilityQuery -> Command.LegacyRaw("CAP?")
+        Command.SnapshotQuery -> Command.LegacyRaw("SNAPSHOT?")
         is Command.WaveSet -> Command.LegacyWaveFie(freqHz = freqHz, intensity = intensity)
         Command.WaveStart -> Command.LegacyWaveFie(enable = true)
         Command.WaveStop -> Command.LegacyWaveFie(enable = false)

@@ -59,18 +59,46 @@ const char* LaserModule::calibrationModelTypeName(CalibrationModelType type) {
   return "UNKNOWN";
 }
 
+bool LaserModule::measurementBypassActive() const {
+  return !deviceConfig.laserInstalled;
+}
+
+void LaserModule::logConfigTruth(const char* source, const char* reason) {
+  const bool measurementBypass = measurementBypassActive();
+  Serial.printf(
+      "[LAYER:CONFIG_TRUTH] measurement_bypass=%d platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d source=%s",
+      measurementBypass ? 1 : 0,
+      platformModelName(deviceConfig.platformModel),
+      deviceConfig.laserInstalled ? 1 : 0,
+      laserAvailable() ? 1 : 0,
+      protectionDegraded() ? 1 : 0,
+      source ? source : "unknown");
+  if (reason && reason[0] != '\0') {
+    Serial.printf(" reason=%s", reason);
+  }
+  Serial.printf("\n");
+  hasLoggedMeasurementBypassState = true;
+  lastLoggedMeasurementBypassState = measurementBypass;
+}
+
 void LaserModule::begin(EventBus* eb, SystemStateMachine* fsm, WaveModule* waveModule) {
   bus = eb;
   sm = fsm;
   wave = waveModule;
+  if (sm) sm->attachLaserModule(this);
   lastObservedTopState = sm ? sm->state() : TopState::IDLE;
 
   preferences.begin("scale_cal", false);
+  loadDeviceConfig();
   zeroDistance = preferences.getFloat("zero", -22.0f);
   scaleFactor  = preferences.getFloat("factor", 1.0f);
   loadCalibrationModel();
 
   Serial.printf("\n=== LaserModule boot ===\nZero=%.2f K=%.4f\n", zeroDistance, scaleFactor);
+  Serial.printf("[DEVICE] CONFIG platform_model=%s laser_installed=%d\n",
+      platformModelName(deviceConfig.platformModel),
+      deviceConfig.laserInstalled ? 1 : 0);
+  logConfigTruth("boot");
   Serial.printf("[CAL] MODEL type=%s ref=%.2f c0=%.6f c1=%.6f c2=%.6f\n",
       calibrationModelTypeName(calibrationModel.type),
       calibrationModel.referenceDistance,
@@ -83,6 +111,7 @@ void LaserModule::begin(EventBus* eb, SystemStateMachine* fsm, WaveModule* waveM
 
   needSendParams = true;
   rhythmStateJudge.reset("boot");
+  resetMeasurementPlane("boot", false);
 }
 
 void LaserModule::startTask() {
@@ -112,6 +141,7 @@ void LaserModule::setParams(float zero, float factor) {
   }
 
   resetStableTracking("scale_cal", true);
+  resetMeasurementPlane("scale_cal", true);
   rhythmStateJudge.reset("scale_cal_reset");
   if (sm) sm->setStartReadiness(false, 0.0f);
   needSendParams = true;
@@ -126,6 +156,73 @@ float LaserModule::getWeightKg() const {
   return latestWeightKg;
 }
 
+bool LaserModule::isUserPresent() const {
+  return userPresent;
+}
+
+bool LaserModule::baselineReady() const {
+  return rhythmStateJudge.lastResult().evidence.baselineReady;
+}
+
+float LaserModule::stableWeightKg() const {
+  return (stableState == StableState::STABLE_LATCHED) ? stableBaselineWeight : 0.0f;
+}
+
+PlatformModel LaserModule::platformModel() const {
+  return deviceConfig.platformModel;
+}
+
+bool LaserModule::laserInstalled() const {
+  return deviceConfig.laserInstalled;
+}
+
+bool LaserModule::laserAvailable() const {
+  return deviceConfig.laserInstalled && lastMeasurementValid;
+}
+
+bool LaserModule::protectionDegraded() const {
+  if (!deviceConfig.laserInstalled) {
+    return true;
+  }
+  return !laserAvailable();
+}
+
+void LaserModule::getDeviceConfig(DeviceConfigSnapshot& out) const {
+  out = deviceConfig;
+}
+
+bool LaserModule::setDeviceConfig(
+    PlatformModel nextPlatformModel,
+    bool nextLaserInstalled,
+    String& reason) {
+  if (!isKnownPlatformModel(nextPlatformModel)) {
+    reason = "INVALID_PLATFORM_MODEL";
+    return false;
+  }
+
+  if (nextLaserInstalled != platformModelImpliesLaserInstalled(nextPlatformModel)) {
+    reason = "CONFIG_CONFLICT";
+    return false;
+  }
+
+  const bool changed =
+      deviceConfig.platformModel != nextPlatformModel ||
+      deviceConfig.laserInstalled != nextLaserInstalled;
+
+  deviceConfig.platformModel = nextPlatformModel;
+  deviceConfig.laserInstalled = nextLaserInstalled;
+  saveDeviceConfig();
+
+  if (changed) {
+    applyDeviceConfigRuntimeEffects("device_set_config");
+  }
+
+  Serial.printf("[DEVICE] CONFIG APPLY source=device_set_config platform_model=%s laser_installed=%d\n",
+      platformModelName(deviceConfig.platformModel),
+      deviceConfig.laserInstalled ? 1 : 0);
+  return true;
+}
+
 bool LaserModule::getCalibrationModel(CalibrationModel& out) const {
   out = calibrationModel;
   return true;
@@ -137,10 +234,10 @@ bool LaserModule::setCalibrationModel(const CalibrationModel& model, String& rea
   }
 
   resetStableTracking("cal_model", true);
+  resetMeasurementPlane("cal_model", true);
   rhythmStateJudge.reset("cal_model_reset");
   if (sm) sm->setStartReadiness(false, 0.0f);
   needSendParams = true;
-  hasStreamSample = false;
   return true;
 }
 
@@ -198,19 +295,228 @@ void LaserModule::taskThunk(void* arg) {
   static_cast<LaserModule*>(arg)->taskLoop();
 }
 
-bool LaserModule::shouldEmitStream(float distance, float weight, uint32_t now) const {
-  if (!hasStreamSample) return true;
-  if (now - lastStreamTime >= STREAM_KEEPALIVE_MS) return true;
-  if (fabsf(distance - lastStreamDistance) >= STREAM_DISTANCE_DELTA_TH) return true;
-  if (fabsf(weight - lastStreamWeight) >= STREAM_WEIGHT_DELTA_TH) return true;
-  return false;
+void LaserModule::resetMeasurementPlane(const char* reason, bool logReset) {
+  ma12Head = 0;
+  ma12Count = 0;
+  measurementPlaneLogStartedAtMs = 0;
+  measurementPlaneLogSamples = 0;
+  lastInvalidMeasurementEventMs = 0;
+  lastInvalidMeasurementEventReason = nullptr;
+  if (logReset) {
+    Serial.printf(
+        "[LAYER:MEASUREMENT_PLANE] action=reset reason=%s ma12_window=%u\n",
+        reason ? reason : "unspecified",
+        static_cast<unsigned>(MEASUREMENT_MA12_WINDOW));
+  }
 }
 
-void LaserModule::noteStreamSent(float distance, float weight, uint32_t now) {
-  hasStreamSample = true;
-  lastStreamTime = now;
-  lastStreamDistance = distance;
-  lastStreamWeight = weight;
+void LaserModule::pushMeasurementWeightSample(float weight) {
+  ma12WeightBuffer[ma12Head] = weight;
+  ma12Head = (ma12Head + 1) % MEASUREMENT_MA12_WINDOW;
+  if (ma12Count < MEASUREMENT_MA12_WINDOW) {
+    ma12Count++;
+  }
+}
+
+bool LaserModule::currentMa12(float& out) const {
+  if (ma12Count < MEASUREMENT_MA12_WINDOW) {
+    out = NAN;
+    return false;
+  }
+
+  float sum = 0.0f;
+  for (uint8_t i = 0; i < MEASUREMENT_MA12_WINDOW; ++i) {
+    sum += ma12WeightBuffer[i];
+  }
+  out = sum / static_cast<float>(MEASUREMENT_MA12_WINDOW);
+  return true;
+}
+
+void LaserModule::publishMeasurementSample(
+    uint32_t now,
+    bool valid,
+    float distance,
+    float weight,
+    const char* reason) {
+  const bool shouldEmitInvalid =
+      !valid &&
+      (lastInvalidMeasurementEventReason != reason ||
+       (now - lastInvalidMeasurementEventMs) >= MEASUREMENT_INVALID_KEEPALIVE_MS);
+  if (!valid && !shouldEmitInvalid) {
+    return;
+  }
+
+  float ma12 = NAN;
+  const bool ma12Ready = valid && currentMa12(ma12);
+  latestMeasurementSampleValid = valid;
+  latestMeasurementSampleDistance = distance;
+  latestMeasurementSampleWeight = weight;
+  latestMeasurementSampleMa12Ready = ma12Ready;
+  latestMeasurementSampleMa12 = ma12Ready ? ma12 : 0.0f;
+  latestMeasurementSampleReason = valid ? nullptr : reason;
+  hasLatestMeasurementSample = true;
+
+  Event e{};
+  e.type = EventType::STREAM;
+  e.ts_ms = now;
+  e.sampleSeq = ++measurementSequence;
+  e.measurementValid = valid;
+  e.distance = distance;
+  e.weightKg = weight;
+  e.ma12Ready = ma12Ready;
+  e.ma12WeightKg = ma12Ready ? ma12 : 0.0f;
+  if (!valid) {
+    strlcpy(e.measurementReason, reason ? reason : "INVALID", sizeof(e.measurementReason));
+    lastInvalidMeasurementEventMs = now;
+    lastInvalidMeasurementEventReason = reason;
+  } else {
+    lastInvalidMeasurementEventReason = nullptr;
+  }
+
+  if (bus) {
+    bus->publish(e);
+  }
+
+  measurementPlaneLogSamples++;
+  if (measurementPlaneLogStartedAtMs == 0) {
+    measurementPlaneLogStartedAtMs = now;
+  }
+
+  const bool shouldLogSummary =
+      !hasLoggedMeasurementSummary ||
+      lastLoggedMeasurementSummaryValid != valid ||
+      lastLoggedMeasurementSummaryReason != latestMeasurementSampleReason;
+  if (shouldLogSummary) {
+    logMeasurementPlaneSummary(
+        now,
+        valid,
+        distance,
+        weight,
+        ma12Ready,
+        ma12Ready ? ma12 : 0.0f,
+        latestMeasurementSampleReason,
+        "measurement_edge");
+  } else if (DEBUG_MEASUREMENT_PLANE_VERBOSE) {
+    const uint32_t elapsedMs = now - measurementPlaneLogStartedAtMs;
+    if (elapsedMs >= MEASUREMENT_PLANE_LOG_INTERVAL_MS) {
+      logMeasurementPlaneSummary(
+          now,
+          valid,
+          distance,
+          weight,
+          ma12Ready,
+          ma12Ready ? ma12 : 0.0f,
+          latestMeasurementSampleReason,
+          "verbose_periodic");
+    }
+  }
+}
+
+void LaserModule::logMeasurementPlaneSummary(
+    uint32_t now,
+    bool valid,
+    float distance,
+    float weight,
+    bool ma12Ready,
+    float ma12,
+    const char* reason,
+    const char* trigger) {
+  const uint32_t elapsedMs = now - measurementPlaneLogStartedAtMs;
+  const float approxRateHz = elapsedMs > 0
+      ? (static_cast<float>(measurementPlaneLogSamples) * 1000.0f / static_cast<float>(elapsedMs))
+      : 0.0f;
+  Serial.printf(
+      "[LAYER:MEASUREMENT_PLANE] seq=%lu valid=%d distance=%.2f weight=%.2f ma12_ready=%d ma12=%.2f "
+      "reason=%s target_read_interval_ms=%lu approx_rate_hz=%.2f trigger=%s\n",
+      static_cast<unsigned long>(measurementSequence),
+      valid ? 1 : 0,
+      distance,
+      weight,
+      ma12Ready ? 1 : 0,
+      ma12Ready ? ma12 : 0.0f,
+      valid ? "NONE" : (reason ? reason : "INVALID"),
+      static_cast<unsigned long>(LASER_MEASUREMENT_READ_INTERVAL_MS),
+      approxRateHz,
+      trigger ? trigger : "unknown");
+  if (DEBUG_MEASUREMENT_PLANE_VERBOSE) {
+    Serial.printf(
+        "[LAYER:MEASUREMENT_CARRIER] carrier=EVT:STREAM queue_policy=ordered_no_overwrite seq=%lu valid=%d "
+        "reason=%s\n",
+        static_cast<unsigned long>(measurementSequence),
+        valid ? 1 : 0,
+        valid ? "NONE" : (reason ? reason : "INVALID"));
+  }
+  if (DEBUG_MEASUREMENT_PLANE_VERBOSE && ma12Ready) {
+    Serial.printf(
+        "[LAYER:MA12] seq=%lu window=%u value=%.2f input=weightKg\n",
+        static_cast<unsigned long>(measurementSequence),
+        static_cast<unsigned>(MEASUREMENT_MA12_WINDOW),
+        ma12);
+  }
+  hasLoggedMeasurementSummary = true;
+  lastLoggedMeasurementSummaryValid = valid;
+  lastLoggedMeasurementSummaryReason = valid ? nullptr : reason;
+  measurementPlaneLogStartedAtMs = now;
+  measurementPlaneLogSamples = 0;
+}
+
+void LaserModule::logLatestMeasurementPlaneSummary(const char* trigger) {
+  if (!hasLatestMeasurementSample) {
+    return;
+  }
+  logMeasurementPlaneSummary(
+      millis(),
+      latestMeasurementSampleValid,
+      latestMeasurementSampleDistance,
+      latestMeasurementSampleWeight,
+      latestMeasurementSampleMa12Ready,
+      latestMeasurementSampleMa12,
+      latestMeasurementSampleReason,
+      trigger);
+}
+
+void LaserModule::loadDeviceConfig() {
+  uint8_t storedModel = preferences.getUChar(
+      "cfg_model",
+      static_cast<uint8_t>(PlatformModel::PLUS));
+  PlatformModel parsedModel = static_cast<PlatformModel>(storedModel);
+  if (!isKnownPlatformModel(parsedModel)) {
+    parsedModel = PlatformModel::PLUS;
+  }
+
+  const uint8_t storedLaserInstalled = preferences.getUChar("cfg_laser", 1);
+  const bool normalizedLaserInstalled = platformModelImpliesLaserInstalled(parsedModel);
+
+  deviceConfig.platformModel = parsedModel;
+  deviceConfig.laserInstalled = normalizedLaserInstalled;
+
+  if (storedLaserInstalled != static_cast<uint8_t>(normalizedLaserInstalled)) {
+    saveDeviceConfig();
+  }
+}
+
+void LaserModule::saveDeviceConfig() {
+  preferences.putUChar("cfg_model", static_cast<uint8_t>(deviceConfig.platformModel));
+  preferences.putUChar("cfg_laser", deviceConfig.laserInstalled ? 1 : 0);
+}
+
+void LaserModule::applyDeviceConfigRuntimeEffects(const char* source) {
+  resetStableTracking(source, true);
+  resetMeasurementPlane(source, true);
+  rhythmStateJudge.reset(source ? source : "device_config");
+  userPresent = false;
+  latestWeightKg = 0.0f;
+  lastMeasurementValid = false;
+  lastInvalidReason = deviceConfig.laserInstalled ? nullptr : "LASER_NOT_INSTALLED";
+  lastLogDist = -999.0f;
+
+  logConfigTruth(source ? source : "device_config");
+
+  if (!sm) return;
+
+  sm->setRuntimeReady(false);
+  sm->setStartReadiness(false, 0.0f);
+  sm->setSensorHealthy(false);
 }
 
 void LaserModule::loadCalibrationModel() {
@@ -419,6 +725,7 @@ void LaserModule::pushStableSample(float distance, float weight) {
 }
 
 void LaserModule::resetStableTracking(const char* reason, bool logIfActive) {
+  const bool exitedStableStage = stableState != StableState::UNSTABLE;
   if (logIfActive && stableState != StableState::UNSTABLE) {
     Serial.printf("[STABLE] CLEAR reason=%s\n", reason ? reason : "unspecified");
   }
@@ -433,6 +740,10 @@ void LaserModule::resetStableTracking(const char* reason, bool logIfActive) {
   stableEarlyCheckpointLogged = false;
   bufHead = 0;
   bufCount = 0;
+
+  if (exitedStableStage) {
+    logLatestMeasurementPlaneSummary("stable_exit");
+  }
 }
 
 void LaserModule::beginStableCandidate(float distance, float weight) {
@@ -440,14 +751,15 @@ void LaserModule::beginStableCandidate(float distance, float weight) {
     // 本轮约 3 秒体感优化优先落在 stable build，而不是 baseline_ready/start_ready 后半段。
     // 这里记录 build 入口，便于现场直接看出候选开始到 latch 的真实耗时。
     Serial.printf(
-        "[STABLE] CANDIDATE read_interval_ms=%lu early_samples=%u legacy_window=%d\n",
-        static_cast<unsigned long>(LASER_READ_INTERVAL_STABLE_BUILD_MS),
+        "[STABLE] CANDIDATE state_eval_interval_ms=%lu early_samples=%u legacy_window=%d\n",
+        static_cast<unsigned long>(LASER_STATE_EVAL_INTERVAL_STABLE_BUILD_MS),
         static_cast<unsigned int>(STABLE_EARLY_LATCH_SAMPLES),
         WINDOW_N);
     bufHead = 0;
     bufCount = 0;
     stableCandidateStartedAtMs = millis();
     stableEarlyCheckpointLogged = false;
+    logLatestMeasurementPlaneSummary("stable_enter");
   }
 
   stableState = StableState::STABLE_CANDIDATE;
@@ -523,6 +835,7 @@ void LaserModule::latchStable(uint32_t now, const char* mode, float stddev) {
       finalWeight,
       finalDistance,
       static_cast<unsigned long>(buildLatencyMs));
+  logLatestMeasurementPlaneSummary("stable_latched");
   const TopState currentTopState = sm ? sm->state() : TopState::IDLE;
   const bool shouldCapturePrimaryBaseline =
       currentTopState != TopState::RUNNING &&
@@ -1094,6 +1407,7 @@ void LaserModule::handleFallStopCandidate(const RhythmStateUpdateResult& rhythmR
 
 void LaserModule::taskLoop() {
   uint32_t lastRead = 0;
+  uint32_t lastStateEval = 0;
 #if DIAG_DISABLE_LASER_SAFETY
   bool diagBannerPrinted = false;
 #endif
@@ -1117,12 +1431,23 @@ void LaserModule::taskLoop() {
     }
 
     uint32_t now = millis();
-    const uint32_t readIntervalMs =
-        shouldUseFastStableBuildReadInterval()
-            ? LASER_READ_INTERVAL_STABLE_BUILD_MS
-            : LASER_READ_INTERVAL_DEFAULT_MS;
+    const uint32_t readIntervalMs = LASER_MEASUREMENT_READ_INTERVAL_MS;
     if (now - lastRead < readIntervalMs) continue;
     lastRead = now;
+
+    if (!deviceConfig.laserInstalled) {
+      lastMeasurementValid = false;
+      lastInvalidReason = "LASER_NOT_INSTALLED";
+      resetMeasurementPlane("no_laser_config", false);
+      if (!hasLoggedMeasurementBypassState || !lastLoggedMeasurementBypassState) {
+        logConfigTruth("measurement_bypass_changed", "no_laser_config");
+      }
+      continue;
+    }
+
+    if (!hasLoggedMeasurementBypassState || lastLoggedMeasurementBypassState) {
+      logConfigTruth("measurement_bypass_changed");
+    }
 
     uint8_t result = node.readInputRegisters(REG_DISTANCE, 1);
     if (result != node.ku8MBSuccess) {
@@ -1133,7 +1458,9 @@ void LaserModule::taskLoop() {
       }
       noteDistanceValidity(false, 0, 0, NAN, false, "READ_FAIL", now);
       if (sm) sm->setSensorHealthy(false);
+      resetMeasurementPlane("modbus_read_fail", false);
       handleInvalidMeasurement("modbus_read_fail");
+      publishMeasurementSample(now, false, 0.0f, 0.0f, "READ_FAIL");
       continue;
     }
 
@@ -1146,13 +1473,19 @@ void LaserModule::taskLoop() {
     const char* validityReason = nullptr;
     if (isDistanceSentinelRaw(rawRegister, signedDistanceRaw, validityReason)) {
       noteDistanceValidity(false, rawRegister, signedDistanceRaw, scaledDistance, true, validityReason, now);
+      if (sm) sm->setSensorHealthy(false);
+      resetMeasurementPlane("distance_sentinel", false);
       handleInvalidMeasurement("distance_sentinel");
+      publishMeasurementSample(now, false, 0.0f, 0.0f, validityReason);
       continue;
     }
 
     if (!isDistanceValidRaw(signedDistanceRaw, validityReason)) {
       noteDistanceValidity(false, rawRegister, signedDistanceRaw, scaledDistance, false, validityReason, now);
+      if (sm) sm->setSensorHealthy(false);
+      resetMeasurementPlane("distance_out_of_range", false);
       handleInvalidMeasurement("distance_out_of_range");
+      publishMeasurementSample(now, false, 0.0f, 0.0f, validityReason);
       continue;
     }
 
@@ -1161,7 +1494,10 @@ void LaserModule::taskLoop() {
     float dist = scaledDistance;
     if (!isfinite(dist)) {
       noteDistanceValidity(false, rawRegister, signedDistanceRaw, dist, false, "DISTANCE_NONFINITE", now);
+      if (sm) sm->setSensorHealthy(false);
+      resetMeasurementPlane("distance_invalid", false);
       handleInvalidMeasurement("distance_invalid");
+      publishMeasurementSample(now, false, 0.0f, 0.0f, "DISTANCE_NONFINITE");
       continue;
     }
 
@@ -1172,20 +1508,25 @@ void LaserModule::taskLoop() {
       saveCalibrationModel();
       resetStableTracking("zero", true);
       rhythmStateJudge.reset("zero_reset");
+      resetMeasurementPlane("zero_reset", true);
       if (sm) sm->setStartReadiness(false, 0.0f);
       needZero = false;
       Serial.printf("🔘 ZERO done: %.2f\n", zeroDistance);
       lastLogDist = -999.0f;
       needSendParams = true;
-      hasStreamSample = false;
     }
 
     float weight = evaluateCalibrationWeight(dist);
     if (!isfinite(weight)) {
+      if (sm) sm->setSensorHealthy(false);
+      resetMeasurementPlane("weight_invalid", false);
       handleInvalidMeasurement("weight_invalid");
+      publishMeasurementSample(now, false, dist, 0.0f, "WEIGHT_INVALID");
       continue;
     }
     latestWeightKg = weight;
+    pushMeasurementWeightSample(weight);
+    publishMeasurementSample(now, true, dist, weight, nullptr);
 
     // ===== Safety supervisor: user on/off =====
     // Use hysteresis window and edge trigger to avoid repeated fault spam.
@@ -1201,6 +1542,15 @@ void LaserModule::taskLoop() {
 
     // ===== Fault clear feed (Gemini rule) =====
     if (sm) sm->onWeightSample(weight);
+
+    const uint32_t stateEvalIntervalMs =
+        shouldUseFastStableBuildReadInterval()
+            ? LASER_STATE_EVAL_INTERVAL_STABLE_BUILD_MS
+            : LASER_STATE_EVAL_INTERVAL_DEFAULT_MS;
+    if (now - lastStateEval < stateEvalIntervalMs) {
+      continue;
+    }
+    lastStateEval = now;
 
     updateStableState(dist, weight, now);
 
@@ -1242,12 +1592,6 @@ void LaserModule::taskLoop() {
       // 这里同步清掉正式 start readiness，避免只靠首秒屏蔽或阈值调高来掩盖问题。
       rhythmStateJudge.reset("user_left_platform_confirmed");
       if (sm) sm->setStartReadiness(false, 0.0f);
-    }
-
-    if (bus && shouldEmitStream(dist, weight, now)) {
-      Event e{}; e.type = EventType::STREAM; e.v1 = dist; e.v2 = weight; e.ts_ms = millis();
-      bus->publish(e);
-      noteStreamSent(dist, weight, now);
     }
 
     // ===== Silent log =====

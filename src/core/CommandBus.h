@@ -1,8 +1,10 @@
 #pragma once
+#include "DeviceConfig.h"
 #include "Types.h"
 
 enum class CmdType : uint8_t {
   CAP_QUERY,
+  DEVICE_SET_CONFIG,
   WAVE_SET,      // set freq/intensity (not necessarily start)
   WAVE_START,
   WAVE_STOP,
@@ -34,6 +36,11 @@ struct FallStopCommand {
   bool enabled = true;
 };
 
+struct DeviceConfigCommand {
+  PlatformModel platformModel = PlatformModel::PLUS;
+  bool laserInstalled = true;
+};
+
 struct Command {
   CmdType type = CmdType::CAP_QUERY;
   WaveParams wave{};
@@ -43,6 +50,7 @@ struct Command {
   CalibrationModelCommand model{};
   FallStopCommand fallStop{};
   MotionSamplingModeCommand motionSamplingMode{};
+  DeviceConfigCommand deviceConfig{};
 };
 
 class CommandHandler {

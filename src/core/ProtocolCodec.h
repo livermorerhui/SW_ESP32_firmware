@@ -1,10 +1,54 @@
 #pragma once
 #include "CommandBus.h"
 #include "EventBus.h"
+#include "PlatformSnapshot.h"
 #include "config/GlobalConfig.h"
 
 class ProtocolCodec {
 public:
+  static bool isSnapshotQuery(const String& in) {
+    String s = in;
+    s.trim();
+    return s.equalsIgnoreCase("SNAPSHOT?");
+  }
+
+  static String encodeSnapshot(const PlatformSnapshot& snapshot) {
+    String s;
+    s.reserve(420);
+    s = "SNAPSHOT:";
+    s += "top_state=";
+    s += topStateName(snapshot.topState);
+    s += " user_present=";
+    s += snapshot.userPresent ? "1" : "0";
+    s += " runtime_ready=";
+    s += snapshot.runtimeReady ? "1" : "0";
+    s += " start_ready=";
+    s += snapshot.startReady ? "1" : "0";
+    s += " baseline_ready=";
+    s += snapshot.baselineReady ? "1" : "0";
+    s += " wave_output_active=";
+    s += snapshot.waveOutputActive ? "1" : "0";
+    s += " current_reason_code=";
+    s += faultCodeName(snapshot.currentReasonCode);
+    s += " current_safety_effect=";
+    s += safetySignalName(snapshot.currentSafetyEffect);
+    s += " stable_weight=";
+    s += String(snapshot.stableWeightKg, 2);
+    s += " current_frequency=";
+    s += String(snapshot.currentFrequencyHz, 2);
+    s += " current_intensity=";
+    s += String(snapshot.currentIntensity);
+    s += " platform_model=";
+    s += platformModelName(snapshot.platformModel);
+    s += " laser_installed=";
+    s += snapshot.laserInstalled ? "1" : "0";
+    s += " laser_available=";
+    s += snapshot.laserAvailable ? "1" : "0";
+    s += " protection_degraded=";
+    s += snapshot.protectionDegraded ? "1" : "0";
+    return s;
+  }
+
   // 本轮只做最小兼容增强，不改 stop/state owner，也不删 Demo 旧链。
   // formal current branch 仍通过 Event.Fault.reason 识别关键停波语义，
   // 因此这里只在目标场景给 EVT:FAULT 追加 reason 文本，同时保留 numeric code
@@ -65,6 +109,34 @@ public:
 
     // CAP
     if (s.equalsIgnoreCase("CAP?")) { out.type = CmdType::CAP_QUERY; return true; }
+    if (s.startsWith("DEVICE:SET_CONFIG")) {
+      out.type = CmdType::DEVICE_SET_CONFIG;
+
+      String modelStr, laserInstalledStr;
+      bool hasModel = readParam("platform_model=", modelStr) || readParam("model=", modelStr);
+      bool hasLaserInstalled =
+          readParam("laser_installed=", laserInstalledStr) || readParam("laser=", laserInstalledStr);
+      if (!hasModel || !hasLaserInstalled) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+
+      PlatformModel platformModel = PlatformModel::PLUS;
+      if (!parsePlatformModel(modelStr, platformModel)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+
+      bool laserInstalled = false;
+      if (!parseBoolValue(laserInstalledStr, laserInstalled)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+
+      out.deviceConfig.platformModel = platformModel;
+      out.deviceConfig.laserInstalled = laserInstalled;
+      return true;
+    }
 
     // New protocol.
     // Accept both:
@@ -226,6 +298,10 @@ public:
               e.state == TopState::ARMED ? "ARMED" :
               e.state == TopState::RUNNING ? "RUNNING" : "FAULT_STOP");
         return s;
+      case EventType::WAVE_OUTPUT:
+        s = "EVT:WAVE_OUTPUT active=";
+        s += e.waveOutputActive ? "1" : "0";
+        return s;
       case EventType::FAULT:
         s = "EVT:FAULT ";
         s += String((uint16_t)e.fault);
@@ -260,10 +336,28 @@ public:
         s += String(e.v2, 4);
         return s;
       case EventType::STREAM:
-        s = "EVT:STREAM:";
-        s += String(e.v1, 2);
-        s += ",";
-        s += String(e.v2, 2);
+        s = "EVT:STREAM ";
+        s += "seq=";
+        s += String(e.sampleSeq);
+        s += " ts_ms=";
+        s += String(e.ts_ms);
+        s += " valid=";
+        s += e.measurementValid ? "1" : "0";
+        s += " ma12_ready=";
+        s += e.ma12Ready ? "1" : "0";
+        if (e.measurementValid) {
+          s += " distance=";
+          s += String(e.distance, 2);
+          s += " weight=";
+          s += String(e.weightKg, 2);
+          if (e.ma12Ready) {
+            s += " ma12=";
+            s += String(e.ma12WeightKg, 2);
+          }
+        } else {
+          s += " reason=";
+          s += (e.measurementReason[0] != '\0') ? e.measurementReason : "INVALID";
+        }
         return s;
       case EventType::BASELINE_MAIN:
         s = "EVT:BASELINE ";

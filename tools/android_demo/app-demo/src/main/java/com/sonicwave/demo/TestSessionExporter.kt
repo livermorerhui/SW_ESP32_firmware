@@ -143,17 +143,21 @@ class TestSessionExporter(private val context: Context) {
                 append('\n')
             }
             append(
-                "timestamp_ms,baseline_ready,stable_weight,weight,distance,ma3,ma5,ma7,deviation,ratio," +
+                "measurement_seq,device_timestamp_ms,timestamp_ms,measurement_valid,baseline_ready,stable_weight,weight,distance,ma12,ma3,ma5,ma7,deviation,ratio," +
                     "main_state,abnormal_duration_ms,danger_duration_ms,stop_reason,stop_source,event_aux,risk_advisory\n",
             )
             session.samples.forEach { sample ->
                 append(
                     listOf(
+                        sample.measurementSeq?.toString(),
+                        sample.deviceTimestampMs?.toString(),
                         sample.timestampMs.toString(),
+                        if (sample.measurementValid) "1" else "0",
                         if (sample.baselineReady) "1" else "0",
                         sample.stableWeight?.let(::formatMetricValue),
                         formatMetricValue(sample.weight),
                         sample.distance?.let(::formatMetricValue),
+                        sample.ma12?.let(::formatMetricValue),
                         sample.ma3?.let(::formatMetricValue),
                         sample.ma5?.let(::formatMetricValue),
                         sample.ma7?.let(::formatMetricValue),
@@ -207,11 +211,15 @@ class TestSessionExporter(private val context: Context) {
         session.samples.forEach { sample ->
             samples.put(
                 JSONObject()
+                    .put("measurement_seq", sample.measurementSeq ?: JSONObject.NULL)
+                    .put("device_timestamp_ms", sample.deviceTimestampMs ?: JSONObject.NULL)
                     .put("timestamp_ms", sample.timestampMs)
+                    .put("measurement_valid", sample.measurementValid)
                     .put("baseline_ready", sample.baselineReady)
                     .put("stable_weight", sample.stableWeight?.let(::roundMetricValue) ?: JSONObject.NULL)
                     .put("weight", roundMetricValue(sample.weight))
                     .put("distance", sample.distance?.let(::roundMetricValue) ?: JSONObject.NULL)
+                    .put("ma12", sample.ma12?.let(::roundMetricValue) ?: JSONObject.NULL)
                     .put("ma3", sample.ma3?.let(::roundMetricValue) ?: JSONObject.NULL)
                     .put("ma5", sample.ma5?.let(::roundMetricValue) ?: JSONObject.NULL)
                     .put("ma7", sample.ma7?.let(::roundMetricValue) ?: JSONObject.NULL)

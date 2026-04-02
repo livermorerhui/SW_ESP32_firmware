@@ -47,7 +47,6 @@ import com.sonicwave.demo.UiState
 import com.sonicwave.demo.WaveStartAvailabilityUi
 import com.sonicwave.demo.canStartWave
 import com.sonicwave.demo.waveStartAvailability
-import com.sonicwave.protocol.DeviceState
 import kotlinx.coroutines.delay
 import java.util.Locale
 
@@ -76,13 +75,15 @@ fun WaveControlBottomBar(
         selectedLabelColor = SelectedPresetText,
     )
 
-    val isRunning = uiState.deviceState == DeviceState.RUNNING
-    val startAvailability = uiState.waveStartAvailability(hasPendingStartRequest = uiState.isWaveStartPending)
-    val startEnabled = uiState.canStartWave(hasPendingStartRequest = uiState.isWaveStartPending)
-    val stopEnabled = uiState.isConnected && isRunning
+    val isRunning = uiState.waveOutputActive
+    val startAvailability = uiState.waveStartAvailability()
+    val startEnabled = uiState.canStartWave()
+    val stopEnabled = uiState.isConnected &&
+        (uiState.waveOutputActive || uiState.isWaveStartPending) &&
+        !uiState.isWaveStopPending
     val runtimeText by produceState(
         initialValue = formatWaveRuntime(currentWaveRuntimeElapsedMs(uiState, System.currentTimeMillis())),
-        uiState.deviceState,
+        uiState.waveOutputActive,
         uiState.waveRuntimeStartMs,
         uiState.waveRuntimeElapsedMs,
     ) {
@@ -103,6 +104,7 @@ fun WaveControlBottomBar(
     val hint = when (startAvailability) {
         WaveStartAvailabilityUi.DISCONNECTED -> stringResource(R.string.wave_bar_hint_disconnected)
         WaveStartAvailabilityUi.START_PENDING -> stringResource(R.string.wave_bar_hint_start_pending)
+        WaveStartAvailabilityUi.STOP_PENDING -> stringResource(R.string.wave_bar_hint_stop_pending)
         WaveStartAvailabilityUi.RUNNING -> stringResource(R.string.wave_bar_hint_running)
         WaveStartAvailabilityUi.INVALID_PARAMETERS -> stringResource(R.string.wave_bar_hint_invalid_values)
         WaveStartAvailabilityUi.LEFT_PLATFORM_BLOCKED -> stringResource(R.string.wave_bar_hint_left_platform)
@@ -334,7 +336,7 @@ private fun compactVerticalLabel(label: String): String {
 
 private fun currentWaveRuntimeElapsedMs(uiState: UiState, nowMs: Long): Long {
     val startMs = uiState.waveRuntimeStartMs
-    return if (uiState.deviceState == DeviceState.RUNNING && startMs != null) {
+    return if (uiState.waveOutputActive && startMs != null) {
         (nowMs - startMs).coerceAtLeast(0L)
     } else {
         uiState.waveRuntimeElapsedMs

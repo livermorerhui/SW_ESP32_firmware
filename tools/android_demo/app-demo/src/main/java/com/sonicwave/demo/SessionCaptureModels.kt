@@ -17,11 +17,15 @@ data class SessionValueRangeUi(
 }
 
 data class TestSessionSampleUi(
+    val measurementSeq: Long?,
+    val deviceTimestampMs: Long?,
     val timestampMs: Long,
+    val measurementValid: Boolean,
     val baselineReady: Boolean,
     val stableWeight: Float?,
     val weight: Float,
     val distance: Float?,
+    val ma12: Float?,
     val ma3: Float?,
     val ma5: Float?,
     val ma7: Float?,

@@ -13,15 +13,35 @@
 
 #### 2.1 能力探测
 - 请求: `CAP?`
-- 预期回包: `ACK:CAP fw=SW-HUB-1.0.0 proto=1`
+- 预期回包:
+  - `ACK:CAP fw=SW-HUB-1.0.0 proto=2 platform_model=<BASE|PLUS|PRO|ULTRA> laser_installed=<0|1> ...`
 
-#### 2.2 波形控制
+#### 2.2 设备配置
+- 写入设备画像:
+  - `DEVICE:SET_CONFIG platform_model=<BASE|PLUS|PRO|ULTRA>,laser_installed=<0|1>`
+- 一致性规则:
+  - `BASE` 必须搭配 `laser_installed=0`
+  - `PLUS/PRO/ULTRA` 必须搭配 `laser_installed=1`
+- 固件成功回包:
+  - `ACK:DEVICE_CONFIG platform_model=<...> laser_installed=<0|1>`
+
+#### 2.3 运行时快照
+- 请求: `SNAPSHOT?`
+- 预期回包:
+  - `SNAPSHOT: top_state=... user_present=... runtime_ready=... start_ready=... baseline_ready=... wave_output_active=... current_reason_code=... current_safety_effect=... stable_weight=... current_frequency=... current_intensity=... platform_model=... laser_installed=... laser_available=... protection_degraded=...`
+
+控制确认约定：
+- `ACK:OK` 只表示 command accepted，不表示启动/停止已经成功。
+- `top_state=RUNNING` 只表示状态机进入运行态，不等价于物理输出已生效。
+- `wave_output_active=1` 才是 Demo APP 判断“波形输出已真正生效”的正式 truth。
+
+#### 2.4 波形控制
 - 设置参数: `WAVE:SET f=<freq>,i=<intensity>`
   - 兼容输入键：`freq` 和 `amp`
 - 启动: `WAVE:START`
 - 停止: `WAVE:STOP`
 
-#### 2.3 测重与校准
+#### 2.5 测重与校准
 - 归零: `SCALE:ZERO`
 - 校准: `SCALE:CAL z=<zeroDistance>,k=<scaleFactor>`
 
@@ -40,17 +60,46 @@
 
 #### 4.1 ACK / NACK / ERR
 - `ACK:OK`
-- `ACK:CAP fw=... proto=...`
+- `ACK:CAP fw=... proto=... platform_model=... laser_installed=...`
+- `ACK:DEVICE_CONFIG platform_model=... laser_installed=...`
 - `NACK:<reason>`（例如 `NACK:INVALID_PARAM` / `NACK:NOT_ARMED` / `NACK:FAULT_LOCKED` / `NACK:UNKNOWN_CMD`）
 
 #### 4.2 事件（固件输出）
 - `EVT:STATE IDLE|ARMED|RUNNING|FAULT_STOP`
+- `EVT:WAVE_OUTPUT active=<0|1>`
 - `EVT:FAULT <code>`（例如 `100` 表示 USER_OFF）
 - `EVT:STABLE:<weightKg>`
 - `EVT:PARAM:<zeroDistance>,<scaleFactor>`
-- `EVT:STREAM:<distance>,<weightKg>`
+- formal measurement carrier:
+  - valid sample:
+    - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=1 ma12_ready=<0|1> distance=<distance> weight=<weightKg> [ma12=<ma12Kg>]`
+  - invalid sample:
+    - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=0 ma12_ready=0 reason=<READ_FAIL|OUT_OF_RANGE_LOW|...>`
+- `SNAPSHOT: ... platform_model=... laser_installed=... laser_available=... protection_degraded=...`
 
-Demo 还兼容解析裸 CSV：`<distance>,<weightKg>`。
+说明：
+
+- `EVT:STREAM` 是 measurement plane 的唯一正式 continuous carrier。
+- `distance / weight / MA12 / valid / reason / seq` 归属于同一 plane、同一 sample 序列。
+- `STABLE` 仍只是离散事件，不等于连续 plane。
+- Demo APP 在 `PRIMARY/UNKNOWN` 模式下只消费 formal `EVT:STREAM` carrier。
+- Demo 仍兼容解析裸 CSV：`<distance>,<weightKg>`，但只作为 `LEGACY` mode fallback，不再视为 formal carrier，也不会在 primary consume 路径中继续驱动 UI / session truth。
+- `EVT:WAVE_OUTPUT` 与 `SNAPSHOT.wave_output_active` 共同构成 control confirmation plane：
+  - start success: `wave_output_active=1`
+  - stop success: `wave_output_active=0`
+  - reconnect 恢复以最新 `SNAPSHOT` 为准
+
+### 4.3 Demo APP consume layering
+
+- Layer A: background full-truth ingest
+  - formal `EVT:STREAM` 全量进入 Demo ingest。
+  - recorder、test session、motion sampling 继续保留全量样本能力。
+- Layer B: display snapshot / throttled chart stream
+  - 前台 distance / weight / ma12 / chart 改为节流后的 display snapshot。
+  - `MainScreen` 不再被每个 sample 的 `uiState` 更新拖动。
+- Layer C: raw console / developer log
+  - raw log 使用 capped buffer + throttled publish。
+  - verbose stream log 仍可手动开启，但不再默认压垮主 UI。
 
 ### 5. Primary / Legacy 判定策略
 
@@ -62,10 +111,12 @@ Demo 还兼容解析裸 CSV：`<distance>,<weightKg>`。
 
 1. 连接并订阅 notify。
 2. `CAP?`（确认 primary）。
-3. `WAVE:SET f=20,i=80`。
-4. `WAVE:START`。
-5. `WAVE:STOP`。
-6. `SCALE:ZERO`。
-7. （可选）观察 `EVT:STREAM` 或裸 CSV。
+3. （可选）`DEVICE:SET_CONFIG platform_model=PLUS,laser_installed=1`。
+4. `SNAPSHOT?`（确认 `laser_available` / `protection_degraded`）。
+5. `WAVE:SET f=20,i=80`。
+6. `WAVE:START`。
+7. `WAVE:STOP`。
+8. `SCALE:ZERO`。
+9. 观察 `EVT:STREAM` 连续样本，确认 `seq / distance / weight / ma12` 正常增长。
 
 断连时固件会安全停机；断连瞬间可能收不到完整 `EVT`，以固件停机行为为准。

@@ -32,21 +32,91 @@ public:
 
   bool handle(const Command& c, String& outAck) override {
     switch (c.type) {
-      case CmdType::CAP_QUERY:
+      case CmdType::CAP_QUERY: {
+        const PlatformSnapshot snapshot = sm->snapshot();
+        Serial.printf(
+            "[LAYER:CONFIG_TRUTH] source=CAP_QUERY platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d runtime_ready=%d start_ready=%d baseline_ready=%d top_state=%s\n",
+            platformModelName(snapshot.platformModel),
+            snapshot.laserInstalled ? 1 : 0,
+            snapshot.laserAvailable ? 1 : 0,
+            snapshot.protectionDegraded ? 1 : 0,
+            snapshot.runtimeReady ? 1 : 0,
+            snapshot.startReady ? 1 : 0,
+            snapshot.baselineReady ? 1 : 0,
+            topStateName(snapshot.topState));
         outAck = String("ACK:CAP fw=") + FW_VER +
             " proto=" + String(PROTO_VER) +
+            " platform_model=" + String(platformModelName(l->platformModel())) +
+            " laser_installed=" + String(l->laserInstalled() ? 1 : 0) +
             " fall_stop_enabled=" + String(sm->fallStopEnabled() ? 1 : 0) +
             " fall_stop_mode=" + String(sm->fallStopModeName()) +
             " motion_sampling_mode=" + String(sm->motionSamplingModeEnabled() ? 1 : 0) +
             " fall_action_suppressed=" + String(sm->fallStopEnabled() ? 0 : 1);
         return true;
+      }
 
-      case CmdType::WAVE_SET:
+      case CmdType::DEVICE_SET_CONFIG: {
+        Serial.printf(
+            "[LAYER:COMMAND_DISPATCH] cmd=DEVICE_SET_CONFIG platform_model=%s laser_installed=%d owner=LaserModule::setDeviceConfig\n",
+            platformModelName(c.deviceConfig.platformModel),
+            c.deviceConfig.laserInstalled ? 1 : 0);
+        String reason;
+        if (!l->setDeviceConfig(
+                c.deviceConfig.platformModel,
+                c.deviceConfig.laserInstalled,
+                reason)) {
+          outAck = String("NACK:") + reason;
+          return false;
+        }
+
+        outAck = String("ACK:DEVICE_CONFIG platform_model=") +
+            platformModelName(l->platformModel()) +
+            " laser_installed=" + String(l->laserInstalled() ? 1 : 0);
+        const PlatformSnapshot snapshot = sm->snapshot();
+        Serial.printf(
+            "[LAYER:CONFIG_TRUTH] source=DEVICE_SET_CONFIG platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d runtime_ready=%d start_ready=%d baseline_ready=%d top_state=%s\n",
+            platformModelName(snapshot.platformModel),
+            snapshot.laserInstalled ? 1 : 0,
+            snapshot.laserAvailable ? 1 : 0,
+            snapshot.protectionDegraded ? 1 : 0,
+            snapshot.runtimeReady ? 1 : 0,
+            snapshot.startReady ? 1 : 0,
+            snapshot.baselineReady ? 1 : 0,
+            topStateName(snapshot.topState));
+        return true;
+      }
+
+      case CmdType::WAVE_SET: {
+        Serial.printf(
+            "[LAYER:COMMAND_DISPATCH] cmd=WAVE:SET freq_hz=%.2f intensity=%d owner=WaveModule::setParams\n",
+            c.wave.freqHz,
+            c.wave.intensity);
         w->setParams(c.wave.freqHz, c.wave.intensity);
+        WaveModule::DebugState debug{};
+        w->getDebugState(debug);
+        Serial.printf(
+            "[LAYER:COMMAND_DISPATCH] cmd=WAVE:SET applied display_freq_hz=%.2f target_phase_inc=%lu target_intensity=%d run_requested=%d run_state=%d\n",
+            debug.displayFreqHz,
+            static_cast<unsigned long>(debug.targetPhaseInc),
+            debug.targetIntensity,
+            debug.runRequested ? 1 : 0,
+            debug.runState ? 1 : 0);
         outAck = "ACK:OK";
         return true;
+      }
 
       case CmdType::WAVE_START: {
+        const PlatformSnapshot snapshot = sm->snapshot();
+        Serial.printf(
+            "[LAYER:COMMAND_DISPATCH] cmd=WAVE:START owner=SystemStateMachine::requestStart top_state=%s runtime_ready=%d start_ready=%d baseline_ready=%d platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d\n",
+            topStateName(snapshot.topState),
+            snapshot.runtimeReady ? 1 : 0,
+            snapshot.startReady ? 1 : 0,
+            snapshot.baselineReady ? 1 : 0,
+            platformModelName(snapshot.platformModel),
+            snapshot.laserInstalled ? 1 : 0,
+            snapshot.laserAvailable ? 1 : 0,
+            snapshot.protectionDegraded ? 1 : 0);
         FaultCode reason = FaultCode::NONE;
         if (!sm->requestStart(reason)) {
           outAck = (reason == FaultCode::FAULT_LOCKED) ? "NACK:FAULT_LOCKED" : "NACK:NOT_ARMED";
@@ -58,6 +128,7 @@ public:
 
       case CmdType::WAVE_STOP:
         Serial.println("[CMD] WAVE_STOP received");
+        Serial.println("[LAYER:COMMAND_DISPATCH] cmd=WAVE:STOP owner=SystemStateMachine::requestStop");
         sm->requestStop();
         outAck = "ACK:OK";
         return true;
@@ -202,7 +273,7 @@ void setup() {
   g_eventBus.setSink(&g_ble);
   g_fsm.begin(&g_eventBus, &g_wave);
 
-  g_wave.begin();
+  g_wave.begin(&g_eventBus);
   g_laser.begin(&g_eventBus, &g_fsm, &g_wave);
   g_laser.startTask();
   g_cmdBus.setHandler(&g_handler);

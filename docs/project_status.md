@@ -1,5 +1,64 @@
 # Project Status
 
+## 2026-04-02 Phase 1 Exit Decision
+
+Phase 1 exit is now `Passed` after the on-site validation pass completed on April 2, 2026.
+
+Confirmed exit decision:
+
+- `Phase 1 Exit Decision = Passed`
+- `Can Proceed to Phase 2 = Yes`
+
+What was validated in the accepted pass:
+
+- no stable weight: the Demo APP start button stayed gray and non-clickable
+- stable weight established: the start button turned green quickly and became clickable
+- Demo APP interaction behavior matched the intended Phase 1 contract
+
+Current stage:
+
+- Phase 1 is closed
+- Phase 2 can start immediately
+
+Next stage focus:
+
+- proceed with Phase 2 work on top of the validated firmware + Demo APP interaction baseline
+- keep Phase 1 validation behavior as the regression baseline for later changes
+
+## 2026-04-01 Phase 1 Real-Device Validation Status
+
+Historical note: this 2026-04-01 pending status was superseded by the 2026-04-02 Phase 1 exit pass.
+
+Phase 1 exit remained `Pending` after the 2026-04-01 real-device BLE + serial validation pass.
+
+What was confirmed:
+
+- the attached bench device is reachable over BLE as `SonicWave_Hub`
+- `CAP?`, `SNAPSHOT?`, `WAVE:SET`, `WAVE:START`, and `WAVE:STOP` all execute on real hardware
+- reconnect preserves `top_state` on the device side
+
+What blocked exit:
+
+- the attached real device did **not** expose `SNAPSHOT.wave_output_active`
+- the attached real device did **not** emit `EVT:WAVE_OUTPUT active=<0|1>`
+- the attached bench unit reported `platform_model=BASE` and `laser_installed=0`, so measurement-plane validation could not be completed
+- no Android Demo APP runtime session was executed in this environment, so UI/logging/export retention remain unvalidated
+
+Highest-confidence interpretation:
+
+- the checked-in source and protocol tests are ahead of the flashed bench firmware image
+- Phase 1 source closure therefore exists, but bench integration closure does not yet
+
+Required next steps before Phase 2 at that time:
+
+- flash the exact current firmware image that exports the control-confirmation contract
+- rerun validation on a measurement-capable `laser_installed=1` bench
+- run Android Demo APP real-device validation for reconnect/UI/logging/retention
+
+Artifacts:
+
+- `reports/tasks/phase1_real_device_validation/`
+
 ## 2026-03-21 Task-MOTION-EXPORT-AUTOMATION 状态
 
 本任务在 Demo APP 的 Motion-Safety Sampling Tool 中落地了“导出会话自动化”MVP，目标是把采样标签、自动命名和 JSON metadata 写入标准化，降低高频采样阶段的人工整理成本。

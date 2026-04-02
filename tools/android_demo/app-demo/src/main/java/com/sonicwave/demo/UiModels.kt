@@ -39,6 +39,7 @@ data class SafetyStatusUi(
 enum class WaveStartAvailabilityUi {
     DISCONNECTED,
     START_PENDING,
+    STOP_PENDING,
     RUNNING,
     INVALID_PARAMETERS,
     LEFT_PLATFORM_BLOCKED,
@@ -49,12 +50,16 @@ enum class WaveStartAvailabilityUi {
 }
 
 data class TelemetryPointUi(
+    val measurementSeq: Long? = null,
+    val deviceTimestampMs: Long? = null,
     val elapsedMs: Long,
     val timestampMs: Long,
     // The live EVT:STREAM distance is exposed in the telemetry UI as "rhythm distance".
     val distance: Float,
     // The live EVT:STREAM weight is the app-side "rhythm weight"/"unstable weight" signal.
     val unstableWeight: Float,
+    val measurementValid: Boolean = true,
+    val ma12: Float? = null,
     val stableWeight: Float? = null,
     val ma3: Float? = null,
     val ma5: Float? = null,
@@ -71,12 +76,33 @@ data class TelemetryPointUi(
         get() = unstableWeight
 }
 
+data class MeasurementDisplayUiState(
+    val distance: Float? = null,
+    val weight: Float? = null,
+    val ma12: Float? = null,
+    val measurementValid: Boolean = false,
+    val lastMeasurementSequence: Long? = null,
+    val telemetryPoints: List<TelemetryPointUi> = emptyList(),
+)
+
+data class RawConsoleUiState(
+    val rawLogLines: List<String> = emptyList(),
+)
+
+data class TestSessionPanelUiState(
+    val session: TestSessionUi? = null,
+    val notice: String? = null,
+)
+
 data class MotionSamplingRowUi(
     val sampleIndex: Int,
+    val measurementSeq: Long? = null,
+    val deviceTimestampMs: Long? = null,
     val timestampMs: Long,
     val elapsedMs: Long,
     val distanceMm: Float,
     val liveWeightKg: Float,
+    val ma12WeightKg: Float? = null,
     val stableWeightKg: Float? = null,
     val measurementValid: Boolean,
     val stableVisible: Boolean,
@@ -336,30 +362,34 @@ fun UiState.hasValidWaveInputs(): Boolean {
         intensityValue in 0..120
 }
 
-fun UiState.waveStartAvailability(
-    hasPendingStartRequest: Boolean = false,
-): WaveStartAvailabilityUi {
+fun UiState.waveStartAvailability(): WaveStartAvailabilityUi {
     val leftPlatformBlocked = safetyStatus.reasonCode.equals("USER_LEFT_PLATFORM", ignoreCase = true) ||
+        deviceReasonCode.equals("USER_LEFT_PLATFORM", ignoreCase = true) ||
         faultStatus.codeName.equals("USER_LEFT_PLATFORM", ignoreCase = true) ||
         faultStatus.code == 100
     val abnormalStopBlocked = deviceState == DeviceState.FAULT_STOP ||
         safetyStatus.effectCode == SafetyEffect.ABNORMAL_STOP.name ||
+        deviceSafetyEffectCode == SafetyEffect.ABNORMAL_STOP.name ||
         faultStatus.severity == FaultSeverityUi.BLOCKING
-    val safetyBlocked = safetyStatus.effectCode == SafetyEffect.RECOVERABLE_PAUSE.name
+    val safetyBlocked = safetyStatus.effectCode == SafetyEffect.RECOVERABLE_PAUSE.name ||
+        deviceSafetyEffectCode == SafetyEffect.RECOVERABLE_PAUSE.name
+    val hasStableWeight = stableWeightActive && stableWeight != null
+    val startReady = hasStableWeight &&
+        deviceStartReady == true &&
+        deviceBaselineReady == true
 
     return when {
         !isConnected -> WaveStartAvailabilityUi.DISCONNECTED
-        hasPendingStartRequest -> WaveStartAvailabilityUi.START_PENDING
-        deviceState == DeviceState.RUNNING -> WaveStartAvailabilityUi.RUNNING
+        isWaveStopPending -> WaveStartAvailabilityUi.STOP_PENDING
+        isWaveStartPending -> WaveStartAvailabilityUi.START_PENDING
+        waveOutputActive -> WaveStartAvailabilityUi.RUNNING
         !hasValidWaveInputs() -> WaveStartAvailabilityUi.INVALID_PARAMETERS
         leftPlatformBlocked -> WaveStartAvailabilityUi.LEFT_PLATFORM_BLOCKED
         abnormalStopBlocked -> WaveStartAvailabilityUi.ABNORMAL_STOP_BLOCKED
         safetyBlocked -> WaveStartAvailabilityUi.SAFETY_BLOCKED
-        deviceState == DeviceState.ARMED -> WaveStartAvailabilityUi.READY
+        startReady -> WaveStartAvailabilityUi.READY
         else -> WaveStartAvailabilityUi.NOT_READY
     }
 }
 
-fun UiState.canStartWave(
-    hasPendingStartRequest: Boolean = false,
-): Boolean = waveStartAvailability(hasPendingStartRequest) == WaveStartAvailabilityUi.READY
+fun UiState.canStartWave(): Boolean = waveStartAvailability() == WaveStartAvailabilityUi.READY

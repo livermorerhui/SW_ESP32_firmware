@@ -47,6 +47,25 @@
     <string name="status_notify_with_error">Notify: %1$s (%2$s)</string>
     <string name="status_protocol_mode">Protocol mode: %1$s</string>
     <string name="status_capability_info">Protocol capability: %1$s</string>
+    <string name="section_device_profile">Device Profile</string>
+    <string name="device_profile_hint">Write the device truth source here. BASE is always no-laser; PLUS/PRO/ULTRA are always laser-installed.</string>
+    <string name="device_profile_current_truth">Device config truth: MODEL=%1$s | LASER=%2$s</string>
+    <string name="device_profile_runtime_truth">Runtime health truth: laser_available=%1$s | protection_degraded=%2$s</string>
+    <string name="device_profile_select_model">Select platform_model</string>
+    <string name="device_profile_select_laser">Select laser_installed</string>
+    <string name="device_profile_consistency_hint">Consistency rule: selecting BASE forces no-laser. Selecting PLUS/PRO/ULTRA forces laser-installed. Turning laser back on restores the last laser-capable model.</string>
+    <string name="device_profile_write">Write Device Profile</string>
+    <string name="device_profile_write_pending">Writing Device Profile…</string>
+    <string name="device_config_laser_installed">laser installed</string>
+    <string name="device_config_laser_not_installed">no laser</string>
+    <string name="device_config_status_pending">Writing platform_model=%1$s, %2$s…</string>
+    <string name="device_config_status_success">Write succeeded: platform_model=%1$s, %2$s.</string>
+    <string name="device_config_status_failure">Write failed: %1$s</string>
+    <string name="device_config_status_send_failed">Write failed before ACK: %1$s</string>
+    <string name="device_config_status_ack_fallback">Device returned generic ACK: %1$s</string>
+    <string name="device_config_status_conflict">The selected model and laser_installed value conflict.</string>
+    <string name="device_config_status_requires_primary">Device profile write requires a primary-protocol connection.</string>
+    <string name="device_truth_refresh_failed">Device truth refresh failed: %1$s</string>
     <string name="notify_status_enabled">Enabled</string>
     <string name="notify_status_disabled">Disabled</string>
 
@@ -92,7 +111,7 @@
     <string name="section_telemetry_chart">Telemetry Chart</string>
     <string name="label_chart_window">Sliding window: ~20 seconds, bounded in memory</string>
     <string name="label_chart_hint">Use the chart to judge whether the measurement stream is alive, whether the 律动体重 / Rhythm Weight signal is settling, and whether noise or invalid jumps are obvious.</string>
-    <string name="label_chart_ma_source">MA3/MA5/MA7 are computed from 律动体重 / Rhythm Weight.</string>
+    <string name="label_chart_ma_source">MA12 is the formal firmware truth. MA3/MA5/MA7 remain app-side debug overlays derived from 律动体重 / Rhythm Weight.</string>
     <string name="label_chart_overlay_controls">Visible telemetry series</string>
     <string name="label_telemetry_summary_latest">Current: %1$s</string>
     <string name="label_telemetry_summary_baseline">Baseline: %1$s</string>
@@ -103,10 +122,11 @@
     <string name="legend_stable_weight">Stable Weight</string>
     <string name="legend_rhythm_distance">律动距离 / Rhythm Distance</string>
     <string name="legend_rhythm_weight">律动体重 / Rhythm Weight</string>
+    <string name="legend_ma12">MA12</string>
     <string name="legend_ma3">MA3</string>
     <string name="legend_ma5">MA5</string>
     <string name="legend_ma7">MA7</string>
-    <string name="chart_waiting_data">Waiting for live EVT:STREAM samples…</string>
+    <string name="chart_waiting_data">Waiting for formal measurement plane samples…</string>
     <string name="section_test_session">Current Test Session</string>
     <string name="label_test_session_hint">START only sends the request. The app creates and buffers the current test session only after the device truly enters RUNNING, and keeps it available for clear/export after STOP or auto-stop.</string>
     <string name="label_test_session_status">Session status: %1$s</string>
@@ -221,6 +241,7 @@
     <string name="value_motion_sampling_flag_no">no</string>
     <string name="wave_bar_hint_ready">Ready to start</string>
     <string name="wave_bar_hint_start_pending">Start pending</string>
+    <string name="wave_bar_hint_stop_pending">Stop pending</string>
     <string name="wave_bar_hint_running">Running</string>
     <string name="wave_bar_hint_disconnected">Disconnected</string>
     <string name="wave_bar_hint_invalid_values">Invalid wave values</string>
@@ -381,6 +402,8 @@
     <string name="scan_rssi">RSSI: %1$d</string>
 
     <string name="common_not_available">-</string>
+    <string name="common_yes">YES</string>
+    <string name="common_no">NO</string>
 
     <string name="message_connected">Connected</string>
     <string name="message_connect_failed">Connect failed: %1$s</string>
@@ -414,7 +437,7 @@
     <string name="message_sent_wave_start_bundle">Sent: WAVE:SET then WAVE:START</string>
     <string name="message_wave_stop_fallback_success">WAVE:STOP unsupported, fallback sent: E:0</string>
     <string name="message_send_failed">Send failed (%1$s): %2$s</string>
-    <string name="warning_no_stream_data">No weight stream received (check notify/firmware TX)</string>
+    <string name="warning_no_stream_data">No formal measurement plane samples received (check notify/firmware TX)</string>
     <string name="recording_started">Recording to %1$s</string>
     <string name="recording_failed">Recording failed: %1$s</string>
     <string name="recording_stopped_manual">Recording stopped</string>

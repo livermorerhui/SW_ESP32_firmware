@@ -1,5 +1,6 @@
 #include "SystemStateMachine.h"
 #include "core/LogMarkers.h"
+#include "modules/laser/LaserModule.h"
 #include "modules/wave/WaveModule.h"
 
 namespace {
@@ -43,13 +44,19 @@ FaultOrigin faultOrigin(FaultCode code) {
 
 }  // namespace
 
+SystemStateMachine* SystemStateMachine::active_instance = nullptr;
+
 void SystemStateMachine::begin(EventBus* eb, WaveModule* waveModule) {
+  active_instance = this;
   bus = eb;
   wave = waveModule;
+  laser = nullptr;
   st = TopState::IDLE;
   blocking_fault_code = FaultCode::NONE;
   pause_reason_code = FaultCode::NONE;
   warning_fault_code = FaultCode::NONE;
+  snapshot_reason_code = FaultCode::NONE;
+  snapshot_safety_effect = SafetySignalKind::NONE;
   fault_ms = 0;
   clear_window_active = false;
   clear_candidate_ms = 0;
@@ -65,7 +72,16 @@ void SystemStateMachine::begin(EventBus* eb, WaveModule* waveModule) {
   pending_stop_source = VerificationStopSource::NONE;
   last_stop_reason_text = "NONE";
   last_stop_source = VerificationStopSource::NONE;
+  syncSnapshotDecisionContext();
   emitState();
+}
+
+void SystemStateMachine::attachLaserModule(const LaserModule* laserModule) {
+  laser = laserModule;
+}
+
+const SystemStateMachine* SystemStateMachine::activeInstance() {
+  return active_instance;
 }
 
 TopState SystemStateMachine::state() const {
@@ -78,6 +94,69 @@ bool SystemStateMachine::isFaultLocked() const {
 
 FaultCode SystemStateMachine::activeFault() const {
   return visibleReasonCode();
+}
+
+bool SystemStateMachine::runtimeReady() const {
+  return effectiveRuntimeReady();
+}
+
+FaultCode SystemStateMachine::currentReasonCode() const {
+  return snapshot_reason_code;
+}
+
+SafetySignalKind SystemStateMachine::currentSafetyEffect() const {
+  return snapshot_safety_effect;
+}
+
+bool SystemStateMachine::laserConfiguredInstalled() const {
+  return laser ? laser->laserInstalled() : false;
+}
+
+bool SystemStateMachine::laserlessRuntimeStrategyActive() const {
+  return !laserConfiguredInstalled();
+}
+
+bool SystemStateMachine::effectiveRuntimeReady() const {
+  return laserlessRuntimeStrategyActive() ? true : runtime_ready;
+}
+
+bool SystemStateMachine::effectiveStartReady() const {
+  return laserlessRuntimeStrategyActive() ? true : start_ready;
+}
+
+bool SystemStateMachine::effectiveLaserAvailable() const {
+  return laser ? laser->laserAvailable() : false;
+}
+
+bool SystemStateMachine::effectiveProtectionDegraded() const {
+  if (!laserConfiguredInstalled()) {
+    return true;
+  }
+  return !effectiveLaserAvailable();
+}
+
+PlatformSnapshot SystemStateMachine::snapshot() const {
+  PlatformSnapshot out{};
+  out.topState = st;
+  out.userPresent = laser ? laser->isUserPresent() : false;
+  out.runtimeReady = effectiveRuntimeReady();
+  out.startReady = effectiveStartReady();
+  out.baselineReady = laser ? laser->baselineReady() : false;
+  out.waveOutputActive = wave ? wave->isOutputActive() : false;
+  out.currentReasonCode = snapshot_reason_code;
+  out.currentSafetyEffect = snapshot_safety_effect;
+  out.stableWeightKg = laser ? laser->stableWeightKg() : 0.0f;
+  out.platformModel = laser ? laser->platformModel() : PlatformModel::PLUS;
+  out.laserInstalled = laserConfiguredInstalled();
+  out.laserAvailable = effectiveLaserAvailable();
+  out.protectionDegraded = effectiveProtectionDegraded();
+
+  if (wave) {
+    float ignoredIntensityNormalized = 0.0f;
+    wave->getSummaryParams(out.currentFrequencyHz, out.currentIntensity, ignoredIntensityNormalized);
+  }
+
+  return out;
 }
 
 bool SystemStateMachine::fallStopEnabled() const {
@@ -93,14 +172,14 @@ bool SystemStateMachine::motionSamplingModeEnabled() const {
 }
 
 bool SystemStateMachine::startReady() const {
-  return start_ready;
+  return effectiveStartReady();
 }
 
 bool SystemStateMachine::leaveDetectionEnabled() const {
   // leave 判定必须和正式 start readiness 对齐。
   // 这里不用 runtime_ready 直接做 owner，避免再次把 presence 误当成“已站稳可运行”。
   // 这只是本阶段的固件侧收口，不代表 stable/runtime/leave 全语义治理已经结束。
-  return st == TopState::RUNNING && start_ready;
+  return st == TopState::RUNNING && laserConfiguredInstalled() && start_ready;
 }
 
 const char* SystemStateMachine::lastStopReasonText() const {
@@ -150,7 +229,10 @@ VerificationStopSource SystemStateMachine::resolvedStopSource(
 }
 
 bool SystemStateMachine::canEnterArmedState() const {
-  return runtime_ready && start_ready && pause_reason_code == FaultCode::NONE;
+  if (pause_reason_code != FaultCode::NONE) {
+    return false;
+  }
+  return effectiveRuntimeReady() && effectiveStartReady();
 }
 
 void SystemStateMachine::emitStopEvent(
@@ -202,7 +284,7 @@ void SystemStateMachine::emitSafety(FaultCode code, SafetySignalKind safety) {
   e.fault = code;
   e.safety = safety;
   e.state = st;
-  e.waveStopped = (st != TopState::RUNNING);
+  e.waveStopped = wave ? !wave->isOutputActive() : (st != TopState::RUNNING);
   e.ts_ms = millis();
 
   bus->publish(e);
@@ -224,8 +306,23 @@ SafetySignalKind SystemStateMachine::visibleSafetySignal() const {
 void SystemStateMachine::emitVisibleSignals() {
   const FaultCode visible = visibleReasonCode();
   const SafetySignalKind safety = visibleSafetySignal();
+  syncSnapshotDecisionContext();
   emitFault(visible);
   emitSafety(visible, safety);
+}
+
+void SystemStateMachine::syncSnapshotDecisionContext() {
+  const FaultCode visible = visibleReasonCode();
+  const SafetySignalKind safety = visibleSafetySignal();
+
+  if (visible != FaultCode::NONE || safety != SafetySignalKind::NONE) {
+    snapshot_reason_code = visible;
+    snapshot_safety_effect = safety;
+    return;
+  }
+
+  snapshot_reason_code = FaultCode::NONE;
+  snapshot_safety_effect = SafetySignalKind::NONE;
 }
 
 void SystemStateMachine::setState(TopState s) {
@@ -236,10 +333,26 @@ void SystemStateMachine::setState(TopState s) {
 
   // SystemStateMachine is the only gate allowed to start/stop output.
   if (wave) {
-    if (st == TopState::RUNNING) wave->start();
-    else wave->stopSoft();
+    if (st == TopState::RUNNING) {
+      Serial.printf(
+          "[LAYER:STATE_OWNER] transition=%s->%s action=wave.start blocking_fault=%s pause_reason=%s\n",
+          topStateName(prev),
+          topStateName(st),
+          faultCodeName(blocking_fault_code),
+          faultCodeName(pause_reason_code));
+      wave->start();
+    } else {
+      Serial.printf(
+          "[LAYER:STATE_OWNER] transition=%s->%s action=wave.stopSoft blocking_fault=%s pause_reason=%s\n",
+          topStateName(prev),
+          topStateName(st),
+          faultCodeName(blocking_fault_code),
+          faultCodeName(pause_reason_code));
+      wave->stopSoft();
+    }
   }
 
+  syncSnapshotDecisionContext();
   Serial.printf("%s [FSM] STATE %s -> %s\n", LogMarker::kFsm, topStateName(prev), topStateName(st));
   emitState();
 }
@@ -647,6 +760,20 @@ void SystemStateMachine::setStartReadiness(bool ready, float stableWeightKg) {
 }
 
 void SystemStateMachine::setSensorHealthy(bool healthy) {
+  if (!laserConfiguredInstalled()) {
+    sensor_state_known = false;
+    sensor_healthy = false;
+
+    if (blocking_fault_code == FaultCode::MEASUREMENT_UNAVAILABLE) {
+      clearBlockingFault("laser_not_installed");
+      return;
+    }
+
+    clearWarningFault(FaultCode::MEASUREMENT_UNAVAILABLE, "laser_not_installed");
+    syncReadyState();
+    return;
+  }
+
   bool changed = (!sensor_state_known || sensor_healthy != healthy);
   sensor_state_known = true;
   sensor_healthy = healthy;
@@ -680,8 +807,31 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
     maybeClearBlockingFault(now);
   }
 
+  const PlatformSnapshot startSnapshot = snapshot();
+  const bool runtimeReadyNow = effectiveRuntimeReady();
+  const bool startReadyNow = effectiveStartReady();
+  Serial.printf(
+      "[LAYER:START_GATE] phase=entry top_state=%s runtime_ready=%d start_ready=%d baseline_ready=%d user_present=%d blocking_fault=%s pause_reason=%s warning=%s platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d\n",
+      topStateName(st),
+      runtimeReadyNow ? 1 : 0,
+      startReadyNow ? 1 : 0,
+      startSnapshot.baselineReady ? 1 : 0,
+      startSnapshot.userPresent ? 1 : 0,
+      faultCodeName(blocking_fault_code),
+      faultCodeName(pause_reason_code),
+      faultCodeName(warning_fault_code),
+      platformModelName(startSnapshot.platformModel),
+      startSnapshot.laserInstalled ? 1 : 0,
+      startSnapshot.laserAvailable ? 1 : 0,
+      startSnapshot.protectionDegraded ? 1 : 0);
+
   if (blocking_fault_code != FaultCode::NONE) {
     reason = FaultCode::FAULT_LOCKED;
+    Serial.printf(
+        "[LAYER:START_GATE] decision=reject reason=FAULT_LOCKED top_state=%s runtime_ready=%d start_ready=%d\n",
+        topStateName(st),
+        runtimeReadyNow ? 1 : 0,
+        startReadyNow ? 1 : 0);
     Serial.printf("%s [FSM] START REJECT reason=FAULT_LOCKED detail=%s active_fault=%s\n",
                   LogMarker::kFsm,
                   recoveryDetail(),
@@ -692,39 +842,64 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
   if (pause_reason_code != FaultCode::NONE) {
     reason = FaultCode::NOT_ARMED;
     Serial.printf(
+        "[LAYER:START_GATE] decision=reject reason=NOT_ARMED detail=pause_reason=%s top_state=%s runtime_ready=%d start_ready=%d baseline_ready=%d\n",
+        faultCodeName(pause_reason_code),
+        topStateName(st),
+        runtimeReadyNow ? 1 : 0,
+        startReadyNow ? 1 : 0,
+        startSnapshot.baselineReady ? 1 : 0);
+    Serial.printf(
         "%s [FSM] START REJECT reason=NOT_ARMED detail=pause_reason=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d userPresent=%d leave_enabled=%d\n",
                   LogMarker::kFsm,
                   faultCodeName(pause_reason_code),
-                  start_ready ? 1 : 0,
+                  startReadyNow ? 1 : 0,
                   start_ready_stable_weight_kg,
-                  runtime_ready ? 1 : 0,
-                  runtime_ready ? 1 : 0,
+                  runtimeReadyNow ? 1 : 0,
+                  startSnapshot.userPresent ? 1 : 0,
                   leaveDetectionEnabled() ? 1 : 0);
     return false;
   }
 
-  if (!runtime_ready || !start_ready) {
+  if (!runtimeReadyNow || !startReadyNow) {
     reason = FaultCode::NOT_ARMED;
+    const char* detail = !runtimeReadyNow ? "user_not_present" : "baseline_not_ready";
+    Serial.printf(
+        "[LAYER:START_GATE] decision=reject reason=NOT_ARMED detail=%s top_state=%s runtime_ready=%d start_ready=%d baseline_ready=%d\n",
+        detail,
+        topStateName(st),
+        runtimeReadyNow ? 1 : 0,
+        startReadyNow ? 1 : 0,
+        startSnapshot.baselineReady ? 1 : 0);
     Serial.printf(
         "%s [FSM] START REJECT reason=NOT_ARMED detail=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d userPresent=%d leave_enabled=%d warning=%s\n",
         LogMarker::kFsm,
-        runtime_ready ? "baseline_not_ready" : "user_not_present",
-        start_ready ? 1 : 0,
+        detail,
+        startReadyNow ? 1 : 0,
         start_ready_stable_weight_kg,
-        runtime_ready ? 1 : 0,
-        runtime_ready ? 1 : 0,
+        runtimeReadyNow ? 1 : 0,
+        startSnapshot.userPresent ? 1 : 0,
         leaveDetectionEnabled() ? 1 : 0,
         faultCodeName(warning_fault_code));
     return false;
   }
 
   Serial.printf(
+      "[LAYER:START_GATE] decision=allow top_state=%s runtime_ready=%d start_ready=%d baseline_ready=%d platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d\n",
+      topStateName(st),
+      runtimeReadyNow ? 1 : 0,
+      startReadyNow ? 1 : 0,
+      startSnapshot.baselineReady ? 1 : 0,
+      platformModelName(startSnapshot.platformModel),
+      startSnapshot.laserInstalled ? 1 : 0,
+      startSnapshot.laserAvailable ? 1 : 0,
+      startSnapshot.protectionDegraded ? 1 : 0);
+  Serial.printf(
       "%s [FSM] START ALLOW baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d userPresent=%d leave_enabled=%d warning=%s\n",
                 LogMarker::kFsm,
-                start_ready ? 1 : 0,
+                startReadyNow ? 1 : 0,
                 start_ready_stable_weight_kg,
-                runtime_ready ? 1 : 0,
-                runtime_ready ? 1 : 0,
+                runtimeReadyNow ? 1 : 0,
+                startSnapshot.userPresent ? 1 : 0,
                 leaveDetectionEnabled() ? 1 : 0,
                 faultCodeName(warning_fault_code));
   rememberStopContext("NONE", VerificationStopSource::NONE);

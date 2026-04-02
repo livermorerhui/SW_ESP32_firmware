@@ -47,6 +47,25 @@
     <string name="status_notify_with_error">Notify：%1$s（%2$s）</string>
     <string name="status_protocol_mode">协议模式：%1$s</string>
     <string name="status_capability_info">协议能力：%1$s</string>
+    <string name="section_device_profile">设备画像配置</string>
+    <string name="device_profile_hint">这里负责写入设备 truth source。BASE 永远对应无激光；PLUS/PRO/ULTRA 永远对应已安装激光。</string>
+    <string name="device_profile_current_truth">设备配置真值：MODEL=%1$s | LASER=%2$s</string>
+    <string name="device_profile_runtime_truth">运行时健康真值：laser_available=%1$s | protection_degraded=%2$s</string>
+    <string name="device_profile_select_model">选择 platform_model</string>
+    <string name="device_profile_select_laser">选择 laser_installed</string>
+    <string name="device_profile_consistency_hint">一致性规则：选 BASE 会强制无激光；选 PLUS/PRO/ULTRA 会强制带激光。从无激光重新切回带激光时，会恢复上一次带激光型号。</string>
+    <string name="device_profile_write">写入设备画像</string>
+    <string name="device_profile_write_pending">正在写入设备画像…</string>
+    <string name="device_config_laser_installed">已安装激光</string>
+    <string name="device_config_laser_not_installed">无激光</string>
+    <string name="device_config_status_pending">正在写入 platform_model=%1$s，%2$s…</string>
+    <string name="device_config_status_success">写入成功：platform_model=%1$s，%2$s。</string>
+    <string name="device_config_status_failure">写入失败：%1$s</string>
+    <string name="device_config_status_send_failed">发送后未完成写入：%1$s</string>
+    <string name="device_config_status_ack_fallback">设备返回了通用 ACK：%1$s</string>
+    <string name="device_config_status_conflict">当前型号与 laser_installed 选择冲突。</string>
+    <string name="device_config_status_requires_primary">设备画像写入需要 primary 协议连接。</string>
+    <string name="device_truth_refresh_failed">设备真值刷新失败：%1$s</string>
     <string name="notify_status_enabled">已开启</string>
     <string name="notify_status_disabled">未开启</string>
 
@@ -92,7 +111,7 @@
     <string name="section_telemetry_chart">遥测曲线</string>
     <string name="label_chart_window">滑动窗口：约 20 秒，内存有界</string>
     <string name="label_chart_hint">用于判断测量流是否还活着、律动体重信号是否在收敛、以及是否存在明显噪声或异常跳变。</string>
-    <string name="label_chart_ma_source">MA3/MA5/MA7 默认基于律动体重计算。</string>
+    <string name="label_chart_ma_source">MA12 是固件正式真值；MA3/MA5/MA7 仅保留为基于律动体重的 APP 调试叠加层。</string>
     <string name="label_chart_overlay_controls">可见遥测曲线</string>
     <string name="label_telemetry_summary_latest">当前：%1$s</string>
     <string name="label_telemetry_summary_baseline">基线：%1$s</string>
@@ -103,10 +122,11 @@
     <string name="legend_stable_weight">稳定体重</string>
     <string name="legend_rhythm_distance">律动距离</string>
     <string name="legend_rhythm_weight">律动体重</string>
+    <string name="legend_ma12">MA12</string>
     <string name="legend_ma3">MA3</string>
     <string name="legend_ma5">MA5</string>
     <string name="legend_ma7">MA7</string>
-    <string name="chart_waiting_data">等待实时 EVT:STREAM 数据…</string>
+    <string name="chart_waiting_data">等待正式 measurement plane 样本…</string>
     <string name="section_test_session">当前测试会话</string>
     <string name="label_test_session_hint">点击开始只会发送启动命令；只有设备真正进入运行态后才创建并缓存当前测试会话。点击停止或自动停波后会自动结束，并保留给清空或导出。</string>
     <string name="label_test_session_status">会话状态：%1$s</string>
@@ -221,6 +241,7 @@
     <string name="value_motion_sampling_flag_no">否</string>
     <string name="wave_bar_hint_ready">待启动</string>
     <string name="wave_bar_hint_start_pending">启动中</string>
+    <string name="wave_bar_hint_stop_pending">停止中</string>
     <string name="wave_bar_hint_running">运行中</string>
     <string name="wave_bar_hint_disconnected">未连接</string>
     <string name="wave_bar_hint_invalid_values">波形参数无效</string>
@@ -381,6 +402,8 @@
     <string name="scan_rssi">信号强度 RSSI：%1$d</string>
 
     <string name="common_not_available">-</string>
+    <string name="common_yes">是</string>
+    <string name="common_no">否</string>
 
     <string name="message_connected">已连接</string>
     <string name="message_connect_failed">连接失败：%1$s</string>
@@ -414,7 +437,7 @@
     <string name="message_sent_wave_start_bundle">已发送：WAVE:SET 后接 WAVE:START</string>
     <string name="message_wave_stop_fallback_success">WAVE:STOP 不支持，已回退发送 E:0</string>
     <string name="message_send_failed">发送失败（%1$s）：%2$s</string>
-    <string name="warning_no_stream_data">未收到测重数据（请确认已开启通知/固件在发送）</string>
+    <string name="warning_no_stream_data">未收到正式 measurement plane 样本（请确认已开启通知且固件在发送）</string>
     <string name="recording_started">正在录制到 %1$s</string>
     <string name="recording_failed">录制失败：%1$s</string>
     <string name="recording_stopped_manual">录制已停止</string>

@@ -18,6 +18,8 @@ import com.sonicwave.protocol.CapabilityResult
 import com.sonicwave.protocol.Command
 import com.sonicwave.protocol.DeviceState
 import com.sonicwave.protocol.Event
+import com.sonicwave.protocol.MeasurementCarrier
+import com.sonicwave.protocol.PlatformModel
 import com.sonicwave.protocol.ProtocolMode
 import com.sonicwave.protocol.SafetyEffect
 import com.sonicwave.sdk.SonicWaveClient
@@ -36,6 +38,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import java.util.ArrayDeque
 
 sealed interface ScanState {
     data object Idle : ScanState
@@ -58,11 +61,27 @@ data class UiState(
     val notifyError: String? = null,
     val capabilityInfo: String? = null,
     val protocolMode: ProtocolMode = ProtocolMode.UNKNOWN,
+    val devicePlatformModel: PlatformModel? = null,
+    val deviceLaserInstalled: Boolean? = null,
+    val deviceLaserAvailable: Boolean? = null,
+    val deviceProtectionDegraded: Boolean? = null,
+    val deviceRuntimeReady: Boolean? = null,
+    val deviceStartReady: Boolean? = null,
+    val deviceBaselineReady: Boolean? = null,
+    val deviceReasonCode: String = "NONE",
+    val deviceSafetyEffectCode: String = "NONE",
+    val selectedPlatformModel: PlatformModel = PlatformModel.PLUS,
+    val selectedLaserInstalled: Boolean = true,
+    val deviceConfigStatus: String? = null,
+    val isDeviceConfigWritePending: Boolean = false,
     val deviceState: DeviceState = DeviceState.UNKNOWN,
     val faultStatus: FaultStatusUi = FaultStatusUi(),
     val safetyStatus: SafetyStatusUi = SafetyStatusUi(),
     val distance: Float? = null,
     val weight: Float? = null,
+    val ma12: Float? = null,
+    val measurementValid: Boolean = false,
+    val lastMeasurementSequence: Long? = null,
     val telemetryPoints: List<TelemetryPointUi> = emptyList(),
     val stableWeight: Float? = null,
     val stableWeightActive: Boolean = false,
@@ -107,7 +126,9 @@ data class UiState(
     val recordingStatus: String? = null,
     val waveRuntimeStartMs: Long? = null,
     val waveRuntimeElapsedMs: Long = 0L,
+    val waveOutputActive: Boolean = false,
     val isWaveStartPending: Boolean = false,
+    val isWaveStopPending: Boolean = false,
     val testSession: TestSessionUi? = null,
     val testSessionNotice: String? = null,
     val isMotionSamplingActive: Boolean = false,
@@ -129,6 +150,16 @@ private data class PendingWaveStartRequest(
     val requestedAtMs: Long,
 )
 
+private data class PendingWaveStopRequest(
+    val requestedAtMs: Long,
+)
+
+private data class PendingWaveStopCompletion(
+    val result: String,
+    val stopReason: String,
+    val stopSource: String,
+)
+
 class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private val client = SonicWaveClient(application)
     private val recorder = TelemetryRecorder(application)
@@ -139,19 +170,42 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+    private val _measurementDisplayState = MutableStateFlow(MeasurementDisplayUiState())
+    val measurementDisplayState: StateFlow<MeasurementDisplayUiState> = _measurementDisplayState.asStateFlow()
+    private val _rawConsoleState = MutableStateFlow(RawConsoleUiState())
+    val rawConsoleState: StateFlow<RawConsoleUiState> = _rawConsoleState.asStateFlow()
+    private val _testSessionPanelState = MutableStateFlow(TestSessionPanelUiState())
+    val testSessionPanelState: StateFlow<TestSessionPanelUiState> = _testSessionPanelState.asStateFlow()
 
     private var selectedDeviceName: String? = null
     private var streamWatchdogJob: Job? = null
     private var lastStreamAtMs: Long = 0L
     private var telemetrySessionStartMs: Long = 0L
+    private var latestDistance: Float? = null
+    private var latestWeight: Float? = null
+    private var latestMa12: Float? = null
+    private var latestMeasurementValid = false
+    private var latestMeasurementSequence: Long? = null
+    private var lastMeasurementDisplayPublishAtMs: Long = 0L
+    private var lastRawConsolePublishAtMs: Long = 0L
+    private var lastTestSessionPanelPublishAtMs: Long = 0L
     private var recordingSession: RecordingSession? = null
     private var pendingWaveStartRequest: PendingWaveStartRequest? = null
+    private var pendingWaveStopRequest: PendingWaveStopRequest? = null
+    private var pendingWaveStopCompletion: PendingWaveStopCompletion? = null
     private var sessionCaptureSignals: SessionCaptureSignals = SessionCaptureSignals()
     private var disconnectRequested: Boolean = false
     private var hadConnectedSession: Boolean = false
     private var awaitingCalibrationCaptureResult: Boolean = false
     private var awaitingModelWriteResult: Boolean = false
+    private var awaitingDeviceConfigWriteResult: Boolean = false
     private var pendingWriteModelType: CalibrationModelType? = null
+    private var preferredLaserPlatformModel: PlatformModel = PlatformModel.PLUS
+    private var testSessionStore: TestSessionUi? = null
+    private var motionSamplingSessionStore: MotionSamplingSessionUi? = null
+    private val rawLogBuffer = ArrayDeque<String>()
+    private val telemetryDisplayBuffer = ArrayDeque<TelemetryPointUi>()
+    private val recentWeightBuffer = ArrayDeque<Float>()
 
     init {
         observeClient()
@@ -229,13 +283,20 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         hadConnectedSession = false
         awaitingCalibrationCaptureResult = false
         awaitingModelWriteResult = false
+        awaitingDeviceConfigWriteResult = false
         pendingWriteModelType = null
         pendingWaveStartRequest = null
+        pendingWaveStopRequest = null
+        pendingWaveStopCompletion = null
+        preferredLaserPlatformModel = PlatformModel.PLUS
         sessionCaptureSignals = SessionCaptureSignals()
         client.stopScan()
         streamWatchdogJob?.cancel()
         telemetrySessionStartMs = 0L
         lastStreamAtMs = 0L
+        resetMeasurementDisplayState()
+        resetRawConsoleState()
+        resetSessionStores()
 
         _uiState.update {
             resetCalibrationSessionState(
@@ -247,14 +308,32 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         connectedDeviceName = selectedDeviceName,
                         capabilityInfo = null,
                         protocolMode = ProtocolMode.UNKNOWN,
+                        devicePlatformModel = null,
+                        deviceLaserInstalled = null,
+                        deviceLaserAvailable = null,
+                        deviceProtectionDegraded = null,
+                        deviceRuntimeReady = null,
+                        deviceStartReady = null,
+                        deviceBaselineReady = null,
+                        deviceReasonCode = "NONE",
+                        deviceSafetyEffectCode = "NONE",
+                        selectedPlatformModel = PlatformModel.PLUS,
+                        selectedLaserInstalled = true,
+                        deviceConfigStatus = null,
+                        isDeviceConfigWritePending = false,
                         notifyEnabled = false,
                         notifyError = null,
                         streamWarning = null,
+                        measurementValid = false,
+                        lastMeasurementSequence = null,
+                        ma12 = null,
                         telemetryPoints = emptyList(),
                         isRecording = false,
                         recordingDestination = null,
                         recordingStatus = null,
+                        waveOutputActive = false,
                         isWaveStartPending = false,
+                        isWaveStopPending = false,
                         fallStopEnabled = true,
                         fallStopStateKnown = false,
                         isFallStopSyncInProgress = false,
@@ -271,6 +350,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 ),
             ).resetWaveRuntime()
         }
+        publishTestSessionPanel(force = true)
 
         viewModelScope.launch {
             runCatching {
@@ -306,6 +386,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         it.copy(
                             isDeviceSheetVisible = false,
                             capabilityInfo = probe?.let(::formatCapabilityInfo),
+                            devicePlatformModel = probe?.capabilities?.let(::platformModelFromCapabilities),
+                            deviceLaserInstalled = probe?.capabilities?.let(::laserInstalledFromCapabilities),
                             motionSamplingModeEnabled = probe?.capabilities?.let(::isMotionSamplingModeEnabled) ?: false,
                             fallStopEnabled = probe?.capabilities?.let(::isFallStopEnabled) ?: true,
                             fallStopStateKnown = probe?.capabilities?.let(::isFallStopEnabled) != null,
@@ -320,6 +402,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 if (probe?.mode == ProtocolMode.PRIMARY) {
                     appendSystemLog(text(R.string.log_canonical_protocol_confirmed))
+                    requestSnapshotRefresh()
                 }
             }.onFailure { error ->
                 _uiState.update {
@@ -348,8 +431,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         hadConnectedSession = false
         awaitingCalibrationCaptureResult = false
         awaitingModelWriteResult = false
+        awaitingDeviceConfigWriteResult = false
         pendingWriteModelType = null
         pendingWaveStartRequest = null
+        pendingWaveStopRequest = null
+        pendingWaveStopCompletion = null
         finishTestSessionIfRecording(
             result = "ABNORMAL_STOP",
             stopReason = "BLE_DISCONNECTED",
@@ -362,6 +448,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         stopRecordingIfActive(text(R.string.recording_stopped_disconnect))
         stopMotionSamplingIfActive(text(R.string.motion_sampling_status_stopped_disconnect))
         telemetrySessionStartMs = 0L
+        resetMeasurementDisplayState()
+        resetSessionStores()
         _uiState.update {
             resetCalibrationSessionState(
                 withCaptureAvailability(
@@ -372,11 +460,26 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         notifyError = null,
                         capabilityInfo = null,
                         protocolMode = ProtocolMode.UNKNOWN,
+                        devicePlatformModel = null,
+                        deviceLaserInstalled = null,
+                        deviceLaserAvailable = null,
+                        deviceProtectionDegraded = null,
+                        deviceRuntimeReady = null,
+                        deviceStartReady = null,
+                        deviceBaselineReady = null,
+                        deviceReasonCode = "NONE",
+                        deviceSafetyEffectCode = "NONE",
+                        selectedPlatformModel = PlatformModel.PLUS,
+                        selectedLaserInstalled = true,
+                        deviceConfigStatus = null,
+                        isDeviceConfigWritePending = false,
                         streamWarning = null,
                         isRecording = false,
                         recordingDestination = null,
                         recordingStatus = text(R.string.recording_stopped_disconnect),
+                        waveOutputActive = false,
                         isWaveStartPending = false,
+                        isWaveStopPending = false,
                         fallStopEnabled = true,
                         fallStopStateKnown = false,
                         isFallStopSyncInProgress = false,
@@ -386,6 +489,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         motionSamplingModeEnabled = false,
                         stableWeight = null,
                         stableWeightActive = false,
+                        measurementValid = false,
+                        lastMeasurementSequence = null,
+                        ma12 = null,
                         safetyStatus = defaultSafetyStatus(),
                         statusLabel = currentStatusLabel(
                             connectionState = ConnectionState.Disconnected,
@@ -395,6 +501,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 ),
             ).resetWaveRuntime()
         }
+        publishTestSessionPanel(force = true)
     }
 
     fun updateZeroInput(value: String) {
@@ -407,6 +514,35 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateCaptureReferenceInput(value: String) {
         _uiState.update { it.copy(captureReferenceInput = value) }
+    }
+
+    fun updateSelectedPlatformModel(model: PlatformModel) {
+        if (model != PlatformModel.BASE) {
+            preferredLaserPlatformModel = model
+        }
+        _uiState.update {
+            it.copy(
+                selectedPlatformModel = model,
+                selectedLaserInstalled = model != PlatformModel.BASE,
+            )
+        }
+    }
+
+    fun updateSelectedLaserInstalled(installed: Boolean) {
+        _uiState.update { state ->
+            val nextModel = when {
+                !installed -> PlatformModel.BASE
+                state.selectedPlatformModel != PlatformModel.BASE -> state.selectedPlatformModel
+                else -> preferredLaserPlatformModel
+            }
+            if (nextModel != PlatformModel.BASE) {
+                preferredLaserPlatformModel = nextModel
+            }
+            state.copy(
+                selectedPlatformModel = nextModel,
+                selectedLaserInstalled = installed,
+            )
+        }
     }
 
     fun updateModelReferenceInput(value: String) {
@@ -473,6 +609,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { state ->
             state.copy(verboseStreamLogsEnabled = !state.verboseStreamLogsEnabled)
         }
+        publishRawConsole(force = true)
         appendSystemLog("[LOG] streamVerbose enabled=${_uiState.value.verboseStreamLogsEnabled}")
     }
 
@@ -589,19 +726,21 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val normalizedState = _uiState.value
-        if (!normalizedState.canStartWave(hasPendingStartRequest = pendingWaveStartRequest != null)) {
+        if (!normalizedState.canStartWave()) {
             _uiState.update {
                 it.copy(lastAckOrError = startBlockedMessage(normalizedState))
             }
             return
         }
 
+        pendingWaveStopRequest = null
+        pendingWaveStopCompletion = null
         pendingWaveStartRequest = PendingWaveStartRequest(
             freq = freq,
             intensity = intensity,
             requestedAtMs = System.currentTimeMillis(),
         )
-        _uiState.update { it.copy(isWaveStartPending = true) }
+        _uiState.update { it.syncWaveControlFlags() }
 
         viewModelScope.launch {
             runCatching {
@@ -615,15 +754,15 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }.onFailure { error ->
                 pendingWaveStartRequest = null
+                cancelPendingWaveStop("START_SEND_FAILURE")
                 _uiState.update {
                     it.copy(
-                        isWaveStartPending = false,
                         lastAckOrError = text(
                             R.string.message_send_failed,
                             "WAVE:SET -> WAVE:START",
                             error.message ?: text(R.string.common_not_available),
                         ),
-                    )
+                    ).syncWaveControlFlags()
                 }
             }
         }
@@ -631,16 +770,40 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendWaveStop() {
         pendingWaveStartRequest = null
-        _uiState.update { it.copy(isWaveStartPending = false) }
-        finishTestSessionIfRecording(
+        pendingWaveStopRequest = PendingWaveStopRequest(
+            requestedAtMs = System.currentTimeMillis(),
+        )
+        stagePendingWaveStopCompletion(
             result = "NORMAL_STOP",
             stopReason = "USER_STOP",
             stopSource = "USER_MANUAL_OTHER",
         )
         _uiState.update {
-            it.copy(testSessionNotice = text(R.string.test_session_notice_stopped_manual))
+            it.copy(
+                testSessionNotice = text(R.string.test_session_notice_stopped_manual),
+            ).syncWaveControlFlags()
         }
-        sendCommand(Command.WaveStop, "WAVE:STOP")
+        publishTestSessionPanel(force = true)
+        viewModelScope.launch {
+            runCatching {
+                client.send(Command.WaveStop)
+            }.onSuccess {
+                _uiState.update {
+                    it.copy(lastAckOrError = text(R.string.message_sent, "WAVE:STOP"))
+                }
+            }.onFailure { error ->
+                cancelPendingWaveStop("STOP_SEND_FAILURE")
+                _uiState.update {
+                    it.copy(
+                        lastAckOrError = text(
+                            R.string.message_send_failed,
+                            "WAVE:STOP",
+                            error.message ?: text(R.string.common_not_available),
+                        ),
+                    )
+                }
+            }
+        }
     }
 
     fun sendCalibrationCapture() {
@@ -816,6 +979,78 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun sendDeviceConfig() {
+        val state = _uiState.value
+        if (!state.isConnected || state.protocolMode != ProtocolMode.PRIMARY) {
+            _uiState.update {
+                it.copy(lastAckOrError = text(R.string.device_config_status_requires_primary))
+            }
+            return
+        }
+
+        val platformModel = state.selectedPlatformModel
+        val laserInstalled = state.selectedLaserInstalled
+        if ((platformModel == PlatformModel.BASE) != !laserInstalled) {
+            _uiState.update {
+                it.copy(
+                    lastAckOrError = text(R.string.device_config_status_conflict),
+                    deviceConfigStatus = text(R.string.device_config_status_conflict),
+                    isDeviceConfigWritePending = false,
+                )
+            }
+            return
+        }
+
+        awaitingDeviceConfigWriteResult = true
+        _uiState.update {
+            it.copy(
+                isDeviceConfigWritePending = true,
+                deviceConfigStatus = text(
+                    R.string.device_config_status_pending,
+                    platformModel.name,
+                    if (laserInstalled) {
+                        text(R.string.device_config_laser_installed)
+                    } else {
+                        text(R.string.device_config_laser_not_installed)
+                    },
+                ),
+            )
+        }
+
+        viewModelScope.launch {
+            runCatching {
+                client.send(
+                    Command.DeviceSetConfig(
+                        platformModel = platformModel,
+                        laserInstalled = laserInstalled,
+                    ),
+                )
+            }.onSuccess {
+                _uiState.update {
+                    it.copy(
+                        lastAckOrError = text(R.string.message_sent, "DEVICE:SET_CONFIG"),
+                    )
+                }
+            }.onFailure { error ->
+                awaitingDeviceConfigWriteResult = false
+                _uiState.update {
+                    it.copy(
+                        isDeviceConfigWritePending = false,
+                        deviceConfigStatus = text(
+                            R.string.device_config_status_send_failed,
+                            error.message ?: text(R.string.common_not_available),
+                        ),
+                        lastAckOrError = text(
+                            R.string.message_send_failed,
+                            "DEVICE:SET_CONFIG",
+                            error.message ?: text(R.string.common_not_available),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
     fun sendCalibrationZero() {
         appendSystemLog("[CAL_UI] calZeroRequested")
         sendCommand(Command.CalibrationZero, "CAL:ZERO")
@@ -862,25 +1097,26 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearTestSession() {
-        val session = _uiState.value.testSession ?: return
+        val session = testSessionStore ?: return
         if (session.status == TestSessionStatusUi.RECORDING) return
         val sessionId = session.sessionId
+        testSessionStore = null
         _uiState.update {
             it.copy(
-                testSession = null,
                 testSessionNotice = text(R.string.test_session_notice_cleared),
             )
         }
+        publishTestSessionPanel(force = true)
         appendSystemLog("[TEST_SESSION] cleared id=$sessionId")
     }
 
     fun exportTestSession(request: TestSessionExportRequest) {
-        val state = _uiState.value
-        val session = state.testSession ?: return
+        val session = testSessionStore ?: return
         if (session.status != TestSessionStatusUi.FINISHED || session.samples.isEmpty()) {
             _uiState.update {
                 it.copy(testSessionNotice = text(R.string.test_session_notice_export_unavailable))
             }
+            publishTestSessionPanel(force = true)
             return
         }
 
@@ -888,18 +1124,14 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             runCatching {
                 testSessionExporter.exportSession(session, request)
             }.onSuccess { result ->
+                testSessionStore = testSessionStore
+                    ?.takeIf { it.sessionId == session.sessionId }
+                    ?.copy(
+                        lastExportCsvPath = result.csvDestinationLabel,
+                        lastExportJsonPath = result.jsonDestinationLabel,
+                    )
                 _uiState.update {
-                    val current = it.testSession
-                    val updatedSession = if (current?.sessionId == session.sessionId) {
-                        current.copy(
-                            lastExportCsvPath = result.csvDestinationLabel,
-                            lastExportJsonPath = result.jsonDestinationLabel,
-                        )
-                    } else {
-                        current
-                    }
                     it.copy(
-                        testSession = updatedSession,
                         testSessionNotice = text(
                             R.string.test_session_notice_exported,
                             result.csvDestinationLabel,
@@ -907,6 +1139,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         ),
                     )
                 }
+                publishTestSessionPanel(force = true)
                 appendSystemLog(
                     "[TEST_SESSION] export primary=${request.primaryLabel.name} secondary=${request.secondaryLabel.name}",
                 )
@@ -922,6 +1155,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         ),
                     )
                 }
+                publishTestSessionPanel(force = true)
             }
         }
     }
@@ -946,19 +1180,19 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             waveIntensity = sampledIntensity,
             fallStopEnabled = state.fallStopEnabled,
             samplingModeEnabled = state.motionSamplingModeEnabled,
-            waveWasRunningAtSessionStart =
-                state.deviceState == DeviceState.RUNNING || state.safetyStatus.waveCode == "RUNNING",
+            waveWasRunningAtSessionStart = state.waveOutputActive,
             modelTypeCode = model?.type?.name,
             modelReferenceDistance = model?.referenceDistance,
             modelC0 = model?.c0,
             modelC1 = model?.c1,
             modelC2 = model?.c2,
             notes = "",
+            rows = mutableListOf(),
         )
+        motionSamplingSessionStore = session
         _uiState.update {
             it.copy(
                 isMotionSamplingActive = true,
-                motionSamplingSession = session,
                 motionSamplingStatus = text(R.string.motion_sampling_status_started, sessionId),
             )
         }
@@ -972,10 +1206,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     fun clearMotionSamplingSession() {
         val state = _uiState.value
         if (state.isMotionSamplingActive) return
-        val sessionId = state.motionSamplingSession?.sessionId ?: return
+        val sessionId = motionSamplingSessionStore?.sessionId ?: return
+        motionSamplingSessionStore = null
         _uiState.update {
             it.copy(
-                motionSamplingSession = null,
                 motionSamplingStatus = text(R.string.motion_sampling_status_cleared),
             )
         }
@@ -1082,31 +1316,24 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun exportMotionSamplingSession(request: MotionSamplingExportRequest) {
         val state = _uiState.value
-        val session = state.motionSamplingSession ?: return
+        val session = motionSamplingSessionStore ?: return
         if (state.isMotionSamplingActive || session.rows.isEmpty()) return
 
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 motionSamplingExporter.exportSession(session, request)
             }.onSuccess { result ->
+                motionSamplingSessionStore = motionSamplingSessionStore
+                    ?.takeIf { it.sessionId == session.sessionId }
+                    ?.copy(
+                        exportScenarioLabel = request.scenarioLabel,
+                        exportScenarioCategory = request.scenarioCategory,
+                        lastExportTimestampMs = request.exportTimestampMs,
+                        lastExportCsvPath = result.csvDestinationLabel,
+                        lastExportJsonPath = result.jsonDestinationLabel,
+                    )
                 _uiState.update {
-                    val currentSession = it.motionSamplingSession
-                    val updatedSession = if (currentSession?.sessionId == session.sessionId) {
-                        currentSession.copy(
-                            // Persist the export labels in the session summary so
-                            // engineers can confirm what was written out, while
-                            // keeping capture/runtime behavior unchanged.
-                            exportScenarioLabel = request.scenarioLabel,
-                            exportScenarioCategory = request.scenarioCategory,
-                            lastExportTimestampMs = request.exportTimestampMs,
-                            lastExportCsvPath = result.csvDestinationLabel,
-                            lastExportJsonPath = result.jsonDestinationLabel,
-                        )
-                    } else {
-                        currentSession
-                    }
                     it.copy(
-                        motionSamplingSession = updatedSession,
                         motionSamplingStatus = text(R.string.motion_sampling_status_exported, result.csvDestinationLabel),
                     )
                 }
@@ -1133,6 +1360,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearRawLog() {
+        resetRawConsoleState()
         _uiState.update { it.copy(rawLogLines = emptyList()) }
     }
 
@@ -1185,6 +1413,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             ),
                         )
                     }
+                    publishTestSessionPanel(force = true)
                 }
 
                 _uiState.update { state ->
@@ -1249,8 +1478,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     hadConnectedSession = false
                     awaitingCalibrationCaptureResult = false
                     awaitingModelWriteResult = false
+                    awaitingDeviceConfigWriteResult = false
                     pendingWriteModelType = null
                     pendingWaveStartRequest = null
+                    pendingWaveStopRequest = null
+                    pendingWaveStopCompletion = null
                     if (disconnectRequested) {
                         disconnectRequested = false
                     }
@@ -1258,16 +1490,31 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     clearStableBaseline()
                     stopRecordingIfActive(text(R.string.recording_stopped_disconnect))
                     stopMotionSamplingIfActive(text(R.string.motion_sampling_status_stopped_disconnect))
+                    resetMeasurementDisplayState()
+                    resetSessionStores()
                     _uiState.update { state ->
                         resetCalibrationSessionState(
                             withCaptureAvailability(
                                 state.copy(
+                                    devicePlatformModel = null,
+                                    deviceLaserInstalled = null,
+                                    deviceLaserAvailable = null,
+                                    deviceProtectionDegraded = null,
+                                    deviceRuntimeReady = null,
+                                    deviceStartReady = null,
+                                    deviceBaselineReady = null,
+                                    deviceReasonCode = "NONE",
+                                    deviceSafetyEffectCode = "NONE",
                                     isRecording = false,
                                     recordingDestination = null,
                                     recordingStatus = text(R.string.recording_stopped_disconnect),
+                                    waveOutputActive = false,
                                     isWaveStartPending = false,
+                                    isWaveStopPending = false,
                                     captureStatus = null,
                                     writeModelStatus = null,
+                                    deviceConfigStatus = null,
+                                    isDeviceConfigWritePending = false,
                                     fallStopEnabled = true,
                                     fallStopStateKnown = false,
                                     isFallStopSyncInProgress = false,
@@ -1275,6 +1522,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             ),
                         ).resetWaveRuntime()
                     }
+                    publishTestSessionPanel(force = true)
                 }
             }
         }
@@ -1311,7 +1559,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             client.events.collect { event ->
                 when (event) {
-                    is Event.StreamSample -> onStreamSample(event.distance, event.weight)
+                    is Event.StreamSample -> onStreamSample(event)
 
                     is Event.BaselineMain -> {
                         sessionCaptureSignals = sessionCaptureSignals.copy(
@@ -1328,9 +1576,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         )
                         _uiState.update {
                             it.copy(
+                                deviceBaselineReady = event.baselineReady,
                                 stableWeight = event.stableWeightKg ?: it.stableWeight,
                                 stableWeightActive = event.baselineReady,
-                            )
+                            ).syncWaveControlFlags()
                         }
                     }
 
@@ -1339,10 +1588,15 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             stopReason = event.stopReason,
                             stopSource = event.stopSource,
                         )
+                        if (pendingWaveStopRequest == null && _uiState.value.waveOutputActive) {
+                            pendingWaveStopRequest = PendingWaveStopRequest(
+                                requestedAtMs = System.currentTimeMillis(),
+                            )
+                        }
                         cancelPendingWaveStart(
                             "EVT_STOP:${event.stopReason}:${event.stopSource}:${event.effect.name}:${event.state.name}",
                         )
-                        finishTestSessionIfRecording(
+                        stagePendingWaveStopCompletion(
                             result = when {
                                 event.stopSource == "USER_MANUAL_OTHER" -> "NORMAL_STOP"
                                 event.effect == SafetyEffect.ABNORMAL_STOP -> "ABNORMAL_STOP"
@@ -1351,6 +1605,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             stopReason = event.stopReason,
                             stopSource = event.stopSource,
                         )
+                        _uiState.update { it.syncWaveControlFlags() }
                     }
 
                     is Event.Stable -> _uiState.update {
@@ -1377,25 +1632,29 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         } else {
                             it.safetyStatus
                         }
-                        it.applyWaveRuntimeTransition(nextState).copy(
+                        it.copy(
                             deviceState = nextState,
                             safetyStatus = nextSafetyStatus,
-                        )
+                        ).syncFormalWaveTruth().syncWaveControlFlags()
                     }.also {
-                        if (event.state == DeviceState.RUNNING) {
-                            confirmPendingWaveStart(source = "EVT_STATE_RUNNING")
-                        } else {
-                            if (event.state == DeviceState.IDLE || event.state == DeviceState.FAULT_STOP) {
-                                cancelPendingWaveStart("EVT_STATE_${event.state.name}")
+                        if (event.state == DeviceState.IDLE || event.state == DeviceState.FAULT_STOP) {
+                            cancelPendingWaveStart("EVT_STATE_${event.state.name}")
+                            if (pendingWaveStopCompletion == null &&
+                                testSessionStore?.status == TestSessionStatusUi.RECORDING
+                            ) {
+                                stagePendingWaveStopCompletion(
+                                    result = if (event.state == DeviceState.FAULT_STOP) {
+                                        "ABNORMAL_STOP"
+                                    } else {
+                                        "AUTO_STOP"
+                                    },
+                                    stopReason = event.state.name,
+                                    stopSource = sessionCaptureSignals.stopSource,
+                                )
                             }
-                            finishTestSessionIfRecording(
-                                result = if (event.state == DeviceState.FAULT_STOP) {
-                                    "ABNORMAL_STOP"
-                                } else {
-                                    "AUTO_STOP"
-                                },
-                                stopReason = event.state.name,
-                            )
+                            if (!_uiState.value.waveOutputActive) {
+                                confirmPendingWaveStop("EVT_STATE_${event.state.name}")
+                            }
                         }
                     }
 
@@ -1409,14 +1668,28 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             )
                             it.copy(
                                 faultStatus = faultStatus,
+                                deviceReasonCode = faultStatus.codeName,
                                 lastAckOrError = text(R.string.message_fault, faultStatus.label),
                                 stableWeight = if (clearsStableBaseline) null else it.stableWeight,
                                 stableWeightActive = if (clearsStableBaseline) false else it.stableWeightActive,
+                            ).syncFormalWaveTruth().syncWaveControlFlags()
+                        }
+                        if (pendingWaveStopRequest == null &&
+                            (_uiState.value.waveOutputActive ||
+                                testSessionStore?.status == TestSessionStatusUi.RECORDING)
+                        ) {
+                            pendingWaveStopRequest = PendingWaveStopRequest(
+                                requestedAtMs = System.currentTimeMillis(),
                             )
                         }
-                        finishTestSessionIfRecording(
-                            result = "ABNORMAL_STOP",
+                        stagePendingWaveStopCompletion(
+                            result = if (faultStatus.codeName == "USER_LEFT_PLATFORM") {
+                                "AUTO_STOP"
+                            } else {
+                                "ABNORMAL_STOP"
+                            },
                             stopReason = faultStatus.codeName,
+                            stopSource = sessionCaptureSignals.stopSource,
                         )
                     }
 
@@ -1432,18 +1705,18 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 reasonCode = safetyStatus.reasonCode,
                                 code = safetyStatus.code,
                             )
-                            it.applyWaveRuntimeTransition(nextState).copy(
+                            it.copy(
                                 deviceState = nextState,
                                 faultStatus = event.code?.let(::faultStatusFromCode) ?: it.faultStatus,
+                                deviceReasonCode = safetyStatus.reasonCode,
+                                deviceSafetyEffectCode = safetyStatus.effectCode,
                                 safetyStatus = safetyStatus,
                                 lastAckOrError = formatSafetyStatusMessage(safetyStatus),
                                 stableWeight = if (clearsStableBaseline) null else it.stableWeight,
                                 stableWeightActive = if (clearsStableBaseline) false else it.stableWeightActive,
-                            )
+                            ).syncFormalWaveTruth().syncWaveControlFlags()
                         }
-                        if (event.state == DeviceState.RUNNING || event.wave.name == "RUNNING") {
-                            confirmPendingWaveStart(source = "EVT_SAFETY_RUNNING")
-                        } else if (
+                        if (
                             event.effect == SafetyEffect.ABNORMAL_STOP ||
                             event.effect == SafetyEffect.RECOVERABLE_PAUSE ||
                             event.wave.name == "STOPPED" ||
@@ -1453,20 +1726,75 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             cancelPendingWaveStart(
                                 "EVT_SAFETY:${event.reason}:${event.effect.name}:${event.state.name}:${event.wave.name}",
                             )
-                        }
-                        if (event.effect == SafetyEffect.ABNORMAL_STOP ||
-                            event.effect == SafetyEffect.RECOVERABLE_PAUSE ||
-                            event.wave.name == "STOPPED" ||
-                            event.state != DeviceState.RUNNING
-                        ) {
-                            finishTestSessionIfRecording(
+                            if (pendingWaveStopRequest == null &&
+                                (_uiState.value.waveOutputActive ||
+                                    testSessionStore?.status == TestSessionStatusUi.RECORDING)
+                            ) {
+                                pendingWaveStopRequest = PendingWaveStopRequest(
+                                    requestedAtMs = System.currentTimeMillis(),
+                                )
+                            }
+                            stagePendingWaveStopCompletion(
                                 result = when (event.effect) {
                                     SafetyEffect.ABNORMAL_STOP -> "ABNORMAL_STOP"
                                     SafetyEffect.RECOVERABLE_PAUSE -> "AUTO_STOP"
                                     else -> "AUTO_STOP"
                                 },
                                 stopReason = event.reason,
+                                stopSource = sessionCaptureSignals.stopSource,
                             )
+                        }
+                    }
+
+                    is Event.Snapshot -> _uiState.update {
+                        val nextDeviceState = if (event.topState != DeviceState.UNKNOWN) {
+                            event.topState
+                        } else {
+                            it.deviceState
+                        }
+                        val nextWaveOutputActive = event.waveOutputActive ?: it.waveOutputActive
+                        val nextReasonCode = event.currentReasonCode ?: it.deviceReasonCode
+                        val nextSafetyEffectCode = event.currentSafetyEffect ?: it.deviceSafetyEffectCode
+                        it.applyWaveOutputTransition(nextWaveOutputActive).copy(
+                            deviceState = nextDeviceState,
+                            devicePlatformModel = event.platformModel ?: it.devicePlatformModel,
+                            deviceLaserInstalled = event.laserInstalled ?: it.deviceLaserInstalled,
+                            deviceLaserAvailable = event.laserAvailable,
+                            deviceProtectionDegraded = event.protectionDegraded,
+                            deviceRuntimeReady = event.runtimeReady,
+                            deviceStartReady = event.startReady,
+                            deviceBaselineReady = event.baselineReady,
+                            deviceReasonCode = nextReasonCode,
+                            deviceSafetyEffectCode = nextSafetyEffectCode,
+                            faultStatus = faultStatusFromReason(nextReasonCode),
+                            safetyStatus = safetyStatusFromSnapshot(
+                                reasonCode = nextReasonCode,
+                                effectCode = nextSafetyEffectCode,
+                                runtimeState = nextDeviceState,
+                                waveOutputActive = nextWaveOutputActive,
+                            ),
+                            stableWeight = event.stableWeightKg ?: it.stableWeight,
+                            stableWeightActive = event.baselineReady ?: it.stableWeightActive,
+                        ).syncFormalWaveTruth().syncWaveControlFlags()
+                    }.also {
+                        if (_uiState.value.waveOutputActive) {
+                            cancelPendingWaveStop("SNAPSHOT_WAVE_OUTPUT_ACTIVE")
+                            confirmPendingWaveStart(source = "SNAPSHOT_WAVE_OUTPUT_ACTIVE")
+                        } else if (_uiState.value.deviceState != DeviceState.RUNNING) {
+                            confirmPendingWaveStop("SNAPSHOT_WAVE_OUTPUT_INACTIVE")
+                        }
+                    }
+
+                    is Event.WaveOutput -> _uiState.update {
+                        it.applyWaveOutputTransition(event.active)
+                            .syncFormalWaveTruth()
+                            .syncWaveControlFlags()
+                    }.also {
+                        if (event.active) {
+                            cancelPendingWaveStop("EVT_WAVE_OUTPUT_ACTIVE")
+                            confirmPendingWaveStart(source = "EVT_WAVE_OUTPUT_ACTIVE")
+                        } else if (_uiState.value.deviceState != DeviceState.RUNNING) {
+                            confirmPendingWaveStop("EVT_WAVE_OUTPUT_INACTIVE")
                         }
                     }
 
@@ -1533,14 +1861,59 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
 
-                    is Event.Capabilities -> _uiState.update {
-                        it.copy(
+                    is Event.Capabilities -> _uiState.update { state ->
+                        val platformModel = platformModelFromCapabilities(event)
+                        val laserInstalled = laserInstalledFromCapabilities(event)
+                        if (platformModel != null && platformModel != PlatformModel.BASE) {
+                            preferredLaserPlatformModel = platformModel
+                        }
+                        state.copy(
                             capabilityInfo = formatCapabilities(event),
+                            devicePlatformModel = platformModel ?: state.devicePlatformModel,
+                            deviceLaserInstalled = laserInstalled ?: state.deviceLaserInstalled,
+                            selectedPlatformModel = platformModel ?: state.selectedPlatformModel,
+                            selectedLaserInstalled = laserInstalled ?: state.selectedLaserInstalled,
                             motionSamplingModeEnabled = isMotionSamplingModeEnabled(event),
-                            fallStopEnabled = isFallStopEnabled(event) ?: it.fallStopEnabled,
-                            fallStopStateKnown = isFallStopEnabled(event) != null || it.fallStopStateKnown,
+                            fallStopEnabled = isFallStopEnabled(event) ?: state.fallStopEnabled,
+                            fallStopStateKnown = isFallStopEnabled(event) != null || state.fallStopStateKnown,
                             isFallStopSyncInProgress = false,
                         )
+                    }
+
+                    is Event.DeviceConfig -> {
+                        val devicePlatformModel = event.platformModel
+                        if (devicePlatformModel != null && devicePlatformModel != PlatformModel.BASE) {
+                            preferredLaserPlatformModel = devicePlatformModel
+                        }
+                        val systemLogs = mutableListOf<String>()
+                        val status = if (awaitingDeviceConfigWriteResult) {
+                            awaitingDeviceConfigWriteResult = false
+                            systemLogs += "[DEVICE_CONFIG] write success model=${devicePlatformModel?.name ?: "UNKNOWN"} laser=${event.laserInstalled ?: false}"
+                            text(
+                                R.string.device_config_status_success,
+                                devicePlatformModel?.name ?: text(R.string.common_not_available),
+                                if (event.laserInstalled == true) {
+                                    text(R.string.device_config_laser_installed)
+                                } else {
+                                    text(R.string.device_config_laser_not_installed)
+                                },
+                            )
+                        } else {
+                            null
+                        }
+                        _uiState.update {
+                            it.copy(
+                                devicePlatformModel = devicePlatformModel ?: it.devicePlatformModel,
+                                deviceLaserInstalled = event.laserInstalled ?: it.deviceLaserInstalled,
+                                selectedPlatformModel = devicePlatformModel ?: it.selectedPlatformModel,
+                                selectedLaserInstalled = event.laserInstalled ?: it.selectedLaserInstalled,
+                                deviceConfigStatus = status ?: it.deviceConfigStatus,
+                                isDeviceConfigWritePending = false,
+                                lastAckOrError = event.raw,
+                            )
+                        }
+                        systemLogs.forEach(::appendSystemLog)
+                        refreshCapabilityAndSnapshot()
                     }
 
                     is Event.CalibrationSetModelResult -> {
@@ -1630,11 +2003,20 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         } else {
                             null
                         }
+                        val deviceConfigStatus = if (awaitingDeviceConfigWriteResult) {
+                            awaitingDeviceConfigWriteResult = false
+                            systemLogs += "[DEVICE_CONFIG] write generic_ack raw=${event.raw}"
+                            text(R.string.device_config_status_ack_fallback, event.raw)
+                        } else {
+                            null
+                        }
                         _uiState.update {
                             it.copy(
                                 lastAckOrError = event.raw,
                                 captureStatus = captureStatus ?: it.captureStatus,
                                 writeModelStatus = writeModelStatus ?: it.writeModelStatus,
+                                deviceConfigStatus = deviceConfigStatus ?: it.deviceConfigStatus,
+                                isDeviceConfigWritePending = false,
                             )
                         }
                         systemLogs.forEach(::appendSystemLog)
@@ -1643,6 +2025,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     is Event.Nack -> {
                         val reason = event.reason.trim()
                         cancelPendingWaveStart("NACK:$reason")
+                        cancelPendingWaveStop("NACK:$reason")
                         val systemLogs = mutableListOf<String>()
                         val captureStatus = if (awaitingCalibrationCaptureResult) {
                             awaitingCalibrationCaptureResult = false
@@ -1675,11 +2058,20 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         } else {
                             null
                         }
+                        val deviceConfigStatus = if (awaitingDeviceConfigWriteResult) {
+                            awaitingDeviceConfigWriteResult = false
+                            systemLogs += "[DEVICE_CONFIG] write failure reason=$reason"
+                            text(R.string.device_config_status_failure, formatNackMessage(reason))
+                        } else {
+                            null
+                        }
                         _uiState.update {
                             it.copy(
                                 lastAckOrError = formatNackMessage(reason),
                                 captureStatus = captureStatus ?: it.captureStatus,
                                 writeModelStatus = writeModelStatus ?: it.writeModelStatus,
+                                deviceConfigStatus = deviceConfigStatus ?: it.deviceConfigStatus,
+                                isDeviceConfigWritePending = false,
                             )
                         }
                         systemLogs.forEach(::appendSystemLog)
@@ -1687,6 +2079,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
                     is Event.Error -> {
                         cancelPendingWaveStart("ERROR:${event.reason}")
+                        cancelPendingWaveStop("ERROR:${event.reason}")
                         val systemLogs = mutableListOf<String>()
                         val captureStatus = if (awaitingCalibrationCaptureResult) {
                             awaitingCalibrationCaptureResult = false
@@ -1719,11 +2112,20 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         } else {
                             null
                         }
+                        val deviceConfigStatus = if (awaitingDeviceConfigWriteResult) {
+                            awaitingDeviceConfigWriteResult = false
+                            systemLogs += "[DEVICE_CONFIG] write error reason=${event.reason}"
+                            text(R.string.device_config_status_send_failed, event.reason)
+                        } else {
+                            null
+                        }
                         _uiState.update {
                             it.copy(
                                 lastAckOrError = text(R.string.message_error, event.reason),
                                 captureStatus = captureStatus ?: it.captureStatus,
                                 writeModelStatus = writeModelStatus ?: it.writeModelStatus,
+                                deviceConfigStatus = deviceConfigStatus ?: it.deviceConfigStatus,
+                                isDeviceConfigWritePending = false,
                             )
                         }
                         systemLogs.forEach(::appendSystemLog)
@@ -1733,6 +2135,162 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    private fun resetMeasurementDisplayState(forcePublish: Boolean = true) {
+        telemetryDisplayBuffer.clear()
+        recentWeightBuffer.clear()
+        latestDistance = null
+        latestWeight = null
+        latestMa12 = null
+        latestMeasurementValid = false
+        latestMeasurementSequence = null
+        lastMeasurementDisplayPublishAtMs = 0L
+        if (forcePublish) {
+            publishMeasurementDisplay(force = true)
+        }
+    }
+
+    private fun resetRawConsoleState(forcePublish: Boolean = true) {
+        rawLogBuffer.clear()
+        lastRawConsolePublishAtMs = 0L
+        if (forcePublish) {
+            publishRawConsole(force = true)
+        }
+    }
+
+    private fun resetSessionStores(forcePublish: Boolean = true) {
+        testSessionStore = null
+        motionSamplingSessionStore = null
+        lastTestSessionPanelPublishAtMs = 0L
+        if (forcePublish) {
+            publishTestSessionPanel(force = true)
+        }
+    }
+
+    private fun publishMeasurementDisplay(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastMeasurementDisplayPublishAtMs < DISPLAY_THROTTLE_MS) return
+        lastMeasurementDisplayPublishAtMs = now
+
+        _measurementDisplayState.value = MeasurementDisplayUiState(
+            distance = latestDistance,
+            weight = latestWeight,
+            ma12 = latestMa12,
+            measurementValid = latestMeasurementValid,
+            lastMeasurementSequence = latestMeasurementSequence,
+            telemetryPoints = telemetryDisplayBuffer.toList(),
+        )
+        _uiState.update {
+            withCaptureAvailability(
+                it.copy(
+                    distance = latestDistance,
+                    weight = latestWeight,
+                    ma12 = latestMa12,
+                    measurementValid = latestMeasurementValid,
+                    lastMeasurementSequence = latestMeasurementSequence,
+                ),
+            )
+        }
+    }
+
+    private fun publishRawConsole(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastRawConsolePublishAtMs < RAW_LOG_PUBLISH_INTERVAL_MS) return
+        lastRawConsolePublishAtMs = now
+        _rawConsoleState.value = RawConsoleUiState(
+            rawLogLines = rawLogBuffer.toList(),
+        )
+    }
+
+    private fun publishTestSessionPanel(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastTestSessionPanelPublishAtMs < TEST_SESSION_PANEL_PUBLISH_INTERVAL_MS) return
+        lastTestSessionPanelPublishAtMs = now
+        _testSessionPanelState.value = TestSessionPanelUiState(
+            session = testSessionStore,
+            notice = _uiState.value.testSessionNotice,
+        )
+    }
+
+    private fun appendTelemetryDisplayPoint(point: TelemetryPointUi) {
+        telemetryDisplayBuffer.addLast(point)
+        trimTelemetryDisplayBuffer()
+    }
+
+    private fun trimTelemetryDisplayBuffer() {
+        val latestTimestampMs = telemetryDisplayBuffer.lastOrNull()?.timestampMs ?: return
+        val minTimestampMs = latestTimestampMs - TELEMETRY_WINDOW_MS
+        while (telemetryDisplayBuffer.isNotEmpty() &&
+            (telemetryDisplayBuffer.firstOrNull()?.timestampMs ?: latestTimestampMs) < minTimestampMs
+        ) {
+            telemetryDisplayBuffer.removeFirst()
+        }
+    }
+
+    private fun rememberRecentWeight(weight: Float) {
+        recentWeightBuffer.addLast(weight)
+        while (recentWeightBuffer.size > 7) {
+            recentWeightBuffer.removeFirst()
+        }
+    }
+
+    private fun recentMovingAverage(windowSize: Int): Float? {
+        if (recentWeightBuffer.size < windowSize) return null
+        return recentWeightBuffer.toList()
+            .takeLast(windowSize)
+            .average()
+            .toFloat()
+    }
+
+    private fun shouldConsumeMeasurementCarrier(sample: Event.StreamSample): Boolean {
+        return when (_uiState.value.protocolMode) {
+            ProtocolMode.LEGACY -> true
+            ProtocolMode.PRIMARY -> sample.carrier == MeasurementCarrier.FORMAL_EVT_STREAM
+            ProtocolMode.UNKNOWN -> sample.carrier == MeasurementCarrier.FORMAL_EVT_STREAM
+        }
+    }
+
+    private fun isHighPriorityLog(line: String): Boolean {
+        return line.contains("EVT:FAULT") ||
+            line.contains("EVT:SAFETY") ||
+            line.contains("[FAULT]") ||
+            line.contains("[TEST_SESSION]") ||
+            line.contains("[DEVICE_CONFIG]") ||
+            line.contains("[LAYER:MEASUREMENT_CONSUME]")
+    }
+
+    private fun mutableMotionSamplingRows(session: MotionSamplingSessionUi): MutableList<MotionSamplingRowUi> {
+        return session.rows as? MutableList<MotionSamplingRowUi> ?: session.rows.toMutableList()
+    }
+
+    private fun mutableTestSessionSamples(session: TestSessionUi): MutableList<TestSessionSampleUi> {
+        return session.samples as? MutableList<TestSessionSampleUi> ?: session.samples.toMutableList()
+    }
+
+    private fun appendTestSessionSample(sample: TestSessionSampleUi) {
+        val session = testSessionStore ?: return
+        if (session.status != TestSessionStatusUi.RECORDING) return
+        val samples = mutableTestSessionSamples(session)
+        samples.add(sample)
+        testSessionStore = session.copy(
+            samples = samples,
+            summary = session.summary.copy(
+                baselineReady = (session.summary.baselineReady == true) || sample.baselineReady,
+                stableWeight = sample.stableWeight ?: session.summary.stableWeight,
+                finalMainState = sample.mainState.ifBlank { session.summary.finalMainState ?: "" },
+                finalAbnormalDurationMs = sample.abnormalDurationMs ?: session.summary.finalAbnormalDurationMs,
+                finalDangerDurationMs = sample.dangerDurationMs ?: session.summary.finalDangerDurationMs,
+                sampleCount = samples.size,
+            ),
+        )
+    }
+
+    private fun appendMotionSamplingRow(row: MotionSamplingRowUi) {
+        val session = motionSamplingSessionStore ?: return
+        val rows = mutableMotionSamplingRows(session)
+        rows.add(row)
+        motionSamplingSessionStore = session.copy(rows = rows)
     }
 
     private fun sendCommand(command: Command, label: String) {
@@ -1777,12 +2335,37 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun UiState.applyWaveRuntimeTransition(nextDeviceState: DeviceState): UiState {
-        val wasRunning = deviceState == DeviceState.RUNNING
-        val isRunning = nextDeviceState == DeviceState.RUNNING
+    private fun currentWaveStateCode(active: Boolean): String = if (active) "RUNNING" else "STOPPED"
+
+    private fun UiState.syncFormalWaveTruth(): UiState {
+        val waveCode = currentWaveStateCode(waveOutputActive)
+        return copy(
+            safetyStatus = safetyStatus.copy(
+                runtimeState = runtimeStateLabel(deviceState.name),
+                runtimeCode = deviceState.name,
+                waveState = waveStateLabel(waveCode),
+                waveCode = waveCode,
+            ),
+        )
+    }
+
+    private fun UiState.syncWaveControlFlags(): UiState {
+        val startPending = !waveOutputActive &&
+            (pendingWaveStartRequest != null || deviceState == DeviceState.RUNNING)
+        val stopPending = waveOutputActive &&
+            (pendingWaveStopRequest != null || deviceState != DeviceState.RUNNING)
+        return copy(
+            isWaveStartPending = startPending,
+            isWaveStopPending = stopPending,
+        )
+    }
+
+    private fun UiState.applyWaveOutputTransition(nextWaveOutputActive: Boolean): UiState {
+        val wasRunning = waveOutputActive
+        val isRunning = nextWaveOutputActive
         return when {
-            // Keep the runtime display aligned with the same RUNNING state the control bar uses.
             !wasRunning && isRunning -> copy(
+                waveOutputActive = true,
                 waveRuntimeStartMs = System.currentTimeMillis(),
                 waveRuntimeElapsedMs = 0L,
             )
@@ -1792,12 +2375,13 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     ?.let { startMs -> (System.currentTimeMillis() - startMs).coerceAtLeast(0L) }
                     ?: waveRuntimeElapsedMs
                 copy(
+                    waveOutputActive = false,
                     waveRuntimeStartMs = null,
                     waveRuntimeElapsedMs = finalElapsedMs,
                 )
             }
 
-            else -> this
+            else -> copy(waveOutputActive = nextWaveOutputActive)
         }
     }
 
@@ -1808,58 +2392,86 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    private fun onStreamSample(distance: Float, weight: Float) {
+    private fun onStreamSample(sample: Event.StreamSample) {
+        if (!shouldConsumeMeasurementCarrier(sample)) {
+            val ignoredSequence = sample.sequence
+            if (ignoredSequence != null && ignoredSequence % MEASUREMENT_CONSUME_LOG_INTERVAL == 0L) {
+                appendSystemLog(
+                    "[LAYER:MEASUREMENT_CONSUME] ignored carrier=${sample.carrier.name} mode=${_uiState.value.protocolMode.name}",
+                )
+            }
+            return
+        }
+
         val now = System.currentTimeMillis()
         if (telemetrySessionStartMs == 0L) {
             telemetrySessionStartMs = now
         }
         lastStreamAtMs = now
         streamWatchdogJob?.cancel()
+        if (_uiState.value.streamWarning != null) {
+            _uiState.update { it.copy(streamWarning = null) }
+        }
+        if (!sample.valid || sample.distance == null || sample.weight == null) {
+            val invalidSequence = sample.sequence
+            recentWeightBuffer.clear()
+            latestDistance = sample.distance
+            latestWeight = sample.weight
+            latestMa12 = sample.ma12.takeIf { sample.ma12Ready }
+            latestMeasurementValid = false
+            latestMeasurementSequence = invalidSequence
+            publishMeasurementDisplay(force = true)
+            if (invalidSequence != null &&
+                invalidSequence % MEASUREMENT_CONSUME_LOG_INTERVAL == 0L
+            ) {
+                appendSystemLog(
+                    "[LAYER:MEASUREMENT_CONSUME] seq=$invalidSequence valid=0 reason=${sample.reason ?: "INVALID"}",
+                )
+            }
+            return
+        }
+
+        val distance = sample.distance ?: return
+        val weight = sample.weight ?: return
+        val sampleSequence = sample.sequence
         val currentState = _uiState.value
         val currentSignals = sessionCaptureSignals
+        rememberRecentWeight(weight)
         val samplingRow = buildMotionSamplingRow(
             state = currentState,
-            distance = distance,
-            weight = weight,
+            sample = sample,
             now = now,
         )
         val point = buildTelemetryPoint(
-            history = currentState.telemetryPoints,
+            measurementSeq = sampleSequence,
+            deviceTimestampMs = sample.timestampMs,
             elapsedMs = now - telemetrySessionStartMs,
             timestampMs = now,
             distance = distance,
             unstableWeight = weight,
+            measurementValid = true,
+            ma12 = sample.ma12.takeIf { sample.ma12Ready },
             stableWeight = currentState.stableWeight.takeIf { currentState.stableWeightActive },
             stableFlag = currentState.stableWeightActive,
+            ma3 = recentMovingAverage(3),
+            ma5 = recentMovingAverage(5),
+            ma7 = recentMovingAverage(7),
         )
         val testSessionSample = buildTestSessionSample(
-            state = currentState,
             telemetryPoint = point,
             signals = currentSignals,
-            sessionStartMs = currentState.testSession?.startedAtMs,
+            sessionStartMs = testSessionStore?.startedAtMs,
         )
-
-        _uiState.update {
-            val nextTelemetryPoints = trimTelemetryPoints(it.telemetryPoints + point)
-            val updatedSamplingSession = if (samplingRow != null && it.motionSamplingSession != null) {
-                it.motionSamplingSession.copy(rows = it.motionSamplingSession.rows + samplingRow)
-            } else {
-                it.motionSamplingSession
-            }
-            val updatedTestSession = if (testSessionSample != null && it.testSession != null) {
-                testSessionManager.appendSample(it.testSession, testSessionSample)
-            } else {
-                it.testSession
-            }
-            it.copy(
-                distance = distance,
-                weight = weight,
-                streamWarning = null,
-                telemetryPoints = nextTelemetryPoints,
-                testSession = updatedTestSession,
-                motionSamplingSession = updatedSamplingSession,
-            )
-        }
+        appendTelemetryDisplayPoint(point)
+        latestDistance = distance
+        latestWeight = weight
+        latestMa12 = sample.ma12.takeIf { sample.ma12Ready }
+        latestMeasurementValid = true
+        latestMeasurementSequence = sampleSequence
+        samplingRow?.let(::appendMotionSamplingRow)
+        testSessionSample?.let(::appendTestSessionSample)
+        publishMeasurementDisplay()
+        publishTestSessionPanel()
 
         if (currentSignals.pendingEventAux != null) {
             sessionCaptureSignals = sessionCaptureSignals.copy(pendingEventAux = null)
@@ -1869,6 +2481,14 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             if (row.sampleIndex % MOTION_SAMPLE_LOG_INTERVAL == 0) {
                 appendSystemLog("[MOTION_SAMPLE] row captured count=${row.sampleIndex}")
             }
+        }
+
+        if (sampleSequence != null &&
+            sampleSequence % MEASUREMENT_CONSUME_LOG_INTERVAL == 0L
+        ) {
+            appendSystemLog(
+                "[LAYER:MEASUREMENT_CONSUME] seq=$sampleSequence valid=1 distance=$distance weight=$weight ma12=${sample.ma12?.toString() ?: "-"}",
+            )
         }
 
         if (_uiState.value.isRecording) {
@@ -1904,18 +2524,15 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         intensity: Int,
     ) {
         val now = System.currentTimeMillis()
-        _uiState.update { state ->
-            state.copy(
-                testSession = testSessionManager.startSession(
-                    nowMs = now,
-                    freqHz = freq,
-                    intensity = intensity,
-                    fallStopEnabled = state.fallStopEnabled,
-                    signals = sessionCaptureSignals,
-                ),
-            )
-        }
-        appendSystemLog("[TEST_SESSION] started id=${_uiState.value.testSession?.sessionId ?: "-"}")
+        testSessionStore = testSessionManager.startSession(
+            nowMs = now,
+            freqHz = freq,
+            intensity = intensity,
+            fallStopEnabled = _uiState.value.fallStopEnabled,
+            signals = sessionCaptureSignals,
+        ).copy(samples = mutableListOf())
+        publishTestSessionPanel(force = true)
+        appendSystemLog("[TEST_SESSION] started id=${testSessionStore?.sessionId ?: "-"}")
     }
 
     private fun confirmPendingWaveStart(
@@ -1924,10 +2541,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         intensity: Int? = null,
     ) {
         val pending = pendingWaveStartRequest ?: return
-        val state = _uiState.value
-        if (state.testSession?.status == TestSessionStatusUi.RECORDING) {
+        if (testSessionStore?.status == TestSessionStatusUi.RECORDING) {
             pendingWaveStartRequest = null
-            _uiState.update { it.copy(isWaveStartPending = false) }
+            _uiState.update { it.syncWaveControlFlags() }
             return
         }
 
@@ -1938,10 +2554,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         pendingWaveStartRequest = null
         _uiState.update {
             it.copy(
-                isWaveStartPending = false,
                 testSessionNotice = text(R.string.test_session_notice_started),
-            )
+            ).syncWaveControlFlags()
         }
+        publishTestSessionPanel(force = true)
         appendSystemLog(
             "[TEST_SESSION] start confirmed source=$source latency_ms=${System.currentTimeMillis() - pending.requestedAtMs}",
         )
@@ -1950,10 +2566,57 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private fun cancelPendingWaveStart(source: String) {
         val pending = pendingWaveStartRequest ?: return
         pendingWaveStartRequest = null
-        _uiState.update { it.copy(isWaveStartPending = false) }
+        _uiState.update { it.syncWaveControlFlags() }
         appendSystemLog(
             "[TEST_SESSION] start pending cleared source=$source latency_ms=${System.currentTimeMillis() - pending.requestedAtMs}",
         )
+    }
+
+    private fun stagePendingWaveStopCompletion(
+        result: String,
+        stopReason: String,
+        stopSource: String,
+    ) {
+        pendingWaveStopCompletion = PendingWaveStopCompletion(
+            result = result,
+            stopReason = stopReason,
+            stopSource = stopSource,
+        )
+        if (!_uiState.value.waveOutputActive) {
+            confirmPendingWaveStop("TRUTH_ALREADY_INACTIVE")
+        }
+    }
+
+    private fun confirmPendingWaveStop(source: String) {
+        val pending = pendingWaveStopRequest
+        val completion = pendingWaveStopCompletion
+        pendingWaveStopRequest = null
+        pendingWaveStopCompletion = null
+        _uiState.update { it.syncWaveControlFlags() }
+        completion?.let {
+            finishTestSessionIfRecording(
+                result = it.result,
+                stopReason = it.stopReason,
+                stopSource = it.stopSource,
+            )
+        }
+        pending?.let {
+            appendSystemLog(
+                "[TEST_SESSION] stop confirmed source=$source latency_ms=${System.currentTimeMillis() - it.requestedAtMs}",
+            )
+        }
+    }
+
+    private fun cancelPendingWaveStop(source: String) {
+        val pending = pendingWaveStopRequest
+        pendingWaveStopRequest = null
+        pendingWaveStopCompletion = null
+        _uiState.update { it.syncWaveControlFlags() }
+        pending?.let {
+            appendSystemLog(
+                "[TEST_SESSION] stop pending cleared source=$source latency_ms=${System.currentTimeMillis() - it.requestedAtMs}",
+            )
+        }
     }
 
     private fun finishTestSessionIfRecording(
@@ -1965,9 +2628,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         finalDangerDurationMs: Long? = sessionCaptureSignals.dangerDurationMs,
     ) {
         var finishedSessionId: String? = null
-        _uiState.update { state ->
-            val session = state.testSession ?: return@update state
-            if (session.status != TestSessionStatusUi.RECORDING) return@update state
+        val session = testSessionStore
+        if (session?.status == TestSessionStatusUi.RECORDING) {
             val finished = testSessionManager.finishSession(
                 session = session,
                 finishedAtMs = System.currentTimeMillis(),
@@ -1979,8 +2641,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 finalDangerDurationMs = finalDangerDurationMs,
             )
             finishedSessionId = finished.sessionId
-            state.copy(testSession = finished)
+            testSessionStore = finished
         }
+        publishTestSessionPanel(force = true)
         finishedSessionId?.let { sessionId ->
             appendSystemLog(
                 "[TEST_SESSION] finished id=$sessionId result=$result stop_reason=$stopReason stop_source=$stopSource",
@@ -1991,11 +2654,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private fun handleSessionLogLine(line: String) {
         when (val event = SessionLogParser.parse(line)) {
             is SessionLogEvent.TestStart -> {
-                confirmPendingWaveStart(
-                    source = "TEST_START",
-                    freq = event.freqHz?.toInt(),
-                    intensity = event.intensity,
-                )
                 sessionCaptureSignals = sessionCaptureSignals.copy(
                     testId = event.testId ?: sessionCaptureSignals.testId,
                     freqHz = event.freqHz ?: sessionCaptureSignals.freqHz,
@@ -2003,14 +2661,14 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     intensityNorm = event.intensityNorm ?: sessionCaptureSignals.intensityNorm,
                     stableWeight = event.stableWeight ?: sessionCaptureSignals.stableWeight,
                 )
-                _uiState.update { state ->
-                    val session = state.testSession
-                    if (session?.status != TestSessionStatusUi.RECORDING) {
-                        state
+                testSessionStore = testSessionStore?.let { session ->
+                    if (session.status != TestSessionStatusUi.RECORDING) {
+                        session
                     } else {
-                        state.copy(testSession = testSessionManager.applyTestStart(session, event))
+                        testSessionManager.applyTestStart(session, event)
                     }
                 }
+                publishTestSessionPanel(force = true)
             }
 
             is SessionLogEvent.MainState -> {
@@ -2034,27 +2692,26 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             is SessionLogEvent.AutoStop -> {
-                cancelPendingWaveStart("AUTO_STOP:${event.stopReason}")
-                finishTestSessionIfRecording(
-                    result = "AUTO_STOP",
-                    stopReason = event.stopReason,
-                    stopSource = event.stopSource,
-                )
                 _uiState.update {
                     it.copy(testSessionNotice = text(R.string.test_session_notice_auto_stopped, event.stopReason))
                 }
+                publishTestSessionPanel(force = true)
             }
 
             is SessionLogEvent.StopSummary -> {
-                cancelPendingWaveStart("STOP_SUMMARY:${event.stopReason}")
-                _uiState.update { state ->
-                    val session = state.testSession ?: return@update state
-                    state.copy(
-                        testSession = testSessionManager.applyStopSummary(
+                testSessionStore = testSessionStore?.let { session ->
+                    if (session.status == TestSessionStatusUi.RECORDING) {
+                        session
+                    } else {
+                        testSessionManager.applyStopSummary(
                             session = session,
                             event = event,
                             observedAtMs = System.currentTimeMillis(),
-                        ),
+                        )
+                    }
+                }
+                _uiState.update {
+                    it.copy(
                         testSessionNotice = text(
                             R.string.test_session_notice_summary_received,
                             event.result,
@@ -2062,6 +2719,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         ),
                     )
                 }
+                publishTestSessionPanel(force = true)
                 sessionCaptureSignals = sessionCaptureSignals.copy(
                     testId = event.testId ?: sessionCaptureSignals.testId,
                     freqHz = event.freqHz ?: sessionCaptureSignals.freqHz,
@@ -2082,23 +2740,26 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun buildTestSessionSample(
-        state: UiState,
         telemetryPoint: TelemetryPointUi,
         signals: SessionCaptureSignals,
         sessionStartMs: Long?,
     ): TestSessionSampleUi? {
-        val session = state.testSession ?: return null
+        val session = testSessionStore ?: return null
         if (session.status != TestSessionStatusUi.RECORDING) return null
         return TestSessionSampleUi(
+            measurementSeq = telemetryPoint.measurementSeq,
+            deviceTimestampMs = telemetryPoint.deviceTimestampMs,
             timestampMs = if (sessionStartMs == null) {
                 0L
             } else {
                 (telemetryPoint.timestampMs - sessionStartMs).coerceAtLeast(0L)
             },
+            measurementValid = telemetryPoint.measurementValid,
             baselineReady = signals.baselineReady,
             stableWeight = signals.stableWeight,
             weight = telemetryPoint.weight,
             distance = telemetryPoint.distance,
+            ma12 = telemetryPoint.ma12,
             ma3 = telemetryPoint.ma3,
             ma5 = telemetryPoint.ma5,
             ma7 = signals.ma7,
@@ -2120,6 +2781,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             delay(NO_STREAM_WARNING_TIMEOUT_MS)
             val state = _uiState.value
             if (!state.isConnected || lastStreamAtMs >= connectAtMs) return@launch
+            if (state.deviceLaserInstalled == false) {
+                appendRawLog("SYS", "INFO measurement plane intentionally absent on no-laser profile")
+                return@launch
+            }
 
             val warning = text(R.string.warning_no_stream_data)
             val debug = "state=${state.connectionState.javaClass.simpleName}, notifyEnabled=${state.notifyEnabled}, " +
@@ -2135,41 +2800,35 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun buildTelemetryPoint(
-        history: List<TelemetryPointUi>,
+        measurementSeq: Long?,
+        deviceTimestampMs: Long?,
         elapsedMs: Long,
         timestampMs: Long,
         distance: Float,
         unstableWeight: Float,
+        measurementValid: Boolean,
+        ma12: Float?,
         stableWeight: Float?,
         stableFlag: Boolean,
+        ma3: Float?,
+        ma5: Float?,
+        ma7: Float?,
     ): TelemetryPointUi {
-        // MA3/5/7 are always computed from the rhythm-weight (unstable weight) stream,
-        // using the same bounded history that the live telemetry chart renders.
-        val weightHistory = history.map(TelemetryPointUi::unstableWeight) + unstableWeight
         return TelemetryPointUi(
+            measurementSeq = measurementSeq,
+            deviceTimestampMs = deviceTimestampMs,
             elapsedMs = elapsedMs,
             timestampMs = timestampMs,
             distance = distance,
             unstableWeight = unstableWeight,
+            measurementValid = measurementValid,
+            ma12 = ma12,
             stableWeight = stableWeight,
-            ma3 = movingAverage(weightHistory, 3),
-            ma5 = movingAverage(weightHistory, 5),
-            ma7 = movingAverage(weightHistory, 7),
+            ma3 = ma3,
+            ma5 = ma5,
+            ma7 = ma7,
             stableFlag = stableFlag,
         )
-    }
-
-    private fun trimTelemetryPoints(points: List<TelemetryPointUi>): List<TelemetryPointUi> {
-        val latestTimestampMs = points.lastOrNull()?.timestampMs ?: return emptyList()
-        val minTimestampMs = latestTimestampMs - TELEMETRY_WINDOW_MS
-        // The chart window is defined in milliseconds end-to-end so the visible
-        // 20-second domain stays aligned with trimming and fills the full width.
-        return points.filter { sample -> sample.timestampMs >= minTimestampMs }
-    }
-
-    private fun movingAverage(values: List<Float>, windowSize: Int): Float? {
-        if (values.size < windowSize) return null
-        return values.takeLast(windowSize).average().toFloat()
     }
 
     private fun formatCapabilityInfo(result: CapabilityResult): String {
@@ -2181,6 +2840,15 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private fun formatCapabilities(capabilities: Event.Capabilities): String {
         if (capabilities.values.isEmpty()) return capabilities.raw
         return capabilities.values.entries.joinToString(", ") { (key, value) -> "$key=$value" }
+    }
+
+    private fun platformModelFromCapabilities(capabilities: Event.Capabilities): PlatformModel? {
+        return parsePlatformModel(capabilities.values["PLATFORM_MODEL"])
+    }
+
+    private fun laserInstalledFromCapabilities(capabilities: Event.Capabilities): Boolean? {
+        parseCapabilityBoolean(capabilities.values["LASER_INSTALLED"])?.let { return it }
+        return platformModelFromCapabilities(capabilities)?.let { it != PlatformModel.BASE }
     }
 
     private fun isMotionSamplingModeEnabled(capabilities: Event.Capabilities): Boolean {
@@ -2201,6 +2869,52 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun parsePlatformModel(raw: String?): PlatformModel? {
+        return when (raw?.trim()?.uppercase()) {
+            "BASE" -> PlatformModel.BASE
+            "PLUS" -> PlatformModel.PLUS
+            "PRO" -> PlatformModel.PRO
+            "ULTRA" -> PlatformModel.ULTRA
+            else -> null
+        }
+    }
+
+    private fun refreshCapabilityAndSnapshot() {
+        if (!_uiState.value.isConnected) return
+        viewModelScope.launch {
+            val probe = runCatching {
+                client.capabilityProbe()
+            }.onFailure { error ->
+                appendSystemLog(
+                    text(
+                        R.string.log_capability_probe_failed,
+                        error.message ?: text(R.string.common_not_available),
+                    ),
+                )
+            }.getOrNull()
+
+            if (probe?.mode == ProtocolMode.PRIMARY) {
+                requestSnapshotRefresh()
+            }
+        }
+    }
+
+    private fun requestSnapshotRefresh() {
+        if (!_uiState.value.isConnected || _uiState.value.protocolMode != ProtocolMode.PRIMARY) return
+        viewModelScope.launch {
+            runCatching {
+                client.send(Command.SnapshotQuery)
+            }.onFailure { error ->
+                appendSystemLog(
+                    text(
+                        R.string.device_truth_refresh_failed,
+                        error.message ?: text(R.string.common_not_available),
+                    ),
+                )
+            }
+        }
+    }
+
     private fun formatNackMessage(reason: String): String {
         val hint = when (reason.uppercase()) {
             "NOT_ARMED" -> text(R.string.nack_hint_not_armed)
@@ -2216,9 +2930,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun startBlockedMessage(state: UiState): String {
-        return when (state.waveStartAvailability(hasPendingStartRequest = pendingWaveStartRequest != null)) {
+        return when (state.waveStartAvailability()) {
             WaveStartAvailabilityUi.DISCONNECTED -> text(R.string.wave_bar_hint_disconnected)
             WaveStartAvailabilityUi.START_PENDING -> text(R.string.wave_bar_hint_start_pending)
+            WaveStartAvailabilityUi.STOP_PENDING -> text(R.string.wave_bar_hint_stop_pending)
             WaveStartAvailabilityUi.RUNNING -> text(R.string.wave_bar_hint_running)
             WaveStartAvailabilityUi.INVALID_PARAMETERS -> text(R.string.wave_bar_hint_invalid_values)
             WaveStartAvailabilityUi.LEFT_PLATFORM_BLOCKED -> text(R.string.wave_bar_hint_left_platform)
@@ -2282,7 +2997,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private fun hasCaptureDistanceSnapshot(state: UiState): Boolean {
         val distance = state.distance
         return distance != null &&
-            distance.isFinite()
+            distance.isFinite() &&
+            state.measurementValid
     }
 
     private fun hasVisibleCaptureQuality(state: UiState): Boolean {
@@ -2292,6 +3008,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             weight != null &&
             distance.isFinite() &&
             weight.isFinite() &&
+            state.measurementValid &&
             state.streamWarning == null
     }
 
@@ -2310,6 +3027,82 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             meaning = text(R.string.safety_meaning_none),
             source = text(R.string.safety_source_none),
             sourceCode = "NONE",
+        )
+    }
+
+    private fun faultCodeFromReason(reasonCode: String): Int? {
+        return when (reasonCode.uppercase()) {
+            "NONE" -> 0
+            "USER_LEFT_PLATFORM" -> 100
+            "FALL_SUSPECTED" -> 101
+            "BLE_DISCONNECTED" -> 102
+            "MEASUREMENT_UNAVAILABLE" -> 200
+            else -> null
+        }
+    }
+
+    private fun faultStatusFromReason(reasonCode: String): FaultStatusUi {
+        val code = faultCodeFromReason(reasonCode)
+        return when {
+            code != null -> faultStatusFromCode(code)
+            reasonCode.equals("NONE", ignoreCase = true) -> FaultStatusUi()
+            else -> FaultStatusUi(
+                code = -1,
+                label = safetyReasonLabel(reasonCode),
+                codeName = reasonCode.uppercase(),
+                severity = FaultSeverityUi.INFO,
+            )
+        }
+    }
+
+    private fun safetyStatusFromSnapshot(
+        reasonCode: String,
+        effectCode: String,
+        runtimeState: DeviceState,
+        waveOutputActive: Boolean,
+    ): SafetyStatusUi {
+        val normalizedReason = reasonCode.ifBlank { "NONE" }
+        val normalizedEffect = effectCode.ifBlank { "NONE" }
+        val meaningRes = when {
+            normalizedReason.equals("BLE_DISCONNECTED", ignoreCase = true) -> R.string.safety_meaning_reconnect_needed
+            normalizedEffect.equals(SafetyEffect.RECOVERABLE_PAUSE.name, ignoreCase = true) -> R.string.safety_meaning_recoverable_pause
+            normalizedEffect.equals(SafetyEffect.ABNORMAL_STOP.name, ignoreCase = true) -> R.string.safety_meaning_abnormal_stop
+            normalizedEffect.equals(SafetyEffect.WARNING_ONLY.name, ignoreCase = true) -> R.string.safety_meaning_warning_only
+            else -> R.string.safety_meaning_none
+        }
+        val severity = when {
+            normalizedReason.equals("BLE_DISCONNECTED", ignoreCase = true) -> FaultSeverityUi.WARNING
+            normalizedEffect.equals(SafetyEffect.RECOVERABLE_PAUSE.name, ignoreCase = true) -> FaultSeverityUi.WARNING
+            normalizedEffect.equals(SafetyEffect.ABNORMAL_STOP.name, ignoreCase = true) -> FaultSeverityUi.BLOCKING
+            normalizedEffect.equals(SafetyEffect.WARNING_ONLY.name, ignoreCase = true) -> FaultSeverityUi.INFO
+            else -> FaultSeverityUi.NONE
+        }
+        val sourceCode = if (normalizedReason.equals("NONE", ignoreCase = true) &&
+            normalizedEffect.equals("NONE", ignoreCase = true)
+        ) {
+            "SNAPSHOT:NONE"
+        } else {
+            "SNAPSHOT"
+        }
+        return SafetyStatusUi(
+            reason = safetyReasonLabel(normalizedReason),
+            reasonCode = normalizedReason,
+            effect = safetyEffectLabel(normalizedEffect),
+            effectCode = normalizedEffect,
+            runtimeState = runtimeStateLabel(runtimeState.name),
+            runtimeCode = runtimeState.name,
+            waveState = waveStateLabel(currentWaveStateCode(waveOutputActive)),
+            waveCode = currentWaveStateCode(waveOutputActive),
+            meaning = text(meaningRes),
+            source = if (sourceCode == "SNAPSHOT:NONE") {
+                text(R.string.safety_source_none)
+            } else {
+                text(R.string.safety_source_protocol)
+            },
+            sourceCode = sourceCode,
+            severity = severity,
+            code = faultCodeFromReason(normalizedReason),
+            raw = "SNAPSHOT",
         )
     }
 
@@ -2586,19 +3379,20 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         var stoppedSessionId: String? = null
         var stoppedRowCount = 0
         val now = System.currentTimeMillis()
-        _uiState.update { state ->
-            if (!state.isMotionSamplingActive) return@update state
-            val session = state.motionSamplingSession ?: return@update state.copy(
-                isMotionSamplingActive = false,
-                motionSamplingStatus = reason,
-            )
+        motionSamplingSessionStore = motionSamplingSessionStore?.let { session ->
             stoppedSessionId = session.sessionId
             stoppedRowCount = session.rows.size
-            state.copy(
-                isMotionSamplingActive = false,
-                motionSamplingSession = session.copy(endedAtMs = now),
-                motionSamplingStatus = reason,
-            )
+            session.copy(endedAtMs = now)
+        }
+        _uiState.update { state ->
+            if (!state.isMotionSamplingActive) {
+                state
+            } else {
+                state.copy(
+                    isMotionSamplingActive = false,
+                    motionSamplingStatus = reason,
+                )
+            }
         }
         stoppedSessionId?.let { sessionId ->
             appendSystemLog("[MOTION_SAMPLE] session stopped id=$sessionId rows=$stoppedRowCount")
@@ -2633,27 +3427,30 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         appendRawLog("SYS", message)
     }
 
-    private fun appendRawLog(direction: String, payload: String) {
+    private fun appendRawLog(direction: String, payload: String, forcePublish: Boolean = false) {
         val line = "${LOG_TIME_FORMATTER.format(LocalTime.now())} [$direction] $payload"
-        _uiState.update { state ->
-            state.copy(rawLogLines = (state.rawLogLines + line).takeLast(MAX_RAW_LOG_LINES))
+        if (rawLogBuffer.size >= MAX_RAW_LOG_LINES) {
+            rawLogBuffer.removeFirst()
         }
+        rawLogBuffer.addLast(line)
+        publishRawConsole(force = forcePublish || isHighPriorityLog(line))
     }
 
     private fun shouldAppendIncomingRawLine(line: String): Boolean {
         if (_uiState.value.verboseStreamLogsEnabled) return true
-        if (line.startsWith("EVT:STREAM:", ignoreCase = true)) return false
+        if (line.startsWith("EVT:STREAM", ignoreCase = true)) return false
         return !CSV_STREAM_REGEX.matches(line.trim())
     }
 
     private fun buildMotionSamplingRow(
         state: UiState,
-        distance: Float,
-        weight: Float,
+        sample: Event.StreamSample,
         now: Long,
     ): MotionSamplingRowUi? {
         if (!state.isMotionSamplingActive) return null
-        val session = state.motionSamplingSession ?: return null
+        val session = motionSamplingSessionStore ?: return null
+        val distance = sample.distance ?: return null
+        val weight = sample.weight ?: return null
         val previous = session.rows.lastOrNull()
         val elapsedMs = now - session.startedAtMs
         val dtSeconds = previous?.let { ((now - it.timestampMs).coerceAtLeast(1L)) / 1000f }
@@ -2670,16 +3467,19 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
         return MotionSamplingRowUi(
             sampleIndex = session.rows.size + 1,
+            measurementSeq = sample.sequence,
+            deviceTimestampMs = sample.timestampMs,
             timestampMs = now,
             elapsedMs = elapsedMs,
             distanceMm = distance,
             liveWeightKg = weight,
+            ma12WeightKg = sample.ma12.takeIf { sample.ma12Ready },
             stableWeightKg = if (state.stableWeightActive) state.stableWeight else null,
-            measurementValid = distance.isFinite() && weight.isFinite(),
+            measurementValid = sample.valid && distance.isFinite() && weight.isFinite(),
             stableVisible = state.stableWeightActive,
             runtimeStateCode = state.deviceState.name,
             waveStateCode = state.safetyStatus.waveCode.ifBlank {
-                if (state.deviceState == DeviceState.RUNNING) "RUNNING" else "UNKNOWN"
+                currentWaveStateCode(state.waveOutputActive)
             },
             safetyStateCode = state.safetyStatus.effectCode.ifBlank { "NONE" },
             safetyReasonCode = state.safetyStatus.reasonCode.ifBlank { "NONE" },
@@ -2746,6 +3546,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         private val NAME_KEYWORDS = listOf("sonicwave", "vibrate")
         private const val NO_STREAM_WARNING_TIMEOUT_MS = 3_000L
+        private const val DISPLAY_THROTTLE_MS = 125L
+        private const val RAW_LOG_PUBLISH_INTERVAL_MS = 200L
+        private const val TEST_SESSION_PANEL_PUBLISH_INTERVAL_MS = 200L
+        private const val MEASUREMENT_CONSUME_LOG_INTERVAL = 50L
         private const val MAX_RAW_LOG_LINES = 200
         private const val TELEMETRY_WINDOW_MS = 20_000L
         private const val MOTION_SAMPLE_LOG_INTERVAL = 50

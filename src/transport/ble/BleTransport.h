@@ -38,7 +38,7 @@ private:
   struct TxMsg {
     enum class Type : uint8_t { LINE, STREAM_FLUSH };
     Type type = Type::LINE;
-    char line[128]{};
+    char line[512]{};
   };
 
   static void controlTaskThunk(void* arg);
@@ -53,9 +53,7 @@ private:
   bool enqueueDisconnectEvent();
   bool enqueueTxLine(const String& s);
   bool enqueueTxLineRaw(const char* s);
-  bool enqueueStreamFlush();
-  bool loadPendingStream(char* out, size_t outSize, uint32_t& version);
-  bool completePendingStream(uint32_t version);
+  bool tryHandleDirectQuery(const String& s);
 
   friend class MyServerCallbacks;
   friend class MyRxCallbacks;
@@ -72,8 +70,4 @@ private:
   TaskHandle_t controlTaskHandle = nullptr;
   TaskHandle_t txTaskHandle = nullptr;
   uint32_t lastAdvRestartMs = 0;
-  portMUX_TYPE streamMux = portMUX_INITIALIZER_UNLOCKED;
-  char latestStreamPayload[128]{};
-  uint32_t latestStreamVersion = 0;
-  bool streamFlushQueued = false;
 };

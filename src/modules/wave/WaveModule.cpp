@@ -73,18 +73,31 @@ void WaveModule::initI2S() {
   pin_config.mck_io_num = I2S_PIN_NO_CHANGE;
 #endif
 
-  i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
-  i2s_set_pin(I2S_PORT, &pin_config);
-  i2s_set_clk(I2S_PORT,
-              SAMPLE_RATE,
-              (i2s_bits_per_sample_t)WAVE_I2S_SAMPLE_BITS,
-              I2S_CHANNEL_STEREO);
-  i2s_zero_dma_buffer(I2S_PORT);
+  const esp_err_t installErr = i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
+  const esp_err_t pinErr = i2s_set_pin(I2S_PORT, &pin_config);
+  const esp_err_t clkErr = i2s_set_clk(I2S_PORT,
+                                       SAMPLE_RATE,
+                                       (i2s_bits_per_sample_t)WAVE_I2S_SAMPLE_BITS,
+                                       I2S_CHANNEL_STEREO);
+  const esp_err_t zeroErr = i2s_zero_dma_buffer(I2S_PORT);
 
   Serial.printf("[I2S] sample_rate=%d bits=%d stereo=LR format=%s\n",
                 SAMPLE_RATE,
                 WAVE_I2S_SAMPLE_BITS,
                 waveCommFormatName());
+  Serial.printf(
+      "[LAYER:OUTPUT_DRIVER] init driver_install=%d set_pin=%d set_clk=%d zero_dma=%d port=%d bclk=%d lrck=%d dout=%d\n",
+      static_cast<int>(installErr),
+      static_cast<int>(pinErr),
+      static_cast<int>(clkErr),
+      static_cast<int>(zeroErr),
+      static_cast<int>(I2S_PORT),
+      I2S_BCLK_PIN,
+      I2S_LRCK_PIN,
+      I2S_DOUT_PIN);
+  Serial.printf(
+      "[LAYER:MEASUREMENT_POINT] output_interface=I2S digital_point=GPIO%d expected_signal=serial_digital_stream analog_sine_requires_downstream_dac_or_amp=1\n",
+      I2S_DOUT_PIN);
 }
 
 uint32_t WaveModule::phaseIncrementFromHz(float hz) {
@@ -108,7 +121,8 @@ float WaveModule::clampUnit(float value) {
   return value;
 }
 
-void WaveModule::begin() {
+void WaveModule::begin(EventBus* eventBus) {
+  event_bus = eventBus;
   initLut();
   initI2S();
   wdtInitIfNeeded();
@@ -135,6 +149,18 @@ void WaveModule::begin() {
 void WaveModule::setParams(float hz, int inten) {
   setFreq(hz);
   setIntensity(inten);
+
+  DebugState debug{};
+  getDebugState(debug);
+  Serial.printf(
+      "[LAYER:ACTUATOR] owner=WaveModule::setParams freq_hz=%.2f intensity=%d display_freq_hz=%.2f target_phase_inc=%lu target_intensity=%d run_requested=%d run_state=%d\n",
+      hz,
+      inten,
+      debug.displayFreqHz,
+      static_cast<unsigned long>(debug.targetPhaseInc),
+      debug.targetIntensity,
+      debug.runRequested ? 1 : 0,
+      debug.runState ? 1 : 0);
 }
 
 void WaveModule::start() {
@@ -147,6 +173,10 @@ void WaveModule::start() {
   portEXIT_CRITICAL(&mux);
 
   Serial.printf("%s [WAVE] start freq=%.2f intensity=%d\n", LogMarker::kWave, hz, intensity);
+  Serial.printf(
+      "[LAYER:ACTUATOR] owner=WaveModule::start action=setEnable(true) freq_hz=%.2f intensity=%d\n",
+      hz,
+      intensity);
   setEnable(true);
 }
 
@@ -160,11 +190,26 @@ void WaveModule::stopSoft() {
 
   if (wasRequested) {
     Serial.printf("%s [WAVE] stop requested\n", LogMarker::kWave);
+    Serial.println("[LAYER:ACTUATOR] owner=WaveModule::stopSoft action=setEnable(false)");
   }
 }
 
 bool WaveModule::isRunning() const {
   return run_state;
+}
+
+bool WaveModule::isOutputActive() const {
+  return run_state;
+}
+
+void WaveModule::getDebugState(DebugState& out) {
+  portENTER_CRITICAL(&mux);
+  out.displayFreqHz = display_freq;
+  out.targetPhaseInc = target_phase_inc;
+  out.targetIntensity = target_intensity;
+  out.runRequested = run_requested;
+  out.runState = run_state;
+  portEXIT_CRITICAL(&mux);
 }
 
 void WaveModule::getSummaryParams(float& hz, int& intensity, float& intensityNormalized) {
@@ -176,10 +221,34 @@ void WaveModule::getSummaryParams(float& hz, int& intensity, float& intensityNor
   intensityNormalized = intensityToAmplitude(intensity);
 }
 
+void WaveModule::publishWaveOutputEvent(bool active) {
+  if (!event_bus) return;
+
+  Event event{};
+  event.type = EventType::WAVE_OUTPUT;
+  event.waveOutputActive = active;
+  event.ts_ms = millis();
+  event_bus->publish(event);
+}
+
 void WaveModule::setEnable(bool en) {
+  bool changed = false;
   portENTER_CRITICAL(&mux);
+  changed = (run_requested != en);
   run_requested = en;
   portEXIT_CRITICAL(&mux);
+
+  if (changed) {
+    DebugState debug{};
+    getDebugState(debug);
+    Serial.printf(
+        "[LAYER:ACTUATOR] owner=WaveModule::setEnable run_requested=%d display_freq_hz=%.2f target_phase_inc=%lu target_intensity=%d run_state=%d\n",
+        debug.runRequested ? 1 : 0,
+        debug.displayFreqHz,
+        static_cast<unsigned long>(debug.targetPhaseInc),
+        debug.targetIntensity,
+        debug.runState ? 1 : 0);
+  }
 }
 
 void WaveModule::setFreq(float new_freq) {
@@ -224,6 +293,9 @@ void WaveModule::audioTask() {
   float current_amplitude = 0.0f;
   bool i2s_active = false;
   bool last_run_state = false;
+  bool last_req_run_logged = false;
+  bool last_should_emit_logged = false;
+  bool output_active_logged = false;
   RampState ramp_state = RampState::IDLE;
   RampState last_logged_amp_state = RampState::IDLE;
   bool freq_ramp_logged = false;
@@ -235,6 +307,7 @@ void WaveModule::audioTask() {
     run_state = running;
     portEXIT_CRITICAL(&mux);
     last_run_state = running;
+    publishWaveOutputEvent(running);
   };
 
   while (true) {
@@ -251,6 +324,16 @@ void WaveModule::audioTask() {
     target_intensity = this->target_intensity;
     req_run = run_requested;
     portEXIT_CRITICAL(&mux);
+
+    if (req_run != last_req_run_logged) {
+      Serial.printf(
+          "[LAYER:ACTUATOR] owner=WaveModule::audioTask run_requested=%d target_phase_inc=%lu target_intensity=%d i2s_active=%d\n",
+          req_run ? 1 : 0,
+          static_cast<unsigned long>(target_phase_inc),
+          target_intensity,
+          i2s_active ? 1 : 0);
+      last_req_run_logged = req_run;
+    }
 
     const float target_amplitude =
         req_run ? intensityToAmplitude(target_intensity) : 0.0f;
@@ -376,9 +459,30 @@ void WaveModule::audioTask() {
         ((req_run && target_amplitude > kAmplitudeEpsilon && target_phase_inc > 0) ||
          should_emit);
 
+    if (should_emit != last_should_emit_logged) {
+      Serial.printf(
+          "[LAYER:OUTPUT_DRIVER] should_emit=%d amplitude_active=%d frequency_active=%d current_amplitude=%.4f current_phase_inc=%lu target_phase_inc=%lu target_intensity=%d\n",
+          should_emit ? 1 : 0,
+          amplitude_active ? 1 : 0,
+          frequency_active ? 1 : 0,
+          current_amplitude,
+          static_cast<unsigned long>(current_phase_inc),
+          static_cast<unsigned long>(target_phase_inc),
+          target_intensity);
+      last_should_emit_logged = should_emit;
+    }
+
     if (should_start_i2s) {
-      i2s_zero_dma_buffer(I2S_PORT);
-      i2s_start(I2S_PORT);
+      const esp_err_t zeroErr = i2s_zero_dma_buffer(I2S_PORT);
+      const esp_err_t startErr = i2s_start(I2S_PORT);
+      Serial.printf(
+          "[LAYER:OUTPUT_DRIVER] action=i2s_start zero_dma=%d start=%d req_run=%d target_phase_inc=%lu target_intensity=%d target_amplitude=%.4f\n",
+          static_cast<int>(zeroErr),
+          static_cast<int>(startErr),
+          req_run ? 1 : 0,
+          static_cast<unsigned long>(target_phase_inc),
+          target_intensity,
+          target_amplitude);
       i2s_active = true;
     }
 
@@ -391,15 +495,26 @@ void WaveModule::audioTask() {
     if (!should_emit) {
       memset(audio_buffer, 0, sizeof(audio_buffer));
       size_t bytes_written = 0;
-      i2s_write(I2S_PORT,
-                audio_buffer,
-                sizeof(audio_buffer),
-                &bytes_written,
-                portMAX_DELAY);
+      const esp_err_t writeErr = i2s_write(I2S_PORT,
+                                           audio_buffer,
+                                           sizeof(audio_buffer),
+                                           &bytes_written,
+                                           portMAX_DELAY);
+      if (output_active_logged) {
+        Serial.printf(
+            "[LAYER:OUTPUT_DRIVER] output_active=0 write=%d bytes_written=%u reason=emit_disabled\n",
+            static_cast<int>(writeErr),
+            static_cast<unsigned>(bytes_written));
+        output_active_logged = false;
+      }
 
       if (!req_run && current_amplitude <= kAmplitudeEpsilon) {
-        i2s_zero_dma_buffer(I2S_PORT);
-        i2s_stop(I2S_PORT);
+        const esp_err_t zeroErr = i2s_zero_dma_buffer(I2S_PORT);
+        const esp_err_t stopErr = i2s_stop(I2S_PORT);
+        Serial.printf(
+            "[LAYER:OUTPUT_DRIVER] action=i2s_stop zero_dma=%d stop=%d reason=req_run_cleared\n",
+            static_cast<int>(zeroErr),
+            static_cast<int>(stopErr));
         i2s_active = false;
         current_amplitude = 0.0f;
         setRunState(false);
@@ -430,7 +545,19 @@ void WaveModule::audioTask() {
     }
 
     size_t bytes_written = 0;
-    i2s_write(I2S_PORT, audio_buffer, sizeof(audio_buffer), &bytes_written, portMAX_DELAY);
+    const esp_err_t writeErr =
+        i2s_write(I2S_PORT, audio_buffer, sizeof(audio_buffer), &bytes_written, portMAX_DELAY);
+    if (!output_active_logged) {
+      Serial.printf(
+          "[LAYER:OUTPUT_DRIVER] output_active=1 write=%d bytes_written=%u sample0=%d req_run=%d phase_inc=%lu intensity=%d\n",
+          static_cast<int>(writeErr),
+          static_cast<unsigned>(bytes_written),
+          static_cast<int>(audio_buffer[0]),
+          req_run ? 1 : 0,
+          static_cast<unsigned long>(current_phase_inc),
+          target_intensity);
+      output_active_logged = true;
+    }
     setRunState(true);
 
     (void)ramp_state;

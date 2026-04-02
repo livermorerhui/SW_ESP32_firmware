@@ -3,6 +3,7 @@
 #include <ModbusMaster.h>
 #include <Preferences.h>
 #include "config/GlobalConfig.h"
+#include "core/DeviceConfig.h"
 #include "core/EventBus.h"
 #include "core/SystemStateMachine.h"
 #include "modules/laser/RhythmStateJudge.h"
@@ -40,6 +41,15 @@ public:
   void setParams(float zero, float factor);
   void getParams(float &zero, float &factor) const;
   float getWeightKg() const;
+  bool isUserPresent() const;
+  bool baselineReady() const;
+  float stableWeightKg() const;
+  PlatformModel platformModel() const;
+  bool laserInstalled() const;
+  bool laserAvailable() const;
+  bool protectionDegraded() const;
+  void getDeviceConfig(DeviceConfigSnapshot& out) const;
+  bool setDeviceConfig(PlatformModel platformModel, bool laserInstalled, String& reason);
   bool getCalibrationModel(CalibrationModel& out) const;
   bool setCalibrationModel(const CalibrationModel& model, String& reason);
   bool captureCalibrationPoint(float referenceWeightKg, CalibrationCapture& out, String& reason);
@@ -48,8 +58,6 @@ public:
 private:
   static void taskThunk(void* arg);
   void taskLoop();
-  bool shouldEmitStream(float distance, float weight, uint32_t now) const;
-  void noteStreamSent(float distance, float weight, uint32_t now);
   bool isDistanceSentinelRaw(uint16_t rawRegister, int16_t signedRaw, const char*& reason) const;
   bool isDistanceValidRaw(int16_t signedRaw, const char*& reason) const;
   void noteDistanceValidity(
@@ -60,6 +68,11 @@ private:
       bool sentinel,
       const char* reason,
       uint32_t now);
+  bool measurementBypassActive() const;
+  void logConfigTruth(const char* source, const char* reason = nullptr);
+  void loadDeviceConfig();
+  void saveDeviceConfig();
+  void applyDeviceConfigRuntimeEffects(const char* source);
   void loadCalibrationModel();
   void saveCalibrationModel();
   void syncLegacyParamsFromModel();
@@ -97,6 +110,25 @@ private:
                         FaultCode stopReason,
                         const RhythmStateUpdateResult& rhythmResult);
   bool computeRunAverage(uint8_t window, float& avgWeight, float& avgDistance) const;
+  void resetMeasurementPlane(const char* reason, bool logReset);
+  void pushMeasurementWeightSample(float weight);
+  bool currentMa12(float& out) const;
+  void publishMeasurementSample(
+      uint32_t now,
+      bool valid,
+      float distance,
+      float weight,
+      const char* reason);
+  void logMeasurementPlaneSummary(
+      uint32_t now,
+      bool valid,
+      float distance,
+      float weight,
+      bool ma12Ready,
+      float ma12,
+      const char* reason,
+      const char* trigger);
+  void logLatestMeasurementPlaneSummary(const char* trigger);
 
   float getMean(const float* values) const;
   float getStdDev(const float* values) const;
@@ -154,6 +186,7 @@ private:
 
   ModbusMaster node;
   Preferences preferences;
+  DeviceConfigSnapshot deviceConfig{};
 
   // 与你原固件保持一致
   float zeroDistance = 0.0f;
@@ -183,14 +216,30 @@ private:
 
   volatile float latestWeightKg = 0.0f;
   bool userPresent = false;
-  bool hasStreamSample = false;
-  uint32_t lastStreamTime = 0;
-  float lastStreamDistance = 0.0f;
-  float lastStreamWeight = 0.0f;
-  bool lastMeasurementValid = true;
+  bool lastMeasurementValid = false;
   uint32_t lastValidityLogMs = 0;
+  bool hasLoggedMeasurementBypassState = false;
+  bool lastLoggedMeasurementBypassState = false;
   const char* lastInvalidReason = nullptr;
   uint32_t calibrationCaptureCounter = 0;
+  float ma12WeightBuffer[MEASUREMENT_MA12_WINDOW]{};
+  uint8_t ma12Head = 0;
+  uint8_t ma12Count = 0;
+  uint32_t measurementSequence = 0;
+  uint32_t measurementPlaneLogStartedAtMs = 0;
+  uint32_t measurementPlaneLogSamples = 0;
+  uint32_t lastInvalidMeasurementEventMs = 0;
+  const char* lastInvalidMeasurementEventReason = nullptr;
+  bool hasLatestMeasurementSample = false;
+  bool latestMeasurementSampleValid = false;
+  float latestMeasurementSampleDistance = 0.0f;
+  float latestMeasurementSampleWeight = 0.0f;
+  bool latestMeasurementSampleMa12Ready = false;
+  float latestMeasurementSampleMa12 = 0.0f;
+  const char* latestMeasurementSampleReason = nullptr;
+  bool hasLoggedMeasurementSummary = false;
+  bool lastLoggedMeasurementSummaryValid = false;
+  const char* lastLoggedMeasurementSummaryReason = nullptr;
   // Primary Judgment Owner：
   // MA7 / deviation / ratio / main_state / duration 统一由 RhythmStateJudge 维护。
   RhythmStateJudge rhythmStateJudge{};

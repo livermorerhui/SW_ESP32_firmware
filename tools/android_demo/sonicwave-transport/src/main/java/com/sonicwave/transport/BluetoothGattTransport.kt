@@ -79,7 +79,7 @@ class BluetoothGattTransport(
     private var writeDeferred: CompletableDeferred<Unit>? = null
 
     private var manualDisconnect = false
-    private val lineBuffer = StringBuilder()
+    private val lineFramer = NotifyLineFramer()
     private val notifySetupLock = Any()
 
     @Volatile
@@ -422,9 +422,7 @@ class BluetoothGattTransport(
         synchronized(notifySetupLock) {
             notifySetupStarted = false
         }
-        synchronized(lineBuffer) {
-            lineBuffer.clear()
-        }
+        lineFramer.clear()
     }
 
     private fun failConnection(message: String) {
@@ -440,21 +438,7 @@ class BluetoothGattTransport(
         Log.d(TAG, "RX chunk len=${bytes.size} payload=$chunkForLog")
         scope.launch { _incomingRawChunks.emit(chunkForLog) }
 
-        val completeLines = mutableListOf<String>()
-        synchronized(lineBuffer) {
-            lineBuffer.append(chunk)
-            while (true) {
-                val newlineIndex = lineBuffer.indexOf("\n")
-                if (newlineIndex < 0) break
-
-                val line = lineBuffer.substring(0, newlineIndex).trimEnd('\r')
-                lineBuffer.delete(0, newlineIndex + 1)
-                if (line.isNotEmpty()) {
-                    completeLines += line
-                }
-            }
-        }
-
+        val completeLines = lineFramer.append(chunk)
         completeLines.forEach { line ->
             Log.d(TAG, "RX line emitted=${escapeForLog(line)}")
             scope.launch { _incomingLines.emit(line) }

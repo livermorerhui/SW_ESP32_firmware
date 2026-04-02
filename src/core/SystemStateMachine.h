@@ -1,9 +1,11 @@
 #pragma once
 #include "Types.h"
 #include "EventBus.h"
+#include "PlatformSnapshotOwner.h"
 #include "config/GlobalConfig.h"
 
 class WaveModule;
+class LaserModule;
 
 struct FallStopActionDecision {
   bool stopCandidateDetected = false;
@@ -19,13 +21,19 @@ struct FallStopActionDecision {
   const char* detail = "fall_detect_only";
 };
 
-class SystemStateMachine {
+class SystemStateMachine : public PlatformSnapshotOwner {
 public:
   void begin(EventBus* eb, WaveModule* waveModule);
+  void attachLaserModule(const LaserModule* laserModule);
+  static const SystemStateMachine* activeInstance();
 
   TopState state() const;
   bool isFaultLocked() const;
   FaultCode activeFault() const;
+  bool runtimeReady() const;
+  FaultCode currentReasonCode() const;
+  SafetySignalKind currentSafetyEffect() const;
+  PlatformSnapshot snapshot() const override;
 
   void onUserOn();
   void onUserOff();
@@ -80,14 +88,24 @@ private:
   void clearPendingStopContext();
   const char* resolvedStopReasonText(FaultCode code, const char* fallback) const;
   VerificationStopSource resolvedStopSource(VerificationStopSource fallback) const;
+  bool laserConfiguredInstalled() const;
+  bool laserlessRuntimeStrategyActive() const;
+  bool effectiveRuntimeReady() const;
+  bool effectiveStartReady() const;
+  bool effectiveLaserAvailable() const;
+  bool effectiveProtectionDegraded() const;
   bool canEnterArmedState() const;
+  void syncSnapshotDecisionContext();
 
   EventBus* bus = nullptr;
   WaveModule* wave = nullptr;
+  const LaserModule* laser = nullptr;
   TopState st = TopState::IDLE;
   FaultCode blocking_fault_code = FaultCode::NONE;
   FaultCode pause_reason_code = FaultCode::NONE;
   FaultCode warning_fault_code = FaultCode::NONE;
+  FaultCode snapshot_reason_code = FaultCode::NONE;
+  SafetySignalKind snapshot_safety_effect = SafetySignalKind::NONE;
 
   uint32_t fault_ms = 0;
   bool clear_window_active = false;
@@ -108,4 +126,6 @@ private:
   VerificationStopSource pending_stop_source = VerificationStopSource::NONE;
   const char* last_stop_reason_text = "NONE";
   VerificationStopSource last_stop_source = VerificationStopSource::NONE;
+
+  static SystemStateMachine* active_instance;
 };

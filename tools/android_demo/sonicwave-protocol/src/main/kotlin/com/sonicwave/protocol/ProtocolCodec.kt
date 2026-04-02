@@ -3,6 +3,11 @@ package com.sonicwave.protocol
 object ProtocolCodec {
     fun encode(command: Command): String = when (command) {
         Command.CapabilityQuery -> "CAP?"
+        Command.SnapshotQuery -> "SNAPSHOT?"
+        is Command.DeviceSetConfig -> {
+            "DEVICE:SET_CONFIG platform_model=${command.platformModel.name}," +
+                "laser_installed=${if (command.laserInstalled) 1 else 0}"
+        }
         is Command.WaveSet -> "WAVE:SET f=${command.freqHz},i=${command.intensity}"
         Command.WaveStart -> "WAVE:START"
         Command.WaveStop -> "WAVE:STOP"
@@ -28,9 +33,12 @@ object ProtocolCodec {
         if (raw.isEmpty()) return null
 
         parseCapabilities(raw)?.let { return it }
+        parseDeviceConfig(raw)?.let { return it }
         parseCalibrationModel(raw)?.let { return it }
         parseCalibrationSetModelResult(raw)?.let { return it }
         parseCalibrationPoint(raw)?.let { return it }
+        parseSnapshot(raw)?.let { return it }
+        parseWaveOutput(raw)?.let { return it }
         parseBaseline(raw)?.let { return it }
         parseStop(raw)?.let { return it }
         parseSafety(raw)?.let { return it }
@@ -72,6 +80,17 @@ object ProtocolCodec {
             else -> emptyMap()
         }
         return Event.Capabilities(values = values, raw = raw)
+    }
+
+    private fun parseDeviceConfig(raw: String): Event.DeviceConfig? {
+        if (!raw.startsWith("ACK:DEVICE_CONFIG", ignoreCase = true)) return null
+        val payload = raw.substringAfter("ACK:DEVICE_CONFIG", "").trim()
+        val kv = parseKeyValuePayload(payload)
+        return Event.DeviceConfig(
+            platformModel = parsePlatformModel(kv["PLATFORM_MODEL"]),
+            laserInstalled = parseBooleanFlag(kv["LASER_INSTALLED"]),
+            raw = raw,
+        )
     }
 
     private fun parseCalibrationModel(raw: String): Event.CalibrationModel? {
@@ -129,6 +148,40 @@ object ProtocolCodec {
     private fun parseState(raw: String): Event.State? {
         val payload = namedPayload(raw, "STATE") ?: return null
         return Event.State(parseDeviceState(payload))
+    }
+
+    private fun parseSnapshot(raw: String): Event.Snapshot? {
+        if (!raw.startsWith("SNAPSHOT:", ignoreCase = true)) return null
+        val payload = raw.substringAfter("SNAPSHOT:", "").trim()
+        val kv = parseKeyValuePayload(payload)
+        return Event.Snapshot(
+            topState = parseDeviceState(kv["TOP_STATE"]),
+            userPresent = parseBooleanFlag(kv["USER_PRESENT"]),
+            runtimeReady = parseBooleanFlag(kv["RUNTIME_READY"]),
+            startReady = parseBooleanFlag(kv["START_READY"]),
+            baselineReady = parseBooleanFlag(kv["BASELINE_READY"]),
+            waveOutputActive = parseBooleanFlag(kv["WAVE_OUTPUT_ACTIVE"]),
+            currentReasonCode = kv["CURRENT_REASON_CODE"],
+            currentSafetyEffect = kv["CURRENT_SAFETY_EFFECT"],
+            stableWeightKg = kv["STABLE_WEIGHT"]?.toFloatOrNull(),
+            currentFrequencyHz = kv["CURRENT_FREQUENCY"]?.toFloatOrNull(),
+            currentIntensity = kv["CURRENT_INTENSITY"]?.toIntOrNull(),
+            platformModel = parsePlatformModel(kv["PLATFORM_MODEL"]),
+            laserInstalled = parseBooleanFlag(kv["LASER_INSTALLED"]),
+            laserAvailable = parseBooleanFlag(kv["LASER_AVAILABLE"]),
+            protectionDegraded = parseBooleanFlag(kv["PROTECTION_DEGRADED"]),
+            raw = raw,
+        )
+    }
+
+    private fun parseWaveOutput(raw: String): Event.WaveOutput? {
+        val payload = namedPayload(raw, "WAVE_OUTPUT") ?: return null
+        val kv = parseKeyValuePayload(payload)
+        val active = parseBooleanFlag(kv["ACTIVE"]) ?: return null
+        return Event.WaveOutput(
+            active = active,
+            raw = raw,
+        )
     }
 
     private fun parseFault(raw: String): Event.Fault? {
@@ -218,16 +271,48 @@ object ProtocolCodec {
     }
 
     private fun parseStream(raw: String): Event.StreamSample? {
-        val namedPayload = namedPayload(raw, "STREAM")
-            ?: payloadAfterPrefix(raw, "CSV")
-        if (namedPayload != null) {
-            return parseCsvPair(namedPayload)?.let { (distance, weight) ->
-                Event.StreamSample(distance = distance, weight = weight)
+        val evtPayload = namedPayload(raw, "STREAM")
+        if (evtPayload != null) {
+            val kv = parseKeyValuePayload(evtPayload)
+            if (
+                kv.containsKey("SEQ") ||
+                kv.containsKey("TS_MS") ||
+                kv.containsKey("VALID") ||
+                kv.containsKey("DISTANCE") ||
+                kv.containsKey("WEIGHT") ||
+                kv.containsKey("MA12")
+            ) {
+                val distance = kv["DISTANCE"]?.toFloatOrNull()
+                val weight = kv["WEIGHT"]?.toFloatOrNull()
+                return Event.StreamSample(
+                    carrier = MeasurementCarrier.FORMAL_EVT_STREAM,
+                    sequence = kv["SEQ"]?.toLongOrNull(),
+                    timestampMs = kv["TS_MS"]?.toLongOrNull(),
+                    distance = distance,
+                    weight = weight,
+                    ma12 = kv["MA12"]?.toFloatOrNull(),
+                    ma12Ready = parseBooleanFlag(kv["MA12_READY"]) ?: kv["MA12"]?.toFloatOrNull()?.let { true } ?: false,
+                    valid = parseBooleanFlag(kv["VALID"]) ?: (distance != null && weight != null),
+                    reason = kv["REASON"],
+                    raw = raw,
+                )
             }
         }
 
-        return parseCsvPair(raw)?.let { (distance, weight) ->
-            Event.StreamSample(distance = distance, weight = weight)
+        val fallbackCsv = payloadAfterPrefix(raw, "CSV") ?: evtPayload ?: raw
+        return parseCsvPair(fallbackCsv)?.let { (distance, weight) ->
+            Event.StreamSample(
+                carrier = MeasurementCarrier.LEGACY_CSV_FALLBACK,
+                sequence = null,
+                timestampMs = null,
+                distance = distance,
+                weight = weight,
+                ma12 = null,
+                ma12Ready = false,
+                valid = true,
+                reason = null,
+                raw = raw,
+            )
         }
     }
 
@@ -319,6 +404,16 @@ object ProtocolCodec {
         return when (raw?.uppercase()) {
             "LINEAR", "1" -> CalibrationModelType.LINEAR
             "QUADRATIC", "2" -> CalibrationModelType.QUADRATIC
+            else -> null
+        }
+    }
+
+    private fun parsePlatformModel(raw: String?): PlatformModel? {
+        return when (raw?.uppercase()) {
+            "BASE" -> PlatformModel.BASE
+            "PLUS" -> PlatformModel.PLUS
+            "PRO" -> PlatformModel.PRO
+            "ULTRA" -> PlatformModel.ULTRA
             else -> null
         }
     }

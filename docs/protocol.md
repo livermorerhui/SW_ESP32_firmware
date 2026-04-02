@@ -136,11 +136,19 @@
 - 含义：当前校准参数上报。
 
 ### 5.5 `EVT:STREAM`
-- 格式：`EVT:STREAM:<dist>,<weight>`
-- 含义：实时调试流（距离、重量）。
+- 正式格式：
+  - valid sample:
+    - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=1 ma12_ready=<0|1> distance=<distance> weight=<weightKg> [ma12=<ma12Kg>]`
+  - invalid sample:
+    - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=0 ma12_ready=0 reason=<READ_FAIL|OUT_OF_RANGE_LOW|...>`
+- 含义：measurement plane 的唯一正式 continuous carrier。
+- 说明：
+  - `distance / weight / ma12 / valid / reason / seq` 属于同一 formal sample。
+  - 裸 CSV `<dist>,<weight>` 仅保留为 legacy/fallback，不再是 primary 协议的正式载体。
 
 常见 uplink 示例（解析前原始帧）：
-- `EVT:STREAM:-22.58,7.42\n`
+- `EVT:STREAM seq=42 ts_ms=1234 valid=1 ma12_ready=1 distance=-22.58 weight=7.42 ma12=7.31\n`
+- `EVT:STREAM seq=43 ts_ms=1260 valid=0 ma12_ready=0 reason=READ_FAIL\n`
 - `EVT:STABLE:65.20\n`
 - `EVT:PARAM:-22.00,1.0000\n`
 - `EVT:STATE RUNNING\n`

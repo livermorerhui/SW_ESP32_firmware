@@ -28,12 +28,13 @@ static constexpr float RAMP_FREQ_STEP_HZ = 0.5f;
 #define MODBUS_BAUD 9600
 #define MODBUS_SLAVE_ID 1
 #define REG_DISTANCE 0x0064
-// 基线建立的体感瓶颈主要来自 stable build 前置采样成本：
-// 旧路径是约 200ms 读一次，且必须等到满 10 个样本后才能评估 latch。
-// 本轮只在“基线尚未建立”的 build 阶段提速，运行态和安全态仍保持原读频，
-// 避免为了追求更快体感而直接改 APP 表现层或放松 leave / danger stop 语义。
-static constexpr uint32_t LASER_READ_INTERVAL_DEFAULT_MS = 200UL;
-static constexpr uint32_t LASER_READ_INTERVAL_STABLE_BUILD_MS = 160UL;
+// Continuous measurement plane now polls independently from the slower
+// baseline/rhythm-state evaluation path. This keeps live distance/weight/MA12
+// samples flowing without forcing the legacy stable/baseline semantics to run
+// at the same cadence.
+static constexpr uint32_t LASER_MEASUREMENT_READ_INTERVAL_MS = 20UL;
+static constexpr uint32_t LASER_STATE_EVAL_INTERVAL_DEFAULT_MS = 200UL;
+static constexpr uint32_t LASER_STATE_EVAL_INTERVAL_STABLE_BUILD_MS = 160UL;
 // The sensor register is currently treated as a signed fixed-point value with
 // two decimal places of displayed distance/displacement resolution.
 static constexpr int16_t LASER_VALID_MEASUREMENT_MIN_RAW = -3570;
@@ -80,6 +81,11 @@ static constexpr float CALIBRATION_QUADRATIC_RMSE_IMPROVEMENT_RATIO = 0.15f;
 #define STREAM_KEEPALIVE_MS 500UL
 #define STREAM_DISTANCE_DELTA_TH 1.0f
 #define STREAM_WEIGHT_DELTA_TH 0.2f
+#define MEASUREMENT_MA12_WINDOW 12
+static constexpr uint32_t MEASUREMENT_INVALID_KEEPALIVE_MS = 250UL;
+static constexpr uint32_t MEASUREMENT_PLANE_LOG_INTERVAL_MS = 2000UL;
+static constexpr uint32_t MEASUREMENT_NO_LASER_BYPASS_LOG_INTERVAL_MS = 5000UL;
+static constexpr bool DEBUG_MEASUREMENT_PLANE_VERBOSE = false;
 #define DEBUG_LASER_STREAM 0
 #define DEBUG_BLE_TX_VERBOSE 0
 
