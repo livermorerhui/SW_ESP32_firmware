@@ -1,5 +1,59 @@
 # Project Status
 
+## 2026-04-02 Phase 2 WP2 Behavior Migration Landed
+
+Phase 2 WP2 behavior migration is now in place on top of the WP1 skeleton.
+
+What changed:
+
+- `runtime zero` now participates in `effective zero`
+- `effective zero` now locks for an occupied cycle to prevent in-cycle zero switching
+- stable enter / live / exit now run on the explicit internal stable contract path
+- `start_ready` is now contract-computed and no longer a direct baseline latch mirror
+
+What is still pending:
+
+- real-device tuning of runtime-zero thresholds
+- real-device tuning of stable exit sensitivity
+- any external exposure of the new internal contract layers
+
+Current interpretation:
+
+- Phase 1 remains the regression baseline
+- Phase 2 behavior migration has started for real, not just structurally
+- next work should prioritize hardware validation and threshold tuning, not another structure pass
+
+## 2026-04-02 Phase 2 WP1 Skeleton Landed
+
+Phase 2 WP1 skeleton implementation is now in place on top of the validated Phase 1 baseline.
+
+What landed in firmware:
+
+- formal dual-zero data model:
+  - `calibration zero`
+  - `runtime zero`
+  - `effective zero`
+- centralized Phase 2 threshold landing zone in `src/config/LaserPhase2Config.h`
+- explicit internal stable contract layers:
+  - `user_present`
+  - `stable_candidate`
+  - `stable_ready_live`
+  - `baseline_ready_latched`
+  - `start_ready`
+
+What did not land yet:
+
+- full dual-zero behavior migration
+- full stable enter/exit migration
+- full `start_ready` semantic decoupling from `baseline_ready`
+- external snapshot/protocol expansion for the new internal layers
+
+Current interpretation:
+
+- Phase 1 remains the regression baseline
+- Phase 2 has started with WP1 structural scaffolding completed
+- current outward behavior is still intentionally bridge-preserved while WP2/WP3 migrate behavior on top of the new skeleton
+
 ## 2026-04-02 Phase 1 Exit Decision
 
 Phase 1 exit is now `Passed` after the on-site validation pass completed on April 2, 2026.

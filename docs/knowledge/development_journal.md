@@ -1,5 +1,66 @@
 # Development Journal
 
+## 2026-04-02 - Phase 2 WP2 Behavior Migration
+
+Summary:
+
+- activated runtime-zero participation in `effective zero`
+- migrated stable behavior onto the explicit stable contract path
+- decoupled `start_ready` from the direct baseline latch mirror
+
+Implementation notes:
+
+- `LaserPhase2Config.h` now enables runtime-zero application and adds start-gate behavior config
+- `LaserModule` now locks `effective zero` on occupied-cycle entry and releases it on occupied-cycle clear
+- `stable_ready_live` now exits through explicit confirmation rules instead of a purely one-hit path
+- `baseline_ready_latched` is now latched from the accepted stable baseline and retained across live-stable drops
+- `start_ready` now requires explicit contract conditions instead of equaling baseline-ready internally
+
+Verification:
+
+- `python3 -m platformio run -e esp32s3`
+
+Documentation notes:
+
+- updated `docs/project_status.md`
+- updated `docs/roadmap_v1.md`
+- added `reports/tasks/phase2_wp2_behavior/`
+
+## 2026-04-02 - Phase 2 WP1 Skeleton Implementation
+
+Summary:
+
+- implemented the Phase 2 WP1 firmware skeleton on top of the closed Phase 1 baseline
+- kept the task strictly inside the ESP32 firmware repo
+- avoided full behavior migration and focused on owner/contract/config scaffolding
+
+Implementation notes:
+
+- added `src/config/LaserPhase2Config.h` as the centralized Phase 2 threshold matrix landing zone
+- added `DualZeroState` in `LaserModule` to formalize:
+  - calibration zero
+  - runtime zero
+  - effective zero
+- added `StableContractState` in `LaserModule` to formalize:
+  - `user_present`
+  - `stable_candidate`
+  - `stable_ready_live`
+  - `baseline_ready_latched`
+  - `start_ready`
+- kept Phase 1 outward behavior stable through bridge rules:
+  - `start_ready` still bridges `baseline_ready_latched`
+  - effective zero still defaults to calibration-zero semantics
+
+Verification:
+
+- `python3 -m platformio run -e esp32s3`
+
+Documentation notes:
+
+- updated `docs/project_status.md`
+- updated `docs/roadmap_v1.md`
+- added `reports/tasks/phase2_wp1_skeleton/`
+
 ## 2026-04-02 - Phase 1 Exit Passed And Phase 2 Approved
 
 Summary:

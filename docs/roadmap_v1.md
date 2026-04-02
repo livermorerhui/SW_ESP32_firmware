@@ -6,14 +6,18 @@ Status recorded on April 2, 2026:
 
 - `Phase 1 Exit Decision = Passed`
 - `Can Proceed to Phase 2 = Yes`
+- `Phase 2 WP1 Skeleton = Passed`
+- `Phase 2 WP2 Behavior Migration = Passed`
 
 Current stage:
 
 - Phase 1 is closed
+- Phase 2 has started
+- Phase 2 behavior migration is in progress
 
 Next stage:
 
-- Phase 2 can start
+- proceed to real-device validation and WP3 tuning on top of the WP2 behavior migration
 - Phase 1 validated behavior should remain the regression baseline while Phase 2 work proceeds
 
 ## 1. v1.0 目标与范围（Scope Freeze）
