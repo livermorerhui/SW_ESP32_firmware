@@ -106,6 +106,7 @@
 
     <string name="section_stable_weight">稳定体重</string>
     <string name="stable_indicator_active">最近一次固件稳定事件；当前窗口已收敛到可以输出 EVT:STABLE。</string>
+    <string name="stable_indicator_held">基线仍被保留用于 ready 与分析，但当前实时窗口并不处于 stable。</string>
     <string name="stable_indicator_idle">等待实时信号收敛后输出下一次 EVT:STABLE。</string>
 
     <string name="section_telemetry_chart">遥测曲线</string>

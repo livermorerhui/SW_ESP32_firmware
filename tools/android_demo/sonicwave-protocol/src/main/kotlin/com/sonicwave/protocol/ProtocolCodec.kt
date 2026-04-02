@@ -197,6 +197,7 @@ object ProtocolCodec {
         return Event.BaselineMain(
             startReady = parseBooleanFlag(kv["START_READY"]),
             baselineReady = parseBooleanFlag(kv["BASELINE_READY"]) ?: false,
+            stableWeightActive = parseBooleanFlag(kv["STABLE_WEIGHT_ACTIVE"]),
             stableWeightKg = kv["STABLE_WEIGHT"]?.toFloatOrNull(),
             ma7WeightKg = kv["MA7"]?.toFloatOrNull(),
             deviationKg = kv["DEVIATION"]?.toFloatOrNull(),

@@ -33,7 +33,8 @@ struct LaserStableThresholdConfig {
   float exitLeaveThresholdKg = LEAVE_TH;
   float exitWeightDeltaKg = STABLE_REARM_WEIGHT_DELTA_TH;
   float exitDistanceDelta = STABLE_REARM_DISTANCE_DELTA_TH;
-  uint8_t exitConfirmSamples = 2;
+  uint8_t exitLeaveConfirmSamples = STABLE_EXIT_CONFIRM_SAMPLES_LEAVE;
+  uint8_t exitMovementConfirmSamples = STABLE_EXIT_CONFIRM_SAMPLES_MOVEMENT;
   uint8_t invalidGraceSamples = STABLE_INVALID_GRACE_SAMPLES;
 };
 

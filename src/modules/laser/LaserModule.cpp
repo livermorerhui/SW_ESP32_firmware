@@ -1,6 +1,7 @@
 #include "LaserModule.h"
 #include "core/LogMarkers.h"
 #include <math.h>
+#include <string.h>
 #include "modules/wave/WaveModule.h"
 
 namespace {
@@ -1177,6 +1178,13 @@ bool LaserModule::shouldClearLatchedStable(float distance, float weight, const c
   return false;
 }
 
+uint8_t LaserModule::stableExitConfirmSamplesForReason(const char* reason) const {
+  if (reason && strcmp(reason, "leave_threshold") == 0) {
+    return phase2Thresholds.stable.exitLeaveConfirmSamples;
+  }
+  return phase2Thresholds.stable.exitMovementConfirmSamples;
+}
+
 bool LaserModule::shouldUseFastStableBuildReadInterval() const {
   const TopState currentTopState = sm ? sm->state() : TopState::IDLE;
   const bool baselineReady = stableContract.baselineReadyLatched;
@@ -1273,6 +1281,7 @@ void LaserModule::publishBaselineMainVerification(
   e.ts_ms = now;
   e.startReady = stableContract.startReady;
   e.baselineReady = result.evidence.baselineReady;
+  e.stableWeightActive = stableContract.stableReadyLive;
   e.stableWeightKg = result.evidence.baselineWeightKg;
   e.ma7WeightKg = result.evidence.ma7WeightKg;
   e.deviationKg = result.evidence.deviationKg;
@@ -1617,7 +1626,7 @@ void LaserModule::updateStableState(float distance, float weight, uint32_t now) 
         stableExitConfirmCount = 1;
       }
 
-      if (stableExitConfirmCount >= phase2Thresholds.stable.exitConfirmSamples) {
+      if (stableExitConfirmCount >= stableExitConfirmSamplesForReason(clearReason)) {
         resetStableTracking(clearReason, true);
       }
       if (currentTopState != TopState::RUNNING &&

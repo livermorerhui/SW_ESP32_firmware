@@ -1587,7 +1587,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 deviceStartReady = event.startReady ?: it.deviceStartReady,
                                 deviceBaselineReady = event.baselineReady,
                                 stableWeight = event.stableWeightKg ?: it.stableWeight,
-                                stableWeightActive = event.baselineReady,
+                                stableWeightActive = event.stableWeightActive ?: it.stableWeightActive,
                             ).syncWaveControlFlags()
                         }
                     }
@@ -1790,8 +1790,16 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 runtimeState = nextDeviceState,
                                 waveOutputActive = nextWaveOutputActive,
                             ),
-                            stableWeight = event.stableWeightKg ?: it.stableWeight,
-                            stableWeightActive = event.baselineReady ?: it.stableWeightActive,
+                            stableWeight = resolveSnapshotStableWeightValue(
+                                snapshotStableWeightKg = event.stableWeightKg,
+                                snapshotBaselineReady = event.baselineReady,
+                                currentStableWeight = it.stableWeight,
+                            ),
+                            stableWeightActive = resolveSnapshotStableWeightActive(
+                                snapshotStableWeightKg = event.stableWeightKg,
+                                snapshotBaselineReady = event.baselineReady,
+                                currentStableWeightActive = it.stableWeightActive,
+                            ),
                         ).syncFormalWaveTruth().syncWaveControlFlags()
                     }.also {
                         reconcileTestSessionWithFormalWaveTruth(
@@ -3494,6 +3502,36 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun clearStableBaseline() {
         _uiState.update { it.copy(stableWeight = null, stableWeightActive = false) }
+    }
+
+    private fun resolveSnapshotStableWeightValue(
+        snapshotStableWeightKg: Float?,
+        snapshotBaselineReady: Boolean?,
+        currentStableWeight: Float?,
+    ): Float? {
+        if (snapshotStableWeightKg != null && snapshotStableWeightKg > 0.0f) {
+            return snapshotStableWeightKg
+        }
+        return if (snapshotBaselineReady == false) {
+            null
+        } else {
+            currentStableWeight
+        }
+    }
+
+    private fun resolveSnapshotStableWeightActive(
+        snapshotStableWeightKg: Float?,
+        snapshotBaselineReady: Boolean?,
+        currentStableWeightActive: Boolean,
+    ): Boolean {
+        if (snapshotStableWeightKg != null) {
+            return snapshotBaselineReady == true && snapshotStableWeightKg > 0.0f
+        }
+        return if (snapshotBaselineReady == false) {
+            false
+        } else {
+            currentStableWeightActive
+        }
     }
 
     private fun sanitizeWaveInput(value: String): String {

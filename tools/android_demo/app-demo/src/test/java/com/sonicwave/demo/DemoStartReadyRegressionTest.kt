@@ -80,13 +80,26 @@ class DemoStartReadyRegressionTest {
     }
 
     @Test
-    fun startButtonBecomesReadyWithStableWeightAndRecoveredStartReady() {
+    fun startButtonBecomesReadyWithStableWeightEvidenceAndRecoveredStartReady() {
         val state = UiState(
             isConnected = true,
             deviceStartReady = true,
             deviceBaselineReady = true,
             stableWeight = 68.4f,
-            stableWeightActive = true,
+            stableWeightActive = false,
+        )
+
+        assertTrue(state.canStartWave())
+    }
+
+    @Test
+    fun liveStableLampCanTurnOffWithoutBlockingRecoveredStartReady() {
+        val state = UiState(
+            isConnected = true,
+            deviceStartReady = true,
+            deviceBaselineReady = true,
+            stableWeight = 68.4f,
+            stableWeightActive = false,
         )
 
         assertTrue(state.canStartWave())

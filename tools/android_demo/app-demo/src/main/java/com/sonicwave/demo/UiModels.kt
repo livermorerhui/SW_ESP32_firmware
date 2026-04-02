@@ -362,6 +362,10 @@ fun UiState.hasValidWaveInputs(): Boolean {
         intensityValue in 0..120
 }
 
+fun UiState.hasStableWeightEvidence(): Boolean {
+    return stableWeight != null && deviceBaselineReady == true
+}
+
 fun UiState.waveStartAvailability(): WaveStartAvailabilityUi {
     val leftPlatformBlocked = safetyStatus.reasonCode.equals("USER_LEFT_PLATFORM", ignoreCase = true) ||
         deviceReasonCode.equals("USER_LEFT_PLATFORM", ignoreCase = true) ||
@@ -373,8 +377,8 @@ fun UiState.waveStartAvailability(): WaveStartAvailabilityUi {
         faultStatus.severity == FaultSeverityUi.BLOCKING
     val safetyBlocked = safetyStatus.effectCode == SafetyEffect.RECOVERABLE_PAUSE.name ||
         deviceSafetyEffectCode == SafetyEffect.RECOVERABLE_PAUSE.name
-    val hasStableWeight = stableWeightActive && stableWeight != null
-    val startReady = hasStableWeight &&
+    val hasStableEvidence = hasStableWeightEvidence()
+    val startReady = hasStableEvidence &&
         deviceStartReady == true &&
         deviceBaselineReady == true
 

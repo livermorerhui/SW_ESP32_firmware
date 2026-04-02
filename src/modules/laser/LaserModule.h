@@ -137,6 +137,7 @@ private:
   void latchStable(uint32_t now, const char* mode, float stddev);
   void resetStableTracking(const char* reason, bool logIfActive);
   bool shouldClearLatchedStable(float distance, float weight, const char*& reason) const;
+  uint8_t stableExitConfirmSamplesForReason(const char* reason) const;
   bool shouldUseFastStableBuildReadInterval() const;
   bool shouldLatchStableEarly(float latestWeight, float& stddev, float& latestDelta) const;
   void logRhythmStateUpdate(const RhythmStateUpdateResult& result) const;

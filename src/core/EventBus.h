@@ -28,6 +28,7 @@ struct Event {
   // 只有 EventType::BASELINE_MAIN / STOP 会使用这些字段。
   bool startReady = false;
   bool baselineReady = false;
+  bool stableWeightActive = false;
   float stableWeightKg = 0.0f;
   float ma7WeightKg = 0.0f;
   float deviationKg = 0.0f;

@@ -366,6 +366,8 @@ public:
         s += " ";
         s += "baseline_ready=";
         s += e.baselineReady ? "1" : "0";
+        s += " stable_weight_active=";
+        s += e.stableWeightActive ? "1" : "0";
         s += " stable_weight=";
         s += String(e.stableWeightKg, 2);
         s += " ma7=";

@@ -151,11 +151,12 @@ class ProtocolCodecTest {
     @Test
     fun decodeEvtBaselineCarriesRecoverableStartReadyTruth() {
         val event = ProtocolCodec.decode(
-            "EVT:BASELINE start_ready=1 baseline_ready=1 stable_weight=68.40 ma7=68.42 deviation=0.02 ratio=0.0003 main_state=NORMAL abnormal_duration_ms=0 danger_duration_ms=0 stop_reason=NONE stop_source=NONE",
+            "EVT:BASELINE start_ready=1 baseline_ready=1 stable_weight_active=0 stable_weight=68.40 ma7=68.42 deviation=0.02 ratio=0.0003 main_state=NORMAL abnormal_duration_ms=0 danger_duration_ms=0 stop_reason=NONE stop_source=NONE",
         )
         val baseline = assertIs<Event.BaselineMain>(event)
         assertEquals(true, baseline.startReady)
         assertEquals(true, baseline.baselineReady)
+        assertEquals(false, baseline.stableWeightActive)
         assertEquals(68.4f, baseline.stableWeightKg)
     }
 
