@@ -39,6 +39,7 @@ import kotlinx.coroutines.sync.withLock
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.ArrayDeque
+import kotlin.math.roundToInt
 
 sealed interface ScanState {
     data object Idle : ScanState
@@ -179,6 +180,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     private var selectedDeviceName: String? = null
     private var streamWatchdogJob: Job? = null
+    private var waveTruthRefreshJob: Job? = null
     private var lastStreamAtMs: Long = 0L
     private var telemetrySessionStartMs: Long = 0L
     private var latestDistance: Float? = null
@@ -292,11 +294,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         sessionCaptureSignals = SessionCaptureSignals()
         client.stopScan()
         streamWatchdogJob?.cancel()
+        waveTruthRefreshJob?.cancel()
         telemetrySessionStartMs = 0L
         lastStreamAtMs = 0L
         resetMeasurementDisplayState()
         resetRawConsoleState()
-        resetSessionStores()
+        resetSessionStores(clearTestSession = false)
 
         _uiState.update {
             resetCalibrationSessionState(
@@ -445,11 +448,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         client.disconnect()
         selectedDeviceName = null
         streamWatchdogJob?.cancel()
+        waveTruthRefreshJob?.cancel()
         stopRecordingIfActive(text(R.string.recording_stopped_disconnect))
         stopMotionSamplingIfActive(text(R.string.motion_sampling_status_stopped_disconnect))
         telemetrySessionStartMs = 0L
         resetMeasurementDisplayState()
-        resetSessionStores()
+        resetSessionStores(clearTestSession = false)
         _uiState.update {
             resetCalibrationSessionState(
                 withCaptureAvailability(
@@ -747,6 +751,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 client.send(Command.WaveSet(freqHz = freq, intensity = intensity))
                 client.send(Command.WaveStart)
             }.onSuccess {
+                schedulePendingWaveTruthRefresh("WAVE_START_SENT")
                 _uiState.update {
                     it.copy(
                         lastAckOrError = text(R.string.message_sent_wave_start_bundle),
@@ -784,10 +789,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             ).syncWaveControlFlags()
         }
         publishTestSessionPanel(force = true)
+        schedulePendingWaveTruthRefresh("WAVE_STOP_REQUESTED")
         viewModelScope.launch {
             runCatching {
                 client.send(Command.WaveStop)
             }.onSuccess {
+                schedulePendingWaveTruthRefresh("WAVE_STOP_SENT")
                 _uiState.update {
                     it.copy(lastAckOrError = text(R.string.message_sent, "WAVE:STOP"))
                 }
@@ -1483,6 +1490,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     pendingWaveStartRequest = null
                     pendingWaveStopRequest = null
                     pendingWaveStopCompletion = null
+                    waveTruthRefreshJob?.cancel()
                     if (disconnectRequested) {
                         disconnectRequested = false
                     }
@@ -1491,7 +1499,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     stopRecordingIfActive(text(R.string.recording_stopped_disconnect))
                     stopMotionSamplingIfActive(text(R.string.motion_sampling_status_stopped_disconnect))
                     resetMeasurementDisplayState()
-                    resetSessionStores()
+                    resetSessionStores(clearTestSession = false)
                     _uiState.update { state ->
                         resetCalibrationSessionState(
                             withCaptureAvailability(
@@ -1576,6 +1584,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         )
                         _uiState.update {
                             it.copy(
+                                deviceStartReady = event.startReady ?: it.deviceStartReady,
                                 deviceBaselineReady = event.baselineReady,
                                 stableWeight = event.stableWeightKg ?: it.stableWeight,
                                 stableWeightActive = event.baselineReady,
@@ -1605,6 +1614,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             stopReason = event.stopReason,
                             stopSource = event.stopSource,
                         )
+                        schedulePendingWaveTruthRefresh("EVT_STOP")
                         _uiState.update { it.syncWaveControlFlags() }
                     }
 
@@ -1691,6 +1701,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             stopReason = faultStatus.codeName,
                             stopSource = sessionCaptureSignals.stopSource,
                         )
+                        schedulePendingWaveTruthRefresh("EVT_FAULT")
                     }
 
                     is Event.Safety -> {
@@ -1743,6 +1754,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 stopReason = event.reason,
                                 stopSource = sessionCaptureSignals.stopSource,
                             )
+                            schedulePendingWaveTruthRefresh("EVT_SAFETY")
                         }
                     }
 
@@ -1752,6 +1764,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         } else {
                             it.deviceState
                         }
+                        val startReadyMergeContext = currentSnapshotStartReadyMergeContext()
                         val nextWaveOutputActive = event.waveOutputActive ?: it.waveOutputActive
                         val nextReasonCode = event.currentReasonCode ?: it.deviceReasonCode
                         val nextSafetyEffectCode = event.currentSafetyEffect ?: it.deviceSafetyEffectCode
@@ -1762,7 +1775,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             deviceLaserAvailable = event.laserAvailable,
                             deviceProtectionDegraded = event.protectionDegraded,
                             deviceRuntimeReady = event.runtimeReady,
-                            deviceStartReady = event.startReady,
+                            deviceStartReady = resolveSnapshotStartReady(
+                                currentStartReady = it.deviceStartReady,
+                                snapshotStartReady = event.startReady,
+                                mergeContext = startReadyMergeContext,
+                            ),
                             deviceBaselineReady = event.baselineReady,
                             deviceReasonCode = nextReasonCode,
                             deviceSafetyEffectCode = nextSafetyEffectCode,
@@ -1777,12 +1794,16 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             stableWeightActive = event.baselineReady ?: it.stableWeightActive,
                         ).syncFormalWaveTruth().syncWaveControlFlags()
                     }.also {
-                        if (_uiState.value.waveOutputActive) {
-                            cancelPendingWaveStop("SNAPSHOT_WAVE_OUTPUT_ACTIVE")
-                            confirmPendingWaveStart(source = "SNAPSHOT_WAVE_OUTPUT_ACTIVE")
-                        } else if (_uiState.value.deviceState != DeviceState.RUNNING) {
-                            confirmPendingWaveStop("SNAPSHOT_WAVE_OUTPUT_INACTIVE")
-                        }
+                        reconcileTestSessionWithFormalWaveTruth(
+                            source = if (_uiState.value.waveOutputActive) {
+                                "SNAPSHOT_WAVE_OUTPUT_ACTIVE"
+                            } else {
+                                "SNAPSHOT_WAVE_OUTPUT_INACTIVE"
+                            },
+                            waveOutputActive = _uiState.value.waveOutputActive,
+                            freqHz = event.currentFrequencyHz,
+                            intensity = event.currentIntensity,
+                        )
                     }
 
                     is Event.WaveOutput -> _uiState.update {
@@ -1790,12 +1811,14 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             .syncFormalWaveTruth()
                             .syncWaveControlFlags()
                     }.also {
-                        if (event.active) {
-                            cancelPendingWaveStop("EVT_WAVE_OUTPUT_ACTIVE")
-                            confirmPendingWaveStart(source = "EVT_WAVE_OUTPUT_ACTIVE")
-                        } else if (_uiState.value.deviceState != DeviceState.RUNNING) {
-                            confirmPendingWaveStop("EVT_WAVE_OUTPUT_INACTIVE")
-                        }
+                        reconcileTestSessionWithFormalWaveTruth(
+                            source = if (event.active) {
+                                "EVT_WAVE_OUTPUT_ACTIVE"
+                            } else {
+                                "EVT_WAVE_OUTPUT_INACTIVE"
+                            },
+                            waveOutputActive = event.active,
+                        )
                     }
 
                     is Event.CalibrationPoint -> _uiState.update { state ->
@@ -2159,9 +2182,17 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun resetSessionStores(forcePublish: Boolean = true) {
-        testSessionStore = null
-        motionSamplingSessionStore = null
+    private fun resetSessionStores(
+        clearTestSession: Boolean = true,
+        clearMotionSamplingSession: Boolean = true,
+        forcePublish: Boolean = true,
+    ) {
+        if (clearTestSession) {
+            testSessionStore = null
+        }
+        if (clearMotionSamplingSession) {
+            motionSamplingSessionStore = null
+        }
         lastTestSessionPanelPublishAtMs = 0L
         if (forcePublish) {
             publishTestSessionPanel(force = true)
@@ -2543,6 +2574,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val pending = pendingWaveStartRequest ?: return
         if (testSessionStore?.status == TestSessionStatusUi.RECORDING) {
             pendingWaveStartRequest = null
+            cancelPendingWaveTruthRefreshIfIdle()
             _uiState.update { it.syncWaveControlFlags() }
             return
         }
@@ -2552,6 +2584,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             intensity = intensity ?: pending.intensity,
         )
         pendingWaveStartRequest = null
+        cancelPendingWaveTruthRefreshIfIdle()
         _uiState.update {
             it.copy(
                 testSessionNotice = text(R.string.test_session_notice_started),
@@ -2566,6 +2599,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private fun cancelPendingWaveStart(source: String) {
         val pending = pendingWaveStartRequest ?: return
         pendingWaveStartRequest = null
+        cancelPendingWaveTruthRefreshIfIdle()
         _uiState.update { it.syncWaveControlFlags() }
         appendSystemLog(
             "[TEST_SESSION] start pending cleared source=$source latency_ms=${System.currentTimeMillis() - pending.requestedAtMs}",
@@ -2592,6 +2626,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val completion = pendingWaveStopCompletion
         pendingWaveStopRequest = null
         pendingWaveStopCompletion = null
+        cancelPendingWaveTruthRefreshIfIdle()
         _uiState.update { it.syncWaveControlFlags() }
         completion?.let {
             finishTestSessionIfRecording(
@@ -2611,11 +2646,128 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val pending = pendingWaveStopRequest
         pendingWaveStopRequest = null
         pendingWaveStopCompletion = null
+        cancelPendingWaveTruthRefreshIfIdle()
         _uiState.update { it.syncWaveControlFlags() }
         pending?.let {
             appendSystemLog(
                 "[TEST_SESSION] stop pending cleared source=$source latency_ms=${System.currentTimeMillis() - it.requestedAtMs}",
             )
+        }
+    }
+
+    private fun ensureTestSessionStartedFromFormalTruth(
+        source: String,
+        freqHz: Float? = null,
+        intensity: Int? = null,
+    ) {
+        if (testSessionStore?.status == TestSessionStatusUi.RECORDING) return
+        startNewTestSession(
+            freq = resolveFormalSessionFrequency(freqHz),
+            intensity = intensity ?: sessionCaptureSignals.intensity ?: _uiState.value.intensity,
+        )
+        _uiState.update {
+            it.copy(
+                testSessionNotice = text(R.string.test_session_notice_started),
+            ).syncWaveControlFlags()
+        }
+        publishTestSessionPanel(force = true)
+        appendSystemLog("[TEST_SESSION] formal truth started source=$source")
+    }
+
+    private fun reconcileTestSessionWithFormalWaveTruth(
+        source: String,
+        waveOutputActive: Boolean,
+        freqHz: Float? = null,
+        intensity: Int? = null,
+    ) {
+        if (waveOutputActive) {
+            cancelPendingWaveStop("${source}_ACTIVE")
+            confirmPendingWaveStart(
+                source = source,
+                freq = freqHz?.roundToInt(),
+                intensity = intensity,
+            )
+            ensureTestSessionStartedFromFormalTruth(
+                source = source,
+                freqHz = freqHz,
+                intensity = intensity,
+            )
+            return
+        }
+
+        if (
+            testSessionStore?.status == TestSessionStatusUi.RECORDING ||
+            pendingWaveStopRequest != null ||
+            pendingWaveStopCompletion != null
+        ) {
+            ensurePendingWaveStopCompletionForInactiveTruth()
+            confirmPendingWaveStop(source)
+        }
+    }
+
+    private fun ensurePendingWaveStopCompletionForInactiveTruth() {
+        if (pendingWaveStopCompletion != null || testSessionStore?.status != TestSessionStatusUi.RECORDING) return
+        val stopSource = sessionCaptureSignals.stopSource
+        stagePendingWaveStopCompletion(
+            result = if (stopSource == "USER_MANUAL_OTHER") {
+                "NORMAL_STOP"
+            } else {
+                "AUTO_STOP"
+            },
+            stopReason = sessionCaptureSignals.stopReason.takeUnless { it.isBlank() || it == "NONE" }
+                ?: "WAVE_OUTPUT_INACTIVE",
+            stopSource = stopSource,
+        )
+    }
+
+    private fun resolveFormalSessionFrequency(freqHz: Float?): Int {
+        return freqHz?.roundToInt()
+            ?: sessionCaptureSignals.freqHz?.roundToInt()
+            ?: _uiState.value.freq
+    }
+
+    private fun hasPendingWaveLifecycleTruthRefresh(): Boolean {
+        return pendingWaveStartRequest != null ||
+            pendingWaveStopRequest != null ||
+            pendingWaveStopCompletion != null
+    }
+
+    private fun currentSnapshotStartReadyMergeContext(): SnapshotStartReadyMergeContext {
+        return if (hasPendingWaveLifecycleTruthRefresh()) {
+            SnapshotStartReadyMergeContext.CONTROL_LIFECYCLE_REFRESH
+        } else {
+            SnapshotStartReadyMergeContext.AUTHORITATIVE
+        }
+    }
+
+    private fun schedulePendingWaveTruthRefresh(source: String) {
+        if (!_uiState.value.isConnected || _uiState.value.protocolMode != ProtocolMode.PRIMARY) return
+        waveTruthRefreshJob?.cancel()
+        waveTruthRefreshJob = viewModelScope.launch {
+            repeat(PENDING_WAVE_TRUTH_REFRESH_ATTEMPTS) {
+                if (!_uiState.value.isConnected || _uiState.value.protocolMode != ProtocolMode.PRIMARY) {
+                    return@launch
+                }
+                if (!hasPendingWaveLifecycleTruthRefresh()) {
+                    return@launch
+                }
+                runCatching {
+                    client.send(Command.SnapshotQuery)
+                }.onFailure { error ->
+                    appendSystemLog(
+                        "[TEST_SESSION] truth refresh failed source=$source reason=${error.message ?: "UNKNOWN"}",
+                    )
+                    return@launch
+                }
+                delay(PENDING_WAVE_TRUTH_REFRESH_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun cancelPendingWaveTruthRefreshIfIdle() {
+        if (!hasPendingWaveLifecycleTruthRefresh()) {
+            waveTruthRefreshJob?.cancel()
+            waveTruthRefreshJob = null
         }
     }
 
@@ -3535,6 +3687,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         streamWatchdogJob?.cancel()
+        waveTruthRefreshJob?.cancel()
         runCatching {
             recordingSession?.let { recorder.stopSession(it) }
         }
@@ -3557,7 +3710,30 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         private const val WAVE_FREQUENCY_MAX = 50
         private const val WAVE_INTENSITY_MIN = 0
         private const val WAVE_INTENSITY_MAX = 120
+        private const val PENDING_WAVE_TRUTH_REFRESH_ATTEMPTS = 4
+        private const val PENDING_WAVE_TRUTH_REFRESH_INTERVAL_MS = 250L
         private val CSV_STREAM_REGEX = Regex("""^-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?$""")
         private val LOG_TIME_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
+    }
+}
+
+internal enum class SnapshotStartReadyMergeContext {
+    AUTHORITATIVE,
+    CONTROL_LIFECYCLE_REFRESH,
+}
+
+// Lifecycle-triggered snapshot refresh is used to reconcile formal control/session truth and
+// should not permanently clear an already-known pre-start ready state with a transient false.
+internal fun resolveSnapshotStartReady(
+    currentStartReady: Boolean?,
+    snapshotStartReady: Boolean?,
+    mergeContext: SnapshotStartReadyMergeContext,
+): Boolean? {
+    return when {
+        snapshotStartReady == null -> currentStartReady
+        snapshotStartReady -> true
+        mergeContext == SnapshotStartReadyMergeContext.CONTROL_LIFECYCLE_REFRESH &&
+            currentStartReady == true -> currentStartReady
+        else -> false
     }
 }

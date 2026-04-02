@@ -105,6 +105,7 @@ sealed class Event {
     // 基线型主判断 verification contract。
     // 这里的字段应优先视为 firmware truth，而不是前端派生值。
     data class BaselineMain(
+        val startReady: Boolean?,
         val baselineReady: Boolean,
         val stableWeightKg: Float?,
         val ma7WeightKg: Float?,

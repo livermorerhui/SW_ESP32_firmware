@@ -361,6 +361,9 @@ public:
         return s;
       case EventType::BASELINE_MAIN:
         s = "EVT:BASELINE ";
+        s += "start_ready=";
+        s += e.startReady ? "1" : "0";
+        s += " ";
         s += "baseline_ready=";
         s += e.baselineReady ? "1" : "0";
         s += " stable_weight=";

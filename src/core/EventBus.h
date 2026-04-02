@@ -26,6 +26,7 @@ struct Event {
 
   // baseline-main verification contract。
   // 只有 EventType::BASELINE_MAIN / STOP 会使用这些字段。
+  bool startReady = false;
   bool baselineReady = false;
   float stableWeightKg = 0.0f;
   float ma7WeightKg = 0.0f;

@@ -195,6 +195,7 @@ object ProtocolCodec {
         val payload = namedPayload(raw, "BASELINE") ?: return null
         val kv = parseKeyValuePayload(payload)
         return Event.BaselineMain(
+            startReady = parseBooleanFlag(kv["START_READY"]),
             baselineReady = parseBooleanFlag(kv["BASELINE_READY"]) ?: false,
             stableWeightKg = kv["STABLE_WEIGHT"]?.toFloatOrNull(),
             ma7WeightKg = kv["MA7"]?.toFloatOrNull(),

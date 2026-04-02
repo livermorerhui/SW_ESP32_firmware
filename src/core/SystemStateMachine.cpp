@@ -484,7 +484,7 @@ const char* SystemStateMachine::recoveryDetail() const {
   switch (blocking_fault_code) {
     case FaultCode::USER_LEFT_PLATFORM:
       if (!runtime_ready) return "runtime_ready=0";
-      return start_ready ? "baseline_ready=1" : "baseline_ready=0";
+      return start_ready ? "start_ready=1" : "start_ready=0";
     case FaultCode::FALL_SUSPECTED:
       return runtime_ready ? "await_runtime_clear" : "runtime_ready=0";
     case FaultCode::BLE_DISCONNECTED:
@@ -713,7 +713,7 @@ void SystemStateMachine::setRuntimeReady(bool ready) {
   }
 
   if (pause_reason_code == FaultCode::USER_LEFT_PLATFORM && runtime_ready && start_ready) {
-    clearRecoverablePause(FaultCode::USER_LEFT_PLATFORM, "runtime_ready=1 baseline_ready=1");
+    clearRecoverablePause(FaultCode::USER_LEFT_PLATFORM, "runtime_ready=1 start_ready=1");
     return;
   }
 
@@ -737,7 +737,7 @@ void SystemStateMachine::setStartReadiness(bool ready, float stableWeightKg) {
 
   if (changed) {
     Serial.printf(
-        "%s [READY] baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d leave_enabled=%d note=formal_start_gate\n",
+        "%s [READY] start_ready=%d stable_weight_kg=%.2f runtime_ready=%d leave_enabled=%d note=formal_start_gate\n",
         LogMarker::kBaselineReady,
         start_ready ? 1 : 0,
         start_ready_stable_weight_kg,
@@ -746,7 +746,7 @@ void SystemStateMachine::setStartReadiness(bool ready, float stableWeightKg) {
   }
 
   if (pause_reason_code == FaultCode::USER_LEFT_PLATFORM && runtime_ready && start_ready) {
-    clearRecoverablePause(FaultCode::USER_LEFT_PLATFORM, "runtime_ready=1 baseline_ready=1");
+    clearRecoverablePause(FaultCode::USER_LEFT_PLATFORM, "runtime_ready=1 start_ready=1");
     return;
   }
 
@@ -862,7 +862,7 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
 
   if (!runtimeReadyNow || !startReadyNow) {
     reason = FaultCode::NOT_ARMED;
-    const char* detail = !runtimeReadyNow ? "user_not_present" : "baseline_not_ready";
+    const char* detail = !runtimeReadyNow ? "user_not_present" : "start_gate_not_ready";
     Serial.printf(
         "[LAYER:START_GATE] decision=reject reason=NOT_ARMED detail=%s top_state=%s runtime_ready=%d start_ready=%d baseline_ready=%d\n",
         detail,
