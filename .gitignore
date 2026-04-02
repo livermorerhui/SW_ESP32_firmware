@@ -85,3 +85,8 @@ __pycache__/
 analysis_output/
 exports/
 captures/
+
+
+.venv*/
+.venv*/
+venv/
