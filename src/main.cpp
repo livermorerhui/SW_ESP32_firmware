@@ -14,6 +14,8 @@ static SystemStateMachine g_fsm;
 static WaveModule g_wave;
 static LaserModule g_laser;
 static BleTransport g_ble;
+static String g_bleDeviceName;
+static String buildBleDeviceName(PlatformModel model);
 
 static const char* calibrationModelTypeName(uint8_t type) {
   switch (type) {
@@ -72,6 +74,10 @@ public:
         outAck = String("ACK:DEVICE_CONFIG platform_model=") +
             platformModelName(l->platformModel()) +
             " laser_installed=" + String(l->laserInstalled() ? 1 : 0);
+        g_bleDeviceName = buildBleDeviceName(l->platformModel());
+        g_ble.updateAdvertisingIdentity(
+            g_bleDeviceName.c_str(),
+            platformModelName(l->platformModel()));
         const PlatformSnapshot snapshot = sm->snapshot();
         Serial.printf(
             "[LAYER:CONFIG_TRUTH] source=DEVICE_SET_CONFIG platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d runtime_ready=%d start_ready=%d baseline_ready=%d top_state=%s\n",
@@ -263,7 +269,6 @@ private:
 };
 
 static HubHandler g_handler(&g_fsm, &g_wave, &g_laser);
-static String g_bleDeviceName;
 
 static String buildBleDeviceName(PlatformModel model) {
   switch (model) {
@@ -295,7 +300,9 @@ void setup() {
 
   g_ble.setDisconnectSink(&g_handler);
   g_bleDeviceName = buildBleDeviceName(g_laser.platformModel());
-  g_ble.begin(&g_cmdBus, g_bleDeviceName.c_str());
+  g_ble.begin(&g_cmdBus,
+      g_bleDeviceName.c_str(),
+      platformModelName(g_laser.platformModel()));
 
   Serial.println("Ready ✅");
   Serial.println("Try: CAP?");

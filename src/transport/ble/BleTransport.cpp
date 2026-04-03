@@ -4,27 +4,48 @@
 #include <string.h>
 
 static BleTransport* g_self = nullptr;
+static constexpr uint8_t kControlQueueLen = 8;
+static constexpr uint8_t kTxControlQueueLen = 64;
+static constexpr uint8_t kTxStreamQueueLen = 1;
+static constexpr uint32_t kAdvRestartMinIntervalMs = 300;
+static constexpr uint32_t kAdvRecoveryCheckIntervalMs = 400;
+static constexpr uint32_t kControlLatencyWarnMs = 80;
+static constexpr uint32_t kInitialProtocolActivityTimeoutMs = 3500;
+static constexpr uint32_t kRecoveryDisconnectMinIntervalMs = 1200;
 
 class MyServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer*) override {
-    if (g_self) g_self->deviceConnected = true;
-    Serial.printf("%s BLE connected\n", LogMarker::kBleConnected);
+  void onConnect(BLEServer*) override {}
+
+  void onConnect(BLEServer* server, esp_ble_gatts_cb_param_t* param) override {
     if (g_self) {
+      const uint16_t connId = param ? param->connect.conn_id : (server ? server->getConnId() : 0);
+      g_self->updateConnectionTrackingOnConnect(server, connId, true);
       g_self->enqueueConnectEvent();
     }
+    Serial.printf("%s BLE connected conn_id=%u\n",
+                  LogMarker::kBleConnected,
+                  static_cast<unsigned>(param ? param->connect.conn_id : 0));
   }
-  void onDisconnect(BLEServer*) override {
-    if (g_self) g_self->deviceConnected = false;
-    Serial.printf("%s BLE disconnected\n", LogMarker::kBleDisconnected);
+
+  void onDisconnect(BLEServer*) override {}
+
+  void onDisconnect(BLEServer* server, esp_ble_gatts_cb_param_t* param) override {
     if (g_self) {
+      g_self->updateConnectionTrackingOnDisconnect();
       g_self->enqueueDisconnectEvent();
     }
+    Serial.printf("%s BLE disconnected conn_id=%u connected_count=%lu\n",
+                  LogMarker::kBleDisconnected,
+                  static_cast<unsigned>(param ? param->disconnect.conn_id : 0),
+                  static_cast<unsigned long>(server ? server->getConnectedCount() : 0));
   }
 };
 
 class MyRxCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* c) override {
     if (!g_self) return;
+
+    g_self->noteProtocolActivity();
 
     std::string v = c->getValue();
     if (v.empty()) return;
@@ -43,17 +64,27 @@ void BleTransport::txTaskThunk(void* arg) {
   static_cast<BleTransport*>(arg)->txTaskLoop();
 }
 
-void BleTransport::begin(CommandBus* cb, const char* deviceName) {
+void BleTransport::begin(CommandBus* cb, const char* deviceName, const char* advertisedModel) {
   bus = cb;
   g_self = this;
 
-  controlQueue = xQueueCreate(8, sizeof(ControlMsg));
-  txQueue = xQueueCreate(96, sizeof(TxMsg));
+  controlQueue = xQueueCreate(kControlQueueLen, sizeof(ControlMsg));
+  txControlQueue = xQueueCreate(kTxControlQueueLen, sizeof(TxMsg));
+  txStreamQueue = xQueueCreate(kTxStreamQueueLen, sizeof(TxMsg));
+  txQueueSet = xQueueCreateSet(kTxControlQueueLen + kTxStreamQueueLen);
+  if (txQueueSet && txControlQueue && txStreamQueue) {
+    xQueueAddToSet(txControlQueue, txQueueSet);
+    xQueueAddToSet(txStreamQueue, txQueueSet);
+  }
   xTaskCreatePinnedToCore(controlTaskThunk, "BleCtrl", 4096, this, 3, &controlTaskHandle, 1);
   xTaskCreatePinnedToCore(txTaskThunk, "BleTx", 4096, this, 3, &txTaskHandle, 1);
 
   const char* resolvedDeviceName =
       (deviceName != nullptr && deviceName[0] != '\0') ? deviceName : BLE_DEVICE_NAME;
+  const char* resolvedAdvertisedModel =
+      (advertisedModel != nullptr && advertisedModel[0] != '\0') ? advertisedModel : nullptr;
+  advertisedDeviceName = resolvedDeviceName;
+  advertisedModelName = resolvedAdvertisedModel ? resolvedAdvertisedModel : "";
   BLEDevice::init(resolvedDeviceName);
   BLEDevice::setPower(ESP_PWR_LVL_P9);
 
@@ -71,8 +102,114 @@ void BleTransport::begin(CommandBus* cb, const char* deviceName) {
   rx->setCallbacks(new MyRxCallbacks());
 
   svc->start();
+  configureAdvertising(
+      advertisedDeviceName.c_str(),
+      advertisedModelName.empty() ? nullptr : advertisedModelName.c_str());
   startAdvertisingSafe();
-  Serial.printf("[OK] BLE advertising name=%s\n", resolvedDeviceName);
+  Serial.printf("[OK] BLE advertising name=%s model=%s\n",
+      advertisedDeviceName.c_str(),
+      advertisedModelName.empty() ? "UNKNOWN" : advertisedModelName.c_str());
+}
+
+void BleTransport::updateAdvertisingIdentity(const char* deviceName, const char* advertisedModel) {
+  const char* resolvedDeviceName =
+      (deviceName != nullptr && deviceName[0] != '\0') ? deviceName : BLE_DEVICE_NAME;
+  advertisedDeviceName = resolvedDeviceName;
+  advertisedModelName =
+      (advertisedModel != nullptr && advertisedModel[0] != '\0') ? advertisedModel : "";
+
+  configureAdvertising(
+      advertisedDeviceName.c_str(),
+      advertisedModelName.empty() ? nullptr : advertisedModelName.c_str());
+  if (!deviceConnected) {
+    startAdvertisingSafe();
+  }
+}
+
+void BleTransport::updateConnectionTrackingOnConnect(BLEServer* server, uint16_t connId, bool connIdKnown) {
+  deviceConnected = true;
+  protocolActivityObserved = false;
+  currentConnIdValid = connIdKnown;
+  currentConnId = connId;
+  connectedAtMs = millis();
+  lastProtocolActivityAtMs = connectedAtMs;
+  if (server) {
+    Serial.printf(
+        "[BLE RECOVERY] state=connected conn_id=%u connected_count=%lu\n",
+        static_cast<unsigned>(connId),
+        static_cast<unsigned long>(server->getConnectedCount()));
+  }
+}
+
+void BleTransport::updateConnectionTrackingOnDisconnect() {
+  deviceConnected = false;
+  protocolActivityObserved = false;
+  currentConnIdValid = false;
+  currentConnId = 0;
+  connectedAtMs = 0;
+  lastProtocolActivityAtMs = 0;
+}
+
+void BleTransport::noteProtocolActivity() {
+  protocolActivityObserved = true;
+  lastProtocolActivityAtMs = millis();
+}
+
+void BleTransport::recoverStalledConnection(uint32_t nowMs) {
+  if (!deviceConnected || protocolActivityObserved || connectedAtMs == 0) {
+    return;
+  }
+  if (nowMs - connectedAtMs < kInitialProtocolActivityTimeoutMs) {
+    return;
+  }
+  forceDisconnectCurrentClient("initial_protocol_idle_timeout", nowMs);
+}
+
+void BleTransport::forceDisconnectCurrentClient(const char* reason, uint32_t nowMs) {
+  if (!pServer || !deviceConnected) return;
+  if (nowMs - lastRecoveryDisconnectMs < kRecoveryDisconnectMinIntervalMs) return;
+
+  uint16_t connId = currentConnId;
+  if (!currentConnIdValid) {
+    connId = pServer->getConnId();
+    currentConnIdValid = true;
+    currentConnId = connId;
+  }
+
+  lastRecoveryDisconnectMs = nowMs;
+  Serial.printf(
+      "[BLE RECOVERY] action=force_disconnect reason=%s conn_id=%u connected_for_ms=%lu last_activity_ms=%lu\n",
+      reason ? reason : "unknown",
+      static_cast<unsigned>(connId),
+      static_cast<unsigned long>(connectedAtMs == 0 ? 0 : (nowMs - connectedAtMs)),
+      static_cast<unsigned long>(lastProtocolActivityAtMs == 0 ? 0 : (nowMs - lastProtocolActivityAtMs)));
+  pServer->disconnect(connId);
+}
+
+void BleTransport::configureAdvertising(const char* deviceName, const char* advertisedModel) {
+  if (!pServer) return;
+  BLEAdvertising* adv = pServer->getAdvertising();
+  if (!adv) return;
+
+  BLEAdvertisementData advData;
+  advData.setFlags(0x06);
+  advData.setCompleteServices(BLEUUID(SERVICE_UUID));
+
+  BLEAdvertisementData scanRespData;
+  scanRespData.setName(deviceName ? deviceName : BLE_DEVICE_NAME);
+  String serviceData = String("proto=") + String(PROTO_VER) + ";fw=" + FW_VER;
+  if (advertisedModel != nullptr && advertisedModel[0] != '\0') {
+    serviceData += ";model=";
+    serviceData += advertisedModel;
+  }
+  scanRespData.setServiceData(BLEUUID(SERVICE_UUID), std::string(serviceData.c_str()));
+
+  adv->setAdvertisementData(advData);
+  adv->setScanResponseData(scanRespData);
+  adv->addServiceUUID(SERVICE_UUID);
+  adv->setScanResponse(true);
+  adv->setMinPreferred(0x06);
+  adv->setMaxPreferred(0x12);
 }
 
 void BleTransport::startAdvertisingSafe() {
@@ -80,7 +217,7 @@ void BleTransport::startAdvertisingSafe() {
   BLEAdvertising* adv = pServer->getAdvertising();
   if (!adv) return;
   uint32_t now = millis();
-  if (now - lastAdvRestartMs < 300) return;
+  if (now - lastAdvRestartMs < kAdvRestartMinIntervalMs) return;
   adv->start();
   lastAdvRestartMs = now;
 }
@@ -130,18 +267,50 @@ bool BleTransport::enqueueTxLine(const String& s) {
 }
 
 bool BleTransport::enqueueTxLineRaw(const char* s) {
-  if (!txQueue || !s) return false;
+  if (!txControlQueue || !s) return false;
 
   TxMsg msg{};
-  msg.type = TxMsg::Type::LINE;
+  msg.priority = TxMsg::Priority::CONTROL;
   strlcpy(msg.line, s, sizeof(msg.line));
-  const bool ok = xQueueSend(txQueue, &msg, pdMS_TO_TICKS(10)) == pdTRUE;
+  msg.enqueuedAtMs = millis();
+  const bool ok = xQueueSend(txControlQueue, &msg, pdMS_TO_TICKS(10)) == pdTRUE;
   if (!ok) {
+    txControlDropCount += 1;
     Serial.printf(
-        "[LAYER:MEASUREMENT_CARRIER] queue_overflow=1 policy=ordered_no_overwrite dropped_prefix=%s\n",
+        "[BLE TX] queue=control overflow=1 drops=%lu depth=%u dropped_prefix=%s\n",
+        static_cast<unsigned long>(txControlDropCount),
+        static_cast<unsigned>(uxQueueMessagesWaiting(txControlQueue)),
         s);
+    return false;
   }
+  noteQueueWatermark("control", uxQueueMessagesWaiting(txControlQueue), txControlHighWatermark);
   return ok;
+}
+
+bool BleTransport::enqueueStreamTxLine(const String& s) {
+  return enqueueStreamTxLineRaw(s.c_str());
+}
+
+bool BleTransport::enqueueStreamTxLineRaw(const char* s) {
+  if (!txStreamQueue || !s) return false;
+
+  TxMsg msg{};
+  msg.priority = TxMsg::Priority::STREAM;
+  strlcpy(msg.line, s, sizeof(msg.line));
+  msg.enqueuedAtMs = millis();
+
+  if (uxQueueMessagesWaiting(txStreamQueue) > 0) {
+    txStreamReplaceCount += 1;
+  }
+  xQueueOverwrite(txStreamQueue, &msg);
+  noteQueueWatermark("stream", uxQueueMessagesWaiting(txStreamQueue), txStreamHighWatermark);
+  return true;
+}
+
+void BleTransport::noteQueueWatermark(const char* queueName, UBaseType_t depth, UBaseType_t& highWatermark) {
+  if (depth <= highWatermark) return;
+  highWatermark = depth;
+  Serial.printf("[BLE TX] queue=%s high_watermark=%u\n", queueName, static_cast<unsigned>(highWatermark));
 }
 
 bool BleTransport::tryHandleDirectQuery(const String& s) {
@@ -201,7 +370,13 @@ void BleTransport::controlTaskLoop() {
   ControlMsg msg{};
 
   while (true) {
-    if (xQueueReceive(controlQueue, &msg, portMAX_DELAY) != pdTRUE) {
+    if (xQueueReceive(controlQueue, &msg, pdMS_TO_TICKS(kAdvRecoveryCheckIntervalMs)) != pdTRUE) {
+      const uint32_t nowMs = millis();
+      if (!deviceConnected) {
+        startAdvertisingSafe();
+      } else {
+        recoverStalledConnection(nowMs);
+      }
       continue;
     }
 
@@ -247,13 +422,37 @@ void BleTransport::txTaskLoop() {
   TxMsg msg{};
 
   while (true) {
-    if (xQueueReceive(txQueue, &msg, portMAX_DELAY) != pdTRUE) {
+    if (!txQueueSet) {
+      vTaskDelay(pdMS_TO_TICKS(20));
       continue;
     }
-    sendLineNow(msg.line);
+
+    QueueSetMemberHandle_t activated = xQueueSelectFromSet(txQueueSet, portMAX_DELAY);
+    if (!activated) {
+      continue;
+    }
+
+    while (xQueueReceive(txControlQueue, &msg, 0) == pdTRUE) {
+      const uint32_t latencyMs = millis() - msg.enqueuedAtMs;
+      if (latencyMs > kControlLatencyWarnMs) {
+        Serial.printf("[BLE TX] queue=control latency_ms=%lu line=%s\n",
+                      static_cast<unsigned long>(latencyMs),
+                      msg.line);
+      }
+      sendLineNow(msg.line);
+    }
+
+    if (xQueueReceive(txStreamQueue, &msg, 0) == pdTRUE) {
+      sendLineNow(msg.line);
+    }
   }
 }
 
 void BleTransport::onEvent(const Event& e) {
-  enqueueTxLine(ProtocolCodec::encodeEvent(e));
+  const String encoded = ProtocolCodec::encodeEvent(e);
+  if (e.type == EventType::STREAM) {
+    enqueueStreamTxLine(encoded);
+    return;
+  }
+  enqueueTxLine(encoded);
 }
