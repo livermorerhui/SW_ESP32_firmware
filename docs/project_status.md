@@ -1,5 +1,28 @@
 # Project Status
 
+## 2026-04-02 Freeze Decision: Phase 3 Script Experimental Line
+
+Decision recorded on April 2, 2026:
+
+- current mainline = Phase 2 stable firmware baseline + SW repo alignment development
+- current experimental line = Phase 3 firmware-owned script offload
+- Phase 3 is frozen as an experimental/history line and is not the current mainline
+
+Frozen scope:
+
+- firmware-owned script offload
+- heterogeneous step-list execution
+- `SCRIPT:SET script_steps=...`
+- `SCRIPT:START/STOP/ABORT` continued Phase 3 expansion
+- WP3a / WP3b / WP3c / WP3d follow-up development
+- Demo APP script runner as a current mainline feature
+
+Current repo interpretation:
+
+- active source should continue on the non-script Phase 2 path
+- historical Phase 3 reports are kept as experiment records only
+- SW normal development must not depend on any Phase 3 script surface unless the line is explicitly reopened under separate conditions
+
 ## 2026-04-02 Phase 2 WP2 Behavior Migration Landed
 
 Phase 2 WP2 behavior migration is now in place on top of the WP1 skeleton.

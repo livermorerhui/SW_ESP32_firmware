@@ -12,6 +12,7 @@
   - 属性: `Notify`
 
 说明：
+- BLE 广播名默认使用 `SonicWave_<Model>` 格式，例如 `SonicWave_Pro` / `SonicWave_Ultra`。
 - App 通过 RX 写入字符串命令。
 - 固件通过 TX 通知 ACK/NACK 和事件。
 - TX uplink 分帧规则：**每条逻辑消息都以 `\n` 结尾**（例如 `ACK:OK\n`）。

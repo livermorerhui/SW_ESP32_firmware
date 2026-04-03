@@ -70,7 +70,6 @@
 - `EVT:FAULT <code>`（例如 `100` 表示 USER_OFF）
 - `EVT:STABLE:<weightKg>`
 - `EVT:PARAM:<zeroDistance>,<scaleFactor>`
-- `EVT:BASELINE start_ready=<0|1> baseline_ready=<0|1> stable_weight_active=<0|1> stable_weight=<kg> ma7=<kg> deviation=<kg> ratio=<r> main_state=<...> abnormal_duration_ms=<ms> danger_duration_ms=<ms> stop_reason=<...> stop_source=<...>`
 - formal measurement carrier:
   - valid sample:
     - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=1 ma12_ready=<0|1> distance=<distance> weight=<weightKg> [ma12=<ma12Kg>]`
@@ -83,9 +82,6 @@
 - `EVT:STREAM` 是 measurement plane 的唯一正式 continuous carrier。
 - `distance / weight / MA12 / valid / reason / seq` 归属于同一 plane、同一 sample 序列。
 - `STABLE` 仍只是离散事件，不等于连续 plane。
-- `baseline_ready` 表示本轮 occupied cycle 的 baseline 已建立并保留。
-- `stable_weight_active` 表示当前 live stable 窗口仍处于激活态；它可以在 `baseline_ready=1` 时短暂为 `0`。
-- `start_ready` 仍是 formal pre-start ready truth，不应由 APP 从 `STABLE/ARMED/baseline_ready` 本地重建。
 - Demo APP 在 `PRIMARY/UNKNOWN` 模式下只消费 formal `EVT:STREAM` carrier。
 - Demo 仍兼容解析裸 CSV：`<distance>,<weightKg>`，但只作为 `LEGACY` mode fallback，不再视为 formal carrier，也不会在 primary consume 路径中继续驱动 UI / session truth。
 - `EVT:WAVE_OUTPUT` 与 `SNAPSHOT.wave_output_active` 共同构成 control confirmation plane：

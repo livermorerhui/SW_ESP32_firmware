@@ -80,7 +80,7 @@
 | 稳定体重 | `STABLE` | `LaserModule` | 一次稳定体重锁定结果 |
 | 参数/ready 扩展 | `PARAM` | `LaserModule` | 零点/系数与兼容 ready 扩展 |
 | 实时流 | `STREAM` | `LaserModule` | 距离/体重调试流 |
-| baseline-main 证据 | `BASELINE` | `LaserModule + RhythmStateJudge` | baseline_ready、stable_weight_active、MA7、ratio、danger evidence |
+| baseline-main 证据 | `BASELINE` | `LaserModule + RhythmStateJudge` | baseline_ready、MA7、ratio、danger evidence |
 
 ## 3. stop / fault / state / baseline 的正式角色
 
