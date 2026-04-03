@@ -21,7 +21,7 @@ public:
 
 class BleTransport : public EventSink {
 public:
-  void begin(CommandBus* cb);
+  void begin(CommandBus* cb, const char* deviceName = nullptr);
   bool isConnected() const { return deviceConnected; }
   void setDisconnectSink(BleDisconnectSink* s) { disconnectSink = s; }
 

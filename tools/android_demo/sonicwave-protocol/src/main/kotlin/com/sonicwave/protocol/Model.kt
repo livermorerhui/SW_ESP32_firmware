@@ -107,9 +107,8 @@ sealed class Event {
     data class BaselineMain(
         val startReady: Boolean?,
         val baselineReady: Boolean,
-        val stableWeightActive: Boolean?,
         val stableWeightKg: Float?,
-        val ma7WeightKg: Float?,
+        val ma12WeightKg: Float?,
         val deviationKg: Float?,
         val ratio: Float?,
         val mainState: String,

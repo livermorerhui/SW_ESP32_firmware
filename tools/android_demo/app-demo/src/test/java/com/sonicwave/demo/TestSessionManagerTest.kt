@@ -64,7 +64,7 @@ class TestSessionManagerTest {
                     ma12 = 69.7f,
                     ma3 = 69.6f,
                     ma5 = 69.5f,
-                    ma7 = 69.4f,
+                    mainMa12 = 69.4f,
                     deviation = 0.6f,
                     ratio = 0.008f,
                     mainState = "RUNNING",
@@ -93,7 +93,7 @@ class TestSessionManagerTest {
                 stableWeight = 70.2f,
                 durationMs = 9_000L,
                 weightRange = SessionValueRangeUi(69.8f, 70.4f),
-                ma7Range = SessionValueRangeUi(69.4f, 70.1f),
+                mainMa12Range = SessionValueRangeUi(69.4f, 70.1f),
                 ratioMax = 0.012f,
                 finalMainState = "DANGER",
                 finalAbnormalDurationMs = 2_000L,
@@ -112,6 +112,6 @@ class TestSessionManagerTest {
         assertEquals("DANGER", summarized.summary.finalMainState)
         assertEquals(18, summarized.summary.sampleCount)
         assertNotNull(summarized.summary.weightRange)
-        assertNotNull(summarized.summary.ma7Range)
+        assertNotNull(summarized.summary.mainMa12Range)
     }
 }

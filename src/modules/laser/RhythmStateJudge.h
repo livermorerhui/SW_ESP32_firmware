@@ -5,7 +5,7 @@
 #include "core/Types.h"
 
 // 基线型主判断状态枚举。
-// 这些状态只描述“基于 stable_weight + MA7 + ratio 的主判断结果”，
+// 这些状态只描述“基于 stable_weight + MA12 + ratio 的主判断结果”，
 // 不直接拥有波形启停动作，最终动作仍由 SystemStateMachine 统一执行。
 enum class RhythmStateStatus : uint8_t {
   BASELINE_PENDING,
@@ -48,10 +48,10 @@ struct RhythmStateEvidence {
   bool baselineReady = false;
   float baselineWeightKg = 0.0f;
   float baselineDistance = 0.0f;
-  // ma7WeightKg / ma7Distance：律动期主观察量 MA7。
-  float ma7WeightKg = 0.0f;
-  float ma7Distance = 0.0f;
-  // deviationKg：偏离量，等于 MA7 - stable_weight。
+  // ma12WeightKg / ma12Distance：律动期主观察量 MA12。
+  float ma12WeightKg = 0.0f;
+  float ma12Distance = 0.0f;
+  // deviationKg：偏离量，等于 MA12 - stable_weight。
   float deviationKg = 0.0f;
   // ratio：相对偏离比例，等于 |deviation| / stable_weight。
   float ratio = 0.0f;

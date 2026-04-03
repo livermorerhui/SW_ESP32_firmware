@@ -366,12 +366,10 @@ public:
         s += " ";
         s += "baseline_ready=";
         s += e.baselineReady ? "1" : "0";
-        s += " stable_weight_active=";
-        s += e.stableWeightActive ? "1" : "0";
         s += " stable_weight=";
         s += String(e.stableWeightKg, 2);
-        s += " ma7=";
-        s += String(e.ma7WeightKg, 2);
+        s += " ma12=";
+        s += String(e.mainMa12WeightKg, 2);
         s += " deviation=";
         s += String(e.deviationKg, 2);
         s += " ratio=";

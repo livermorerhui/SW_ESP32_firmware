@@ -24,8 +24,7 @@ fun FallStopProtectionSection(
     modifier: Modifier = Modifier,
 ) {
     val controlEnabled = uiState.isConnected &&
-        uiState.protocolMode == ProtocolMode.PRIMARY &&
-        uiState.fallStopStateKnown &&
+        uiState.protocolMode != ProtocolMode.LEGACY &&
         !uiState.isFallStopSyncInProgress
     val statusText = when {
         uiState.isFallStopSyncInProgress -> stringResource(R.string.value_fall_stop_protection_syncing)

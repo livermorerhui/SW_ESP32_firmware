@@ -123,6 +123,8 @@ private:
   void observeRuntimeZero(float distance, float weight, uint32_t now);
   float computeEffectiveZeroDistance() const;
   void refreshEffectiveZero();
+  void resetStableSignalFilter();
+  bool updateStableSignalFilter(float distance, float& filteredDistance, float& filteredWeight);
   void pushStableSample(float distance, float weight);
   void beginStableCandidate(float distance, float weight);
   void updateStableState(float distance, float weight, uint32_t now);
@@ -137,9 +139,7 @@ private:
   void latchStable(uint32_t now, const char* mode, float stddev);
   void resetStableTracking(const char* reason, bool logIfActive);
   bool shouldClearLatchedStable(float distance, float weight, const char*& reason) const;
-  uint8_t stableExitConfirmSamplesForReason(const char* reason) const;
   bool shouldUseFastStableBuildReadInterval() const;
-  bool shouldLatchStableEarly(float latestWeight, float& stddev, float& latestDelta) const;
   void logRhythmStateUpdate(const RhythmStateUpdateResult& result) const;
   void emitBaselineReadyLog(uint32_t now) const;
   void publishBaselineMainVerification(uint32_t now, const RhythmStateUpdateResult& result) const;
@@ -218,14 +218,14 @@ private:
     RangeTracker ma3DistanceRange{};
     RangeTracker ma5WeightKgRange{};
     RangeTracker ma5DistanceRange{};
-    RangeTracker ma7WeightKgRange{};
-    RangeTracker ma7DistanceRange{};
+    RangeTracker ma12WeightKgRange{};
+    RangeTracker ma12DistanceRange{};
     uint16_t advisoryCount = 0;
     RiskAdvisoryType lastAdvisoryType = RiskAdvisoryType::NONE;
     RiskAdvisoryLevel lastAdvisoryLevel = RiskAdvisoryLevel::NONE;
     const char* lastAdvisoryReason = "none";
-    float recentWeightKg[7]{};
-    float recentDistance[7]{};
+    float recentWeightKg[12]{};
+    float recentDistance[12]{};
     uint8_t recentHead = 0;
     uint8_t recentCount = 0;
   };
@@ -256,8 +256,12 @@ private:
   float stableBaselineWeight = 0.0f;
   uint32_t stableLatchedAtMs = 0;
   uint8_t invalidStableSamples = 0;
+  uint8_t stableConfirmCount = 0;
   uint32_t stableCandidateStartedAtMs = 0;
   bool stableEarlyCheckpointLogged = false;
+  bool stableFilterValid = false;
+  float stableFilteredDistance = 0.0f;
+  float stableFilteredWeight = 0.0f;
   float runtimeZeroBuffer[WINDOW_N]{};
   uint8_t runtimeZeroHead = 0;
   uint8_t runtimeZeroCount = 0;
@@ -301,7 +305,7 @@ private:
   bool lastLoggedMeasurementSummaryValid = false;
   const char* lastLoggedMeasurementSummaryReason = nullptr;
   // Primary Judgment Owner：
-  // MA7 / deviation / ratio / main_state / duration 统一由 RhythmStateJudge 维护。
+  // MA12 / deviation / ratio / main_state / duration 统一由 RhythmStateJudge 维护。
   RhythmStateJudge rhythmStateJudge{};
   RunSummaryState runSummary{};
   TopState lastObservedTopState = TopState::IDLE;

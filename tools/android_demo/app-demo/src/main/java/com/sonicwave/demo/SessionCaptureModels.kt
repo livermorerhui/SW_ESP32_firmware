@@ -28,7 +28,7 @@ data class TestSessionSampleUi(
     val ma12: Float?,
     val ma3: Float?,
     val ma5: Float?,
-    val ma7: Float?,
+    val mainMa12: Float?,
     val deviation: Float?,
     val ratio: Float?,
     val mainState: String,
@@ -55,7 +55,7 @@ data class TestSessionSummaryUi(
     val baselineReady: Boolean? = null,
     val stableWeight: Float? = null,
     val weightRange: SessionValueRangeUi? = null,
-    val ma7Range: SessionValueRangeUi? = null,
+    val mainMa12Range: SessionValueRangeUi? = null,
     val ratioMax: Float? = null,
     val finalMainState: String? = null,
     val finalAbnormalDurationMs: Long? = null,
@@ -134,7 +134,7 @@ data class SessionCaptureSignals(
     val baselineReady: Boolean = false,
     val mainState: String = "BASELINE_PENDING",
     val stableWeight: Float? = null,
-    val ma7: Float? = null,
+    val mainMa12: Float? = null,
     val deviation: Float? = null,
     val ratio: Float? = null,
     val abnormalDurationMs: Long? = null,
@@ -162,7 +162,7 @@ sealed interface SessionLogEvent {
     data class MainState(
         val state: String,
         val stableWeight: Float?,
-        val ma7: Float?,
+        val mainMa12: Float?,
         val deviation: Float?,
         val ratio: Float?,
         val abnormalDurationMs: Long?,
@@ -195,7 +195,7 @@ sealed interface SessionLogEvent {
         val stableWeight: Float?,
         val durationMs: Long?,
         val weightRange: SessionValueRangeUi?,
-        val ma7Range: SessionValueRangeUi?,
+        val mainMa12Range: SessionValueRangeUi?,
         val ratioMax: Float?,
         val finalMainState: String?,
         val finalAbnormalDurationMs: Long?,
@@ -224,7 +224,8 @@ object SessionLogParser {
             "BASELINE_MAIN_STATE" -> SessionLogEvent.MainState(
                 state = kv["next"] ?: "BASELINE_PENDING",
                 stableWeight = kv["stable_weight_kg"]?.toFloatOrNull(),
-                ma7 = kv["ma7_weight_kg"]?.toFloatOrNull(),
+                mainMa12 = kv["ma12_weight_kg"]?.toFloatOrNull()
+                    ?: kv["ma7_weight_kg"]?.toFloatOrNull(),
                 deviation = kv["deviation_kg"]?.toFloatOrNull(),
                 ratio = kv["ratio"]?.toFloatOrNull(),
                 abnormalDurationMs = kv["abnormal_duration_ms"]?.toLongOrNull(),
@@ -293,7 +294,8 @@ object SessionLogParser {
             stableWeight = kv["stable_weight_kg"]?.toFloatOrNull(),
             durationMs = kv["duration_ms"]?.toLongOrNull(),
             weightRange = kv["weight_range_kg"]?.let(::parseRange),
-            ma7Range = kv["ma7_weight_range_kg"]?.let(::parseRange),
+            mainMa12Range = kv["ma12_weight_range_kg"]?.let(::parseRange)
+                ?: kv["ma7_weight_range_kg"]?.let(::parseRange),
             ratioMax = parseRatioMax(kv),
             finalMainState = kv["main_status"],
             finalAbnormalDurationMs = kv["final_abnormal_duration_ms"]?.toLongOrNull(),
@@ -333,11 +335,12 @@ object SessionLogParser {
         val direct = kv["ratio_max"]?.toFloatOrNull()
         if (direct != null) return direct
         val stableWeight = kv["stable_weight_kg"]?.toFloatOrNull()
-        val ma7Range = kv["ma7_weight_range_kg"]?.let(::parseRange)
-        if (stableWeight == null || stableWeight == 0.0f || ma7Range == null) return null
+        val mainMa12Range = kv["ma12_weight_range_kg"]?.let(::parseRange)
+            ?: kv["ma7_weight_range_kg"]?.let(::parseRange)
+        if (stableWeight == null || stableWeight == 0.0f || mainMa12Range == null) return null
         val maxDeviation = maxOf(
-            abs(ma7Range.min - stableWeight),
-            abs(ma7Range.max - stableWeight),
+            abs(mainMa12Range.min - stableWeight),
+            abs(mainMa12Range.max - stableWeight),
         )
         return maxDeviation / stableWeight
     }
@@ -464,7 +467,7 @@ class TestSessionManager {
                 stableWeight = event.stableWeight ?: base.summary.stableWeight,
                 durationMs = event.durationMs ?: base.summary.durationMs,
                 weightRange = event.weightRange ?: base.summary.weightRange,
-                ma7Range = event.ma7Range ?: base.summary.ma7Range,
+                mainMa12Range = event.mainMa12Range ?: base.summary.mainMa12Range,
                 ratioMax = event.ratioMax ?: base.summary.ratioMax,
                 finalMainState = event.finalMainState ?: base.summary.finalMainState,
                 finalAbnormalDurationMs = event.finalAbnormalDurationMs ?: base.summary.finalAbnormalDurationMs,
@@ -491,7 +494,7 @@ class TestSessionManager {
             baselineReady = current.baselineReady ?: samples.lastOrNull()?.baselineReady,
             stableWeight = current.stableWeight ?: samples.mapNotNull { it.stableWeight }.lastOrNull(),
             weightRange = samples.rangeOf { it.weight },
-            ma7Range = samples.rangeOfNotNull { it.ma7 },
+            mainMa12Range = samples.rangeOfNotNull { it.mainMa12 },
             ratioMax = samples.maxOfOrNull { it.ratio ?: Float.NEGATIVE_INFINITY }
                 ?.takeIf { it.isFinite() },
             finalMainState = current.finalMainState ?: samples.lastOrNull()?.mainState,

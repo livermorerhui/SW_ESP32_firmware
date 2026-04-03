@@ -143,7 +143,7 @@ class TestSessionExporter(private val context: Context) {
                 append('\n')
             }
             append(
-                "measurement_seq,device_timestamp_ms,timestamp_ms,measurement_valid,baseline_ready,stable_weight,weight,distance,ma12,ma3,ma5,ma7,deviation,ratio," +
+                "measurement_seq,device_timestamp_ms,timestamp_ms,measurement_valid,baseline_ready,stable_weight,weight,distance,ma12,ma3,ma5,main_ma12,deviation,ratio," +
                     "main_state,abnormal_duration_ms,danger_duration_ms,stop_reason,stop_source,event_aux,risk_advisory\n",
             )
             session.samples.forEach { sample ->
@@ -160,7 +160,7 @@ class TestSessionExporter(private val context: Context) {
                         sample.ma12?.let(::formatMetricValue),
                         sample.ma3?.let(::formatMetricValue),
                         sample.ma5?.let(::formatMetricValue),
-                        sample.ma7?.let(::formatMetricValue),
+                        sample.mainMa12?.let(::formatMetricValue),
                         sample.deviation?.let(::formatMetricValue),
                         sample.ratio?.let(::formatRatioValue),
                         sample.mainState,
@@ -222,7 +222,7 @@ class TestSessionExporter(private val context: Context) {
                     .put("ma12", sample.ma12?.let(::roundMetricValue) ?: JSONObject.NULL)
                     .put("ma3", sample.ma3?.let(::roundMetricValue) ?: JSONObject.NULL)
                     .put("ma5", sample.ma5?.let(::roundMetricValue) ?: JSONObject.NULL)
-                    .put("ma7", sample.ma7?.let(::roundMetricValue) ?: JSONObject.NULL)
+                    .put("main_ma12", sample.mainMa12?.let(::roundMetricValue) ?: JSONObject.NULL)
                     .put("deviation", sample.deviation?.let(::roundMetricValue) ?: JSONObject.NULL)
                     .put("ratio", sample.ratio?.let(::roundRatioValue) ?: JSONObject.NULL)
                     .put("main_state", sample.mainState)

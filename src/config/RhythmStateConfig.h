@@ -43,29 +43,29 @@ struct RhythmStateFallParams {
 
 struct RhythmStateBaselineParams {
   // safeBandRatio：安全偏离范围。
-  // 含义：MA7 相对 stable_weight 的允许正常偏离上限。
-  float safeBandRatio = 0.08f;
+  // 含义：MA12 相对 stable_weight 的允许正常偏离上限。
+  float safeBandRatio = 0.16f;
   // dangerBandRatio：危险偏离范围阈值。
-  // 含义：MA7 相对 stable_weight 超过此比例时，视为明显危险。
-  float dangerBandRatio = 0.18f;
+  // 含义：MA12 相对 stable_weight 超过此比例时，视为明显危险。
+  float dangerBandRatio = 0.28f;
   // abnormalRecoveryTimeMs：异常恢复时间窗口。
   // 含义：超过安全范围后，允许恢复回安全范围的最大时间。
-  uint32_t abnormalRecoveryTimeMs = 1200UL;
+  uint32_t abnormalRecoveryTimeMs = 1500UL;
   // dangerHoldTimeMs：危险持续确认时间。
   // 含义：危险状态必须持续成立的最短时间，达到后才自动停波。
-  uint32_t dangerHoldTimeMs = 600UL;
+  uint32_t dangerHoldTimeMs = 700UL;
 };
 
 struct RhythmStateAdvisoryParams {
   // advisoryBandRatio：风险提示偏离范围。
   // 含义：ratio 超过该值时，可判定为明显大动作/大幅载荷转移。
-  float advisoryBandRatio = 0.12f;
+  float advisoryBandRatio = 0.20f;
   // advisoryRecoveryTimeMs：风险提示恢复时间阈值。
   // 含义：异常恢复时间超过该值时，输出恢复较慢提示。
   uint32_t advisoryRecoveryTimeMs = 1800UL;
   // advisoryNearDangerBandRatio：接近危险阈值范围。
   // 含义：ratio 接近 danger_band 但未达到自动停波条件时，输出较高风险提示。
-  float advisoryNearDangerBandRatio = 0.16f;
+  float advisoryNearDangerBandRatio = 0.24f;
   // repeatThrottleMs：同类风险提示节流时间。
   // 含义：同一 advisory_type 连续出现时，至少间隔该时间再重复打印日志。
   uint32_t repeatThrottleMs = 3000UL;

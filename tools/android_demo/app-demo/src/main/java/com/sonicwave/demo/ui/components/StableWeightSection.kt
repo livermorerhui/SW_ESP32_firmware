@@ -17,7 +17,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.sonicwave.demo.R
 import com.sonicwave.demo.UiState
-import com.sonicwave.demo.hasStableWeightEvidence
 
 @Composable
 fun StableWeightSection(
@@ -25,18 +24,13 @@ fun StableWeightSection(
     modifier: Modifier = Modifier,
 ) {
     val active = uiState.stableWeightActive && uiState.stableWeight != null
-    val held = !active && uiState.hasStableWeightEvidence()
     val background = if (active) {
         Color(0xFFDCFCE7)
-    } else if (held) {
-        Color(0xFFFEF3C7)
     } else {
         MaterialTheme.colorScheme.surfaceVariant
     }
     val contentColor = if (active) {
         Color(0xFF166534)
-    } else if (held) {
-        Color(0xFF92400E)
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }
@@ -62,10 +56,10 @@ fun StableWeightSection(
                 color = contentColor,
             )
             Text(
-                text = when {
-                    active -> stringResource(R.string.stable_indicator_active)
-                    held -> stringResource(R.string.stable_indicator_held)
-                    else -> stringResource(R.string.stable_indicator_idle)
+                text = if (active) {
+                    stringResource(R.string.stable_indicator_active)
+                } else {
+                    stringResource(R.string.stable_indicator_idle)
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = contentColor,

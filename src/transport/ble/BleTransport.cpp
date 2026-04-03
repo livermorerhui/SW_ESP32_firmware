@@ -43,7 +43,7 @@ void BleTransport::txTaskThunk(void* arg) {
   static_cast<BleTransport*>(arg)->txTaskLoop();
 }
 
-void BleTransport::begin(CommandBus* cb) {
+void BleTransport::begin(CommandBus* cb, const char* deviceName) {
   bus = cb;
   g_self = this;
 
@@ -52,7 +52,9 @@ void BleTransport::begin(CommandBus* cb) {
   xTaskCreatePinnedToCore(controlTaskThunk, "BleCtrl", 4096, this, 3, &controlTaskHandle, 1);
   xTaskCreatePinnedToCore(txTaskThunk, "BleTx", 4096, this, 3, &txTaskHandle, 1);
 
-  BLEDevice::init(BLE_DEVICE_NAME);
+  const char* resolvedDeviceName =
+      (deviceName != nullptr && deviceName[0] != '\0') ? deviceName : BLE_DEVICE_NAME;
+  BLEDevice::init(resolvedDeviceName);
   BLEDevice::setPower(ESP_PWR_LVL_P9);
 
   pServer = BLEDevice::createServer();
@@ -70,7 +72,7 @@ void BleTransport::begin(CommandBus* cb) {
 
   svc->start();
   startAdvertisingSafe();
-  Serial.println("[OK] BLE advertising");
+  Serial.printf("[OK] BLE advertising name=%s\n", resolvedDeviceName);
 }
 
 void BleTransport::startAdvertisingSafe() {

@@ -263,6 +263,21 @@ private:
 };
 
 static HubHandler g_handler(&g_fsm, &g_wave, &g_laser);
+static String g_bleDeviceName;
+
+static String buildBleDeviceName(PlatformModel model) {
+  switch (model) {
+    case PlatformModel::BASE:
+      return "SonicWave_Base";
+    case PlatformModel::PLUS:
+      return "SonicWave_Plus";
+    case PlatformModel::PRO:
+      return "SonicWave_Pro";
+    case PlatformModel::ULTRA:
+      return "SonicWave_Ultra";
+  }
+  return BLE_DEVICE_NAME;
+}
 
 void setup() {
   Serial.begin(115200);
@@ -279,7 +294,8 @@ void setup() {
   g_cmdBus.setHandler(&g_handler);
 
   g_ble.setDisconnectSink(&g_handler);
-  g_ble.begin(&g_cmdBus);
+  g_bleDeviceName = buildBleDeviceName(g_laser.platformModel());
+  g_ble.begin(&g_cmdBus, g_bleDeviceName.c_str());
 
   Serial.println("Ready ✅");
   Serial.println("Try: CAP?");

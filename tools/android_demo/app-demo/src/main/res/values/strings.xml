@@ -63,6 +63,7 @@
     <string name="device_config_status_failure">Write failed: %1$s</string>
     <string name="device_config_status_send_failed">Write failed before ACK: %1$s</string>
     <string name="device_config_status_ack_fallback">Device returned generic ACK: %1$s</string>
+    <string name="device_config_status_timeout">Timed out waiting for device profile confirmation. Try again.</string>
     <string name="device_config_status_conflict">The selected model and laser_installed value conflict.</string>
     <string name="device_config_status_requires_primary">Device profile write requires a primary-protocol connection.</string>
     <string name="device_truth_refresh_failed">Device truth refresh failed: %1$s</string>
@@ -106,7 +107,6 @@
 
     <string name="section_stable_weight">Stable Weight</string>
     <string name="stable_indicator_active">Latest firmware stable event; current window has converged enough to emit EVT:STABLE.</string>
-    <string name="stable_indicator_held">Baseline is still held for ready/analysis, but the live signal is not currently in a stable window.</string>
     <string name="stable_indicator_idle">Waiting for the next EVT:STABLE after the live signal settles.</string>
 
     <string name="section_telemetry_chart">Telemetry Chart</string>

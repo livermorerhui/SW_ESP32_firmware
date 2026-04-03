@@ -5,7 +5,7 @@
 
 namespace {
 
-constexpr uint8_t kPrimaryMovingAverageWindow = 7;
+constexpr uint8_t kPrimaryMovingAverageWindow = 12;
 
 const char* validReasonOrDefault(const char* reason) {
   return (reason && reason[0] != '\0') ? reason : "baseline_pending";
@@ -147,8 +147,8 @@ void RhythmStateJudge::resetMotionEvaluation() {
   dangerStartedAtMs = 0;
   resetAdvisoryTracking();
 
-  result.evidence.ma7WeightKg = 0.0f;
-  result.evidence.ma7Distance = 0.0f;
+  result.evidence.ma12WeightKg = 0.0f;
+  result.evidence.ma12Distance = 0.0f;
   result.evidence.deviationKg = 0.0f;
   result.evidence.ratio = 0.0f;
   result.evidence.abnormalDurationMs = 0;
@@ -368,11 +368,11 @@ void RhythmStateJudge::updatePrimaryState(const RhythmStateJudgeInput& input) {
   maDistanceSum += input.distance;
   maHead = (maHead + 1) % kPrimaryMovingAverageWindow;
 
-  result.evidence.ma7WeightKg = maWeightSum / maCount;
-  result.evidence.ma7Distance = maDistanceSum / maCount;
+  result.evidence.ma12WeightKg = maWeightSum / maCount;
+  result.evidence.ma12Distance = maDistanceSum / maCount;
 
   const float stableWeightKg = result.evidence.baselineWeightKg;
-  const float deviationKg = result.evidence.ma7WeightKg - stableWeightKg;
+  const float deviationKg = result.evidence.ma12WeightKg - stableWeightKg;
   const float ratio =
       (stableWeightKg > 0.0f) ? fabsf(deviationKg) / stableWeightKg : 0.0f;
   result.evidence.deviationKg = deviationKg;
@@ -572,8 +572,8 @@ void RhythmStateJudge::copyEvidenceToResult() {
   result.evidence.baselineWeightKg = 0.0f;
   result.evidence.baselineDistance = 0.0f;
   result.evidence.baselineCapturedAtMs = 0;
-  result.evidence.ma7WeightKg = 0.0f;
-  result.evidence.ma7Distance = 0.0f;
+  result.evidence.ma12WeightKg = 0.0f;
+  result.evidence.ma12Distance = 0.0f;
   result.evidence.deviationKg = 0.0f;
   result.evidence.ratio = 0.0f;
   result.evidence.abnormalDurationMs = 0;

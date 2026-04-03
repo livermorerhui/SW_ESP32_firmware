@@ -21,6 +21,11 @@ struct LaserStableThresholdConfig {
   uint32_t evalIntervalStableBuildMs = LASER_STATE_EVAL_INTERVAL_STABLE_BUILD_MS;
   uint8_t enterWindowSamples = WINDOW_N;
   float enterStdDevKg = STD_TH;
+  float filterDistanceAlpha = STABLE_FILTER_DISTANCE_ALPHA;
+  float enterRangeKg = STABLE_RANGE_TH;
+  float enterDriftKg = STABLE_DRIFT_TH;
+  uint8_t enterConfirmWindows = STABLE_CONFIRM_WINDOWS;
+  uint8_t trimmedMeanDropSamples = STABLE_TRIMMED_MEAN_DROP_SAMPLES;
   uint8_t earlyAcceptSamples = STABLE_EARLY_LATCH_SAMPLES;
   float earlyStrictStdDevKg = STABLE_EARLY_STRICT_STD_TH;
   float earlyStrictLatestDeltaKg = STABLE_EARLY_STRICT_LATEST_DELTA_TH;
@@ -33,8 +38,7 @@ struct LaserStableThresholdConfig {
   float exitLeaveThresholdKg = LEAVE_TH;
   float exitWeightDeltaKg = STABLE_REARM_WEIGHT_DELTA_TH;
   float exitDistanceDelta = STABLE_REARM_DISTANCE_DELTA_TH;
-  uint8_t exitLeaveConfirmSamples = STABLE_EXIT_CONFIRM_SAMPLES_LEAVE;
-  uint8_t exitMovementConfirmSamples = STABLE_EXIT_CONFIRM_SAMPLES_MOVEMENT;
+  uint8_t exitConfirmSamples = 2;
   uint8_t invalidGraceSamples = STABLE_INVALID_GRACE_SAMPLES;
 };
 

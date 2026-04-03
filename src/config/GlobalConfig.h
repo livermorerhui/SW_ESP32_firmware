@@ -33,8 +33,8 @@ static constexpr float RAMP_FREQ_STEP_HZ = 0.5f;
 // samples flowing without forcing the legacy stable/baseline semantics to run
 // at the same cadence.
 static constexpr uint32_t LASER_MEASUREMENT_READ_INTERVAL_MS = 20UL;
-static constexpr uint32_t LASER_STATE_EVAL_INTERVAL_DEFAULT_MS = 200UL;
-static constexpr uint32_t LASER_STATE_EVAL_INTERVAL_STABLE_BUILD_MS = 160UL;
+static constexpr uint32_t LASER_STATE_EVAL_INTERVAL_DEFAULT_MS = 100UL;
+static constexpr uint32_t LASER_STATE_EVAL_INTERVAL_STABLE_BUILD_MS = 80UL;
 // The sensor register is currently treated as a signed fixed-point value with
 // two decimal places of displayed distance/displacement resolution.
 static constexpr int16_t LASER_VALID_MEASUREMENT_MIN_RAW = -3570;
@@ -50,6 +50,11 @@ static constexpr uint32_t LASER_INVALID_LOG_INTERVAL_MS = 1000UL;
 #define MIN_WEIGHT 5.0f
 #define LEAVE_TH 3.0f
 #define STD_TH 0.20f
+static constexpr float STABLE_FILTER_DISTANCE_ALPHA = 0.18f;
+static constexpr float STABLE_RANGE_TH = 0.40f;
+static constexpr float STABLE_DRIFT_TH = 0.16f;
+static constexpr uint8_t STABLE_CONFIRM_WINDOWS = 2;
+static constexpr uint8_t STABLE_TRIMMED_MEAN_DROP_SAMPLES = 1;
 // 不能简单粗暴把所有窗口统一缩短。
 // 因此保留 legacy 满窗 10 样本 + STD_TH 的兜底路径，只额外增加一个更保守的
 // “9 样本提前锁定”分支：只有离散度更小、且最新样本没有明显偏离均值时才允许提前 latch。
@@ -70,8 +75,6 @@ static constexpr float STABLE_EARLY_GUARDED_RECENT_RANGE_TH = 0.22f;
 static constexpr float STABLE_EARLY_GUARDED_RECENT_MEAN_DELTA_TH = 0.12f;
 #define STABLE_REARM_DISTANCE_DELTA_TH 1.0f
 #define STABLE_REARM_WEIGHT_DELTA_TH 0.5f
-static constexpr uint8_t STABLE_EXIT_CONFIRM_SAMPLES_LEAVE = 2;
-static constexpr uint8_t STABLE_EXIT_CONFIRM_SAMPLES_MOVEMENT = 3;
 #define STABLE_INVALID_GRACE_SAMPLES 2
 #define LOG_TH 1.0f
 static constexpr float CALIBRATION_TARGET_RANGE_MIN_KG = 40.0f;

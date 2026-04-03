@@ -1,7 +1,6 @@
 #include "LaserModule.h"
 #include "core/LogMarkers.h"
 #include <math.h>
-#include <string.h>
 #include "modules/wave/WaveModule.h"
 
 namespace {
@@ -9,6 +8,14 @@ struct WindowStats {
   float mean = NAN;
   float stddev = NAN;
   float range = NAN;
+};
+
+struct StableWindowMetrics {
+  bool valid = false;
+  float mean = NAN;
+  float stddev = NAN;
+  float range = NAN;
+  float drift = NAN;
 };
 
 WindowStats computeRingWindowStats(
@@ -47,6 +54,107 @@ WindowStats computeRingWindowStats(
   stats.stddev = sqrtf(sumSqDiff / sampleCount);
   stats.range = maxValue - minValue;
   return stats;
+}
+
+StableWindowMetrics computeStableWindowMetrics(
+    const float* values,
+    int head,
+    int count,
+    int capacity,
+    int sampleCount) {
+  StableWindowMetrics metrics{};
+  if (!values || sampleCount <= 1 || count < sampleCount) {
+    return metrics;
+  }
+
+  const int startOffset = count - sampleCount;
+  const WindowStats full = computeRingWindowStats(
+      values,
+      head,
+      count,
+      capacity,
+      startOffset,
+      sampleCount);
+  if (!isfinite(full.mean) || !isfinite(full.stddev) || !isfinite(full.range)) {
+    return metrics;
+  }
+
+  const int firstHalfCount = sampleCount / 2;
+  const int secondHalfCount = sampleCount - firstHalfCount;
+  if (firstHalfCount <= 0 || secondHalfCount <= 0) {
+    return metrics;
+  }
+
+  const WindowStats firstHalf = computeRingWindowStats(
+      values,
+      head,
+      count,
+      capacity,
+      startOffset,
+      firstHalfCount);
+  const WindowStats secondHalf = computeRingWindowStats(
+      values,
+      head,
+      count,
+      capacity,
+      startOffset + firstHalfCount,
+      secondHalfCount);
+  if (!isfinite(firstHalf.mean) || !isfinite(secondHalf.mean)) {
+    return metrics;
+  }
+
+  metrics.valid = true;
+  metrics.mean = full.mean;
+  metrics.stddev = full.stddev;
+  metrics.range = full.range;
+  metrics.drift = fabsf(secondHalf.mean - firstHalf.mean);
+  return metrics;
+}
+
+float computeRingTrimmedMean(
+    const float* values,
+    int head,
+    int count,
+    int capacity,
+    int sampleCount,
+    int trimCount) {
+  if (!values || sampleCount <= 0 || count < sampleCount) {
+    return NAN;
+  }
+
+  const int startOffset = count - sampleCount;
+  const int oldestIndex = (count == capacity) ? head : 0;
+  float ordered[WINDOW_N]{};
+  for (int i = 0; i < sampleCount; ++i) {
+    const int index = (oldestIndex + startOffset + i) % capacity;
+    ordered[i] = values[index];
+  }
+
+  for (int i = 1; i < sampleCount; ++i) {
+    const float key = ordered[i];
+    int j = i - 1;
+    while (j >= 0 && ordered[j] > key) {
+      ordered[j + 1] = ordered[j];
+      --j;
+    }
+    ordered[j + 1] = key;
+  }
+
+  int keepStart = trimCount;
+  int keepEnd = sampleCount - trimCount;
+  if (keepStart >= keepEnd) {
+    keepStart = 0;
+    keepEnd = sampleCount;
+  }
+
+  float sum = 0.0f;
+  int kept = 0;
+  for (int i = keepStart; i < keepEnd; ++i) {
+    sum += ordered[i];
+    ++kept;
+  }
+
+  return kept > 0 ? (sum / kept) : NAN;
 }
 }  // namespace
 
@@ -115,6 +223,7 @@ void LaserModule::begin(EventBus* eb, SystemStateMachine* fsm, WaveModule* waveM
   rhythmStateJudge.configure(phase2Thresholds.rhythm);
   rhythmStateJudge.reset("boot");
   refreshEffectiveZero();
+  resetStableSignalFilter();
   syncStableLiveContract(millis());
   clearStableContractBridge();
   resetMeasurementPlane("boot", false);
@@ -710,6 +819,45 @@ void LaserModule::refreshEffectiveZero() {
   dualZero.effectiveZeroDistance = computeEffectiveZeroDistance();
 }
 
+void LaserModule::resetStableSignalFilter() {
+  stableFilterValid = false;
+  stableFilteredDistance = 0.0f;
+  stableFilteredWeight = 0.0f;
+}
+
+bool LaserModule::updateStableSignalFilter(
+    float distance,
+    float& filteredDistance,
+    float& filteredWeight) {
+  if (!isfinite(distance)) {
+    resetStableSignalFilter();
+    filteredDistance = NAN;
+    filteredWeight = NAN;
+    return false;
+  }
+
+  const float alpha = phase2Thresholds.stable.filterDistanceAlpha;
+  if (!stableFilterValid || !isfinite(stableFilteredDistance)) {
+    stableFilteredDistance = distance;
+    stableFilterValid = true;
+  } else {
+    stableFilteredDistance =
+        stableFilteredDistance + alpha * (distance - stableFilteredDistance);
+  }
+
+  stableFilteredWeight = evaluateCalibrationWeight(stableFilteredDistance);
+  if (!isfinite(stableFilteredWeight)) {
+    resetStableSignalFilter();
+    filteredDistance = NAN;
+    filteredWeight = NAN;
+    return false;
+  }
+
+  filteredDistance = stableFilteredDistance;
+  filteredWeight = stableFilteredWeight;
+  return true;
+}
+
 bool LaserModule::runtimeZeroRefreshFrozen(TopState currentTopState) const {
   return currentTopState == TopState::RUNNING ||
       stableContract.userPresent ||
@@ -748,6 +896,7 @@ void LaserModule::releaseOccupiedCycle(const char* reason, uint32_t now) {
   dualZero.effectiveZeroLocked = false;
   dualZero.effectiveZeroUsesRuntime = false;
   dualZero.effectiveZeroLockedAtMs = 0;
+  resetStableSignalFilter();
   refreshEffectiveZero();
 
   if (wasLocked) {
@@ -1123,6 +1272,7 @@ void LaserModule::resetStableTracking(const char* reason, bool logIfActive) {
   stableBaselineWeight = 0.0f;
   stableLatchedAtMs = 0;
   invalidStableSamples = 0;
+  stableConfirmCount = 0;
   stableCandidateStartedAtMs = 0;
   stableEarlyCheckpointLogged = false;
   stableExitConfirmCount = 0;
@@ -1147,6 +1297,7 @@ void LaserModule::beginStableCandidate(float distance, float weight) {
         phase2Thresholds.stable.enterWindowSamples);
     bufHead = 0;
     bufCount = 0;
+    stableConfirmCount = 0;
     stableCandidateStartedAtMs = millis();
     stableEarlyCheckpointLogged = false;
     logLatestMeasurementPlaneSummary("stable_enter");
@@ -1178,13 +1329,6 @@ bool LaserModule::shouldClearLatchedStable(float distance, float weight, const c
   return false;
 }
 
-uint8_t LaserModule::stableExitConfirmSamplesForReason(const char* reason) const {
-  if (reason && strcmp(reason, "leave_threshold") == 0) {
-    return phase2Thresholds.stable.exitLeaveConfirmSamples;
-  }
-  return phase2Thresholds.stable.exitMovementConfirmSamples;
-}
-
 bool LaserModule::shouldUseFastStableBuildReadInterval() const {
   const TopState currentTopState = sm ? sm->state() : TopState::IDLE;
   const bool baselineReady = stableContract.baselineReadyLatched;
@@ -1192,26 +1336,29 @@ bool LaserModule::shouldUseFastStableBuildReadInterval() const {
       (stableState != StableState::STABLE_LATCHED || !baselineReady);
 }
 
-bool LaserModule::shouldLatchStableEarly(
-    float latestWeight,
-    float& stddev,
-    float& latestDelta) const {
-  if (bufCount != phase2Thresholds.stable.earlyAcceptSamples) {
-    stddev = NAN;
-    latestDelta = NAN;
-    return false;
-  }
-
-  const float mean = getMean(weightBuffer);
-  stddev = getStdDev(weightBuffer);
-  latestDelta = fabsf(latestWeight - mean);
-  return stddev < phase2Thresholds.stable.earlyStrictStdDevKg &&
-      latestDelta < phase2Thresholds.stable.earlyStrictLatestDeltaKg;
-}
-
 void LaserModule::latchStable(uint32_t now, const char* mode, float stddev) {
-  float finalWeight = getMean(weightBuffer);
-  float finalDistance = getMean(distanceBuffer);
+  const int sampleCount = min<int>(bufCount, phase2Thresholds.stable.enterWindowSamples);
+  const int trimCount = min<int>(phase2Thresholds.stable.trimmedMeanDropSamples, sampleCount / 2);
+  float finalWeight = computeRingTrimmedMean(
+      weightBuffer,
+      bufHead,
+      bufCount,
+      WINDOW_N,
+      sampleCount,
+      trimCount);
+  float finalDistance = computeRingTrimmedMean(
+      distanceBuffer,
+      bufHead,
+      bufCount,
+      WINDOW_N,
+      sampleCount,
+      trimCount);
+  if (!isfinite(finalWeight)) {
+    finalWeight = getMean(weightBuffer);
+  }
+  if (!isfinite(finalDistance)) {
+    finalDistance = getMean(distanceBuffer);
+  }
   const uint32_t buildLatencyMs =
       stableCandidateStartedAtMs > 0 && now >= stableCandidateStartedAtMs
           ? (now - stableCandidateStartedAtMs)
@@ -1223,6 +1370,7 @@ void LaserModule::latchStable(uint32_t now, const char* mode, float stddev) {
   stableBaselineDistanceMm = finalDistance * LASER_DISTANCE_RUNTIME_DIVISOR;
   stableLatchedAtMs = now;
   invalidStableSamples = 0;
+  stableConfirmCount = 0;
   stableEarlyCheckpointLogged = false;
   stableExitConfirmCount = 0;
   stableExitPendingReason = nullptr;
@@ -1281,9 +1429,8 @@ void LaserModule::publishBaselineMainVerification(
   e.ts_ms = now;
   e.startReady = stableContract.startReady;
   e.baselineReady = result.evidence.baselineReady;
-  e.stableWeightActive = stableContract.stableReadyLive;
   e.stableWeightKg = result.evidence.baselineWeightKg;
-  e.ma7WeightKg = result.evidence.ma7WeightKg;
+  e.mainMa12WeightKg = result.evidence.ma12WeightKg;
   e.deviationKg = result.evidence.deviationKg;
   e.ratio = result.evidence.ratio;
   e.abnormalDurationMs = result.evidence.abnormalDurationMs;
@@ -1322,8 +1469,8 @@ void LaserModule::startRunSummary(uint32_t now, const RhythmStateUpdateResult& r
   runSummary.ma3DistanceRange = RangeTracker{};
   runSummary.ma5WeightKgRange = RangeTracker{};
   runSummary.ma5DistanceRange = RangeTracker{};
-  runSummary.ma7WeightKgRange = RangeTracker{};
-  runSummary.ma7DistanceRange = RangeTracker{};
+  runSummary.ma12WeightKgRange = RangeTracker{};
+  runSummary.ma12DistanceRange = RangeTracker{};
   runSummary.advisoryCount = 0;
   runSummary.lastAdvisoryType = RiskAdvisoryType::NONE;
   runSummary.lastAdvisoryLevel = RiskAdvisoryLevel::NONE;
@@ -1420,9 +1567,9 @@ void LaserModule::accumulateRunSummary(uint32_t now,
     includeRange(runSummary.ma5WeightKgRange, avgWeight);
     includeRange(runSummary.ma5DistanceRange, avgDistance);
   }
-  if (computeRunAverage(7, avgWeight, avgDistance)) {
-    includeRange(runSummary.ma7WeightKgRange, avgWeight);
-    includeRange(runSummary.ma7DistanceRange, avgDistance);
+  if (computeRunAverage(12, avgWeight, avgDistance)) {
+    includeRange(runSummary.ma12WeightKgRange, avgWeight);
+    includeRange(runSummary.ma12DistanceRange, avgDistance);
   }
 
   if (rhythmResult.advisory.shouldLog) {
@@ -1457,16 +1604,16 @@ void LaserModule::finishRunSummary(uint32_t now,
   char ma3DistanceRange[32];
   char ma5WeightRange[32];
   char ma5DistanceRange[32];
-  char ma7WeightRange[32];
-  char ma7DistanceRange[32];
+  char ma12WeightRange[32];
+  char ma12DistanceRange[32];
   formatRange(runSummary.weightKgRange, weightRange, sizeof(weightRange));
   formatRange(runSummary.distanceRange, distanceRange, sizeof(distanceRange));
   formatRange(runSummary.ma3WeightKgRange, ma3WeightRange, sizeof(ma3WeightRange));
   formatRange(runSummary.ma3DistanceRange, ma3DistanceRange, sizeof(ma3DistanceRange));
   formatRange(runSummary.ma5WeightKgRange, ma5WeightRange, sizeof(ma5WeightRange));
   formatRange(runSummary.ma5DistanceRange, ma5DistanceRange, sizeof(ma5DistanceRange));
-  formatRange(runSummary.ma7WeightKgRange, ma7WeightRange, sizeof(ma7WeightRange));
-  formatRange(runSummary.ma7DistanceRange, ma7DistanceRange, sizeof(ma7DistanceRange));
+  formatRange(runSummary.ma12WeightKgRange, ma12WeightRange, sizeof(ma12WeightRange));
+  formatRange(runSummary.ma12DistanceRange, ma12DistanceRange, sizeof(ma12DistanceRange));
 
   const bool abnormalStop = (stopReason != FaultCode::NONE);
   const uint32_t durationMs = (now >= runSummary.startedAtMs) ? (now - runSummary.startedAtMs) : 0;
@@ -1481,7 +1628,7 @@ void LaserModule::finishRunSummary(uint32_t now,
       "weight_range_kg=%s distance_range=%s "
       "ma3_weight_range_kg=%s ma3_distance_range=%s "
       "ma5_weight_range_kg=%s ma5_distance_range=%s "
-      "ma7_weight_range_kg=%s ma7_distance_range=%s "
+      "ma12_weight_range_kg=%s ma12_distance_range=%s "
       "main_status=%s main_reason=%s advisory_count=%u last_advisory_type=%s "
       "last_advisory_level=%s last_advisory_reason=%s final_abnormal_duration_ms=%lu "
       "final_danger_duration_ms=%lu duration_ms=%lu samples=%lu\n",
@@ -1504,8 +1651,8 @@ void LaserModule::finishRunSummary(uint32_t now,
       ma3DistanceRange,
       ma5WeightRange,
       ma5DistanceRange,
-      ma7WeightRange,
-      ma7DistanceRange,
+      ma12WeightRange,
+      ma12DistanceRange,
       rhythmStateName(runSummary.lastRhythmStatus),
       runSummary.lastRhythmReason ? runSummary.lastRhythmReason : "n/a",
       static_cast<unsigned int>(runSummary.advisoryCount),
@@ -1536,8 +1683,8 @@ void LaserModule::finishRunSummary(uint32_t now,
   runSummary.ma3DistanceRange = RangeTracker{};
   runSummary.ma5WeightKgRange = RangeTracker{};
   runSummary.ma5DistanceRange = RangeTracker{};
-  runSummary.ma7WeightKgRange = RangeTracker{};
-  runSummary.ma7DistanceRange = RangeTracker{};
+  runSummary.ma12WeightKgRange = RangeTracker{};
+  runSummary.ma12DistanceRange = RangeTracker{};
   runSummary.advisoryCount = 0;
   runSummary.lastAdvisoryType = RiskAdvisoryType::NONE;
   runSummary.lastAdvisoryLevel = RiskAdvisoryLevel::NONE;
@@ -1575,6 +1722,7 @@ void LaserModule::handleRunSummaryState(TopState currentTopState,
 
 void LaserModule::handleInvalidMeasurement(const char* reason) {
   rhythmStateJudge.noteInvalidMeasurement();
+  resetStableSignalFilter();
   noteInvalidPresenceSample(millis(), reason);
   const TopState currentTopState = sm ? sm->state() : TopState::IDLE;
 
@@ -1626,7 +1774,7 @@ void LaserModule::updateStableState(float distance, float weight, uint32_t now) 
         stableExitConfirmCount = 1;
       }
 
-      if (stableExitConfirmCount >= stableExitConfirmSamplesForReason(clearReason)) {
+      if (stableExitConfirmCount >= phase2Thresholds.stable.exitConfirmSamples) {
         resetStableTracking(clearReason, true);
       }
       if (currentTopState != TopState::RUNNING &&
@@ -1658,99 +1806,55 @@ void LaserModule::updateStableState(float distance, float weight, uint32_t now) 
   }
 
   beginStableCandidate(distance, weight);
-
-  float earlyStdDev = NAN;
-  float earlyLatestDelta = NAN;
-  if (shouldLatchStableEarly(weight, earlyStdDev, earlyLatestDelta)) {
-    Serial.printf(
-        "[STABLE] EARLY_ACCEPT profile=strict_core samples=%d early_std=%.3f early_latest_delta=%.3f\n",
-        bufCount,
-        earlyStdDev,
-        earlyLatestDelta);
-    latchStable(now, "early_strict", earlyStdDev);
+  const StableWindowMetrics metrics = computeStableWindowMetrics(
+      weightBuffer,
+      bufHead,
+      bufCount,
+      WINDOW_N,
+      phase2Thresholds.stable.enterWindowSamples);
+  if (!metrics.valid) {
     return;
   }
 
-  if (bufCount == phase2Thresholds.stable.earlyAcceptSamples && !stableEarlyCheckpointLogged) {
-    const WindowStats recentWeightStats = computeRingWindowStats(
-        weightBuffer,
-        bufHead,
-        bufCount,
-        WINDOW_N,
-        bufCount - phase2Thresholds.stable.earlyGuardedRecentSamples,
-        phase2Thresholds.stable.earlyGuardedRecentSamples);
-    const float recentMeanDelta =
-        isfinite(recentWeightStats.mean) ? fabsf(recentWeightStats.mean - getMean(weightBuffer)) : NAN;
-    const bool guardedStdOk = earlyStdDev < phase2Thresholds.stable.earlyGuardedStdDevKg;
-    const bool guardedLatestOk = earlyLatestDelta < phase2Thresholds.stable.earlyGuardedLatestDeltaKg;
-    const bool guardedRecentStdOk =
-        recentWeightStats.stddev < phase2Thresholds.stable.earlyGuardedRecentStdDevKg;
-    const bool guardedRecentRangeOk =
-        recentWeightStats.range < phase2Thresholds.stable.earlyGuardedRecentRangeKg;
-    const bool guardedRecentMeanOk =
-        recentMeanDelta < phase2Thresholds.stable.earlyGuardedRecentMeanDeltaKg;
-    const bool guardedEarlyEligible =
-        guardedStdOk &&
-        guardedLatestOk &&
-        guardedRecentStdOk &&
-        guardedRecentRangeOk &&
-        guardedRecentMeanOk;
-
-    // 这是 baseline build 时延点位的最后一次固件侧优化尝试：
-    // 现场主问题是 early_strict 9 样本命中率不足，而不是 legacy fallback 不存在。
-    // 因此这里只增加一个 guarded 补充条件：整窗仍需接近 legacy 标准，
-    // 同时 recent tail 必须明显更稳、且 tail 均值不能偏离整窗均值太多。
-    // 如果现场之后仍主要走 legacy_full_window，就应停止继续在这个点位细抠。
-    if (guardedEarlyEligible) {
+  const bool stableEligible =
+      metrics.stddev < phase2Thresholds.stable.enterStdDevKg &&
+      metrics.range < phase2Thresholds.stable.enterRangeKg &&
+      metrics.drift < phase2Thresholds.stable.enterDriftKg;
+  if (!stableEligible) {
+    stableConfirmCount = 0;
+    if (!stableEarlyCheckpointLogged) {
       stableEarlyCheckpointLogged = true;
       Serial.printf(
-          "[STABLE] EARLY_ACCEPT profile=tail_guard samples=%d early_std=%.3f early_latest_delta=%.3f "
-          "tail_std=%.3f tail_range=%.3f tail_mean_delta=%.3f exit_rule=final_attempt_guarded\n",
+          "[STABLE] HOLD mode=combined_window samples=%d std=%.3f range=%.3f drift=%.3f std_ok=%d range_ok=%d drift_ok=%d\n",
           bufCount,
-          earlyStdDev,
-          earlyLatestDelta,
-          recentWeightStats.stddev,
-          recentWeightStats.range,
-          recentMeanDelta);
-      latchStable(now, "early_strict", earlyStdDev);
-      return;
+          metrics.stddev,
+          metrics.range,
+          metrics.drift,
+          metrics.stddev < phase2Thresholds.stable.enterStdDevKg ? 1 : 0,
+          metrics.range < phase2Thresholds.stable.enterRangeKg ? 1 : 0,
+          metrics.drift < phase2Thresholds.stable.enterDriftKg ? 1 : 0);
     }
-
-    stableEarlyCheckpointLogged = true;
-    Serial.printf(
-        "[STABLE] HOLD mode=legacy_wait samples=%d early_std=%.3f early_latest_delta=%.3f "
-        "strict_std_ok=%d strict_latest_ok=%d guarded_std_ok=%d guarded_latest_ok=%d "
-        "tail_std=%.3f tail_range=%.3f tail_mean_delta=%.3f "
-        "tail_std_ok=%d tail_range_ok=%d tail_mean_ok=%d exit_rule=stop_if_legacy_still_dominates\n",
-        bufCount,
-        earlyStdDev,
-        earlyLatestDelta,
-        earlyStdDev < phase2Thresholds.stable.earlyStrictStdDevKg ? 1 : 0,
-        earlyLatestDelta < phase2Thresholds.stable.earlyStrictLatestDeltaKg ? 1 : 0,
-        guardedStdOk ? 1 : 0,
-        guardedLatestOk ? 1 : 0,
-        recentWeightStats.stddev,
-        recentWeightStats.range,
-        recentMeanDelta,
-        guardedRecentStdOk ? 1 : 0,
-        guardedRecentRangeOk ? 1 : 0,
-        guardedRecentMeanOk ? 1 : 0);
+    return;
   }
 
-  const float fullWindowStdDev = getStdDev(weightBuffer);
-  if (bufCount == phase2Thresholds.stable.enterWindowSamples &&
-      fullWindowStdDev < phase2Thresholds.stable.enterStdDevKg) {
-    latchStable(now, "legacy_full_window", fullWindowStdDev);
+  stableEarlyCheckpointLogged = false;
+  if (stableConfirmCount < 0xFF) {
+    stableConfirmCount++;
   }
+  if (stableConfirmCount < phase2Thresholds.stable.enterConfirmWindows) {
+    return;
+  }
+
+  latchStable(now, "combined_window", metrics.stddev);
 }
 
 void LaserModule::logRhythmStateUpdate(const RhythmStateUpdateResult& result) const {
   if (result.formalEventCandidate) {
     Serial.printf(
-        "%s [EVENT_AUX] formal_event_candidate=1 action_owner=baseline_main stable_weight_kg=%.2f ma7_weight_kg=%.2f deviation_kg=%.2f ratio=%.4f\n",
+        "%s [EVENT_AUX] formal_event_candidate=1 action_owner=baseline_main stable_weight_kg=%.2f ma12_weight_kg=%.2f deviation_kg=%.2f ratio=%.4f\n",
         LogMarker::kResearch,
         result.evidence.baselineWeightKg,
-        result.evidence.ma7WeightKg,
+        result.evidence.ma12WeightKg,
         result.evidence.deviationKg,
         result.evidence.ratio);
   }
@@ -1758,7 +1862,7 @@ void LaserModule::logRhythmStateUpdate(const RhythmStateUpdateResult& result) co
   if (result.advisory.shouldLog) {
     Serial.printf(
         "%s [RISK_ADVISORY] advisory_state=%s advisory_type=%s advisory_level=%s advisory_reason=%s "
-        "stable_weight_kg=%.2f ma7_weight_kg=%.2f deviation_kg=%.2f ratio=%.4f peak_ratio=%.4f "
+        "stable_weight_kg=%.2f ma12_weight_kg=%.2f deviation_kg=%.2f ratio=%.4f peak_ratio=%.4f "
         "abnormal_duration_ms=%lu danger_duration_ms=%lu event_aux_seen=%d final_stop=0 action=advisory_only\n",
         LogMarker::kSafety,
         result.advisory.active ? "ACTIVE" : "NONE",
@@ -1766,7 +1870,7 @@ void LaserModule::logRhythmStateUpdate(const RhythmStateUpdateResult& result) co
         riskAdvisoryLevelName(result.advisory.level),
         result.advisory.reason ? result.advisory.reason : "none",
         result.evidence.baselineWeightKg,
-        result.evidence.ma7WeightKg,
+        result.evidence.ma12WeightKg,
         result.evidence.deviationKg,
         result.evidence.ratio,
         result.advisory.peakRatio,
@@ -1782,7 +1886,7 @@ void LaserModule::logRhythmStateUpdate(const RhythmStateUpdateResult& result) co
   const char* nextStatusName = rhythmStateName(result.status);
 
   Serial.printf(
-      "%s [BASELINE_MAIN_STATE] prev=%s next=%s cause=%s reason=%s stable_weight_kg=%.2f ma7_weight_kg=%.2f "
+      "%s [BASELINE_MAIN_STATE] prev=%s next=%s cause=%s reason=%s stable_weight_kg=%.2f ma12_weight_kg=%.2f "
       "deviation_kg=%.2f ratio=%.4f abnormal_duration_ms=%lu danger_duration_ms=%lu user_present=%d\n",
       LogMarker::kResearch,
       previousStatusName,
@@ -1790,7 +1894,7 @@ void LaserModule::logRhythmStateUpdate(const RhythmStateUpdateResult& result) co
       result.logCause ? result.logCause : "transition",
       result.reason ? result.reason : "n/a",
       result.evidence.baselineWeightKg,
-      result.evidence.ma7WeightKg,
+      result.evidence.ma12WeightKg,
       result.evidence.deviationKg,
       result.evidence.ratio,
       static_cast<unsigned long>(result.evidence.abnormalDurationMs),
@@ -1806,14 +1910,14 @@ void LaserModule::logRhythmStateUpdate(const RhythmStateUpdateResult& result) co
           ? "ratio_above_danger_band"
           : "abnormal_exceeded_recovery_and_danger_hold";
   Serial.printf(
-      "%s [AUTO_STOP_BY_DANGER] stop_reason=%s stop_source=%s stop_detail=%s stable_weight_kg=%.2f ma7_weight_kg=%.2f "
+      "%s [AUTO_STOP_BY_DANGER] stop_reason=%s stop_source=%s stop_detail=%s stable_weight_kg=%.2f ma12_weight_kg=%.2f "
       "deviation_kg=%.2f ratio=%.4f abnormal_duration_ms=%lu danger_duration_ms=%lu fall_stop_enabled=%d\n",
       LogMarker::kSafety,
       result.stopReason ? result.stopReason : "danger_stop",
       verificationStopSourceName(VerificationStopSource::BASELINE_MAIN_LOGIC),
       stopSource,
       result.evidence.baselineWeightKg,
-      result.evidence.ma7WeightKg,
+      result.evidence.ma12WeightKg,
       result.evidence.deviationKg,
       result.evidence.ratio,
       static_cast<unsigned long>(result.evidence.abnormalDurationMs),
@@ -1829,7 +1933,7 @@ void LaserModule::logFallStopSuppressed(
           ? "ratio_above_danger_band"
           : "abnormal_exceeded_recovery_and_danger_hold";
   Serial.printf(
-      "%s [AUTO_STOP_SUPPRESSED] stop_reason=%s stop_source=%s stop_detail=%s stable_weight_kg=%.2f ma7_weight_kg=%.2f "
+      "%s [AUTO_STOP_SUPPRESSED] stop_reason=%s stop_source=%s stop_detail=%s stable_weight_kg=%.2f ma12_weight_kg=%.2f "
       "deviation_kg=%.2f ratio=%.4f abnormal_duration_ms=%lu danger_duration_ms=%lu "
       "fall_stop_enabled=%d should_execute_stop=%d stop_suppressed_by_switch=%d detail=%s\n",
       LogMarker::kSafety,
@@ -1837,7 +1941,7 @@ void LaserModule::logFallStopSuppressed(
       verificationStopSourceName(VerificationStopSource::BASELINE_MAIN_LOGIC),
       stopSource,
       rhythmResult.evidence.baselineWeightKg,
-      rhythmResult.evidence.ma7WeightKg,
+      rhythmResult.evidence.ma12WeightKg,
       rhythmResult.evidence.deviationKg,
       rhythmResult.evidence.ratio,
       static_cast<unsigned long>(rhythmResult.evidence.abnormalDurationMs),
@@ -2014,7 +2118,14 @@ void LaserModule::taskLoop() {
     }
     lastStateEval = now;
 
-    updateStableState(dist, weight, now);
+    float stableEvalDistance = dist;
+    float stableEvalWeight = weight;
+    if (!updateStableSignalFilter(dist, stableEvalDistance, stableEvalWeight)) {
+      handleInvalidMeasurement("stable_filter_invalid");
+      continue;
+    }
+
+    updateStableState(stableEvalDistance, stableEvalWeight, now);
 
     // LaserModule remains the measurement owner. The dedicated rhythm-state
     // judge consumes normalized context only and never owns final actions.

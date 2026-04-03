@@ -106,8 +106,7 @@ class SonicWaveClient(
                     if (!semanticResult.isCompleted &&
                         (event is Event.Capabilities ||
                             event is Event.Nack ||
-                            event is Event.Error ||
-                            event is Event.Ack)
+                            event is Event.Error)
                     ) {
                         semanticResult.complete(event)
                     }
@@ -144,15 +143,6 @@ class SonicWaveClient(
                             reason = "CAP? 收到 ERR:${semanticEvent.reason}，连接可用但协议不匹配",
                         )
                     }
-
-                    is Event.Ack -> {
-                        _mode.value = ProtocolMode.UNKNOWN
-                        CapabilityResult(
-                            mode = ProtocolMode.UNKNOWN,
-                            reason = "CAP? 收到 ACK 但非能力回包: ${semanticEvent.raw}",
-                        )
-                    }
-
                     else -> {
                         if (rawObserved.get()) {
                             _mode.value = ProtocolMode.UNKNOWN

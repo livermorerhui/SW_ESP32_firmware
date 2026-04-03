@@ -22,6 +22,7 @@ import com.sonicwave.protocol.MeasurementCarrier
 import com.sonicwave.protocol.PlatformModel
 import com.sonicwave.protocol.ProtocolMode
 import com.sonicwave.protocol.SafetyEffect
+import com.sonicwave.protocol.WaveState
 import com.sonicwave.sdk.SonicWaveClient
 import com.sonicwave.transport.BleScanResult
 import com.sonicwave.transport.ConnectionState
@@ -161,6 +162,12 @@ private data class PendingWaveStopCompletion(
     val stopSource: String,
 )
 
+private data class PendingDeviceConfigRequest(
+    val platformModel: PlatformModel,
+    val laserInstalled: Boolean,
+    val requestedAtMs: Long,
+)
+
 class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private val client = SonicWaveClient(application)
     private val recorder = TelemetryRecorder(application)
@@ -181,6 +188,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private var selectedDeviceName: String? = null
     private var streamWatchdogJob: Job? = null
     private var waveTruthRefreshJob: Job? = null
+    private var liveWaveParamSendJob: Job? = null
     private var lastStreamAtMs: Long = 0L
     private var telemetrySessionStartMs: Long = 0L
     private var latestDistance: Float? = null
@@ -195,12 +203,15 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private var pendingWaveStartRequest: PendingWaveStartRequest? = null
     private var pendingWaveStopRequest: PendingWaveStopRequest? = null
     private var pendingWaveStopCompletion: PendingWaveStopCompletion? = null
+    private var lastRequestedWaveParams: Pair<Int, Int>? = null
     private var sessionCaptureSignals: SessionCaptureSignals = SessionCaptureSignals()
     private var disconnectRequested: Boolean = false
     private var hadConnectedSession: Boolean = false
     private var awaitingCalibrationCaptureResult: Boolean = false
     private var awaitingModelWriteResult: Boolean = false
     private var awaitingDeviceConfigWriteResult: Boolean = false
+    private var pendingDeviceConfigRequest: PendingDeviceConfigRequest? = null
+    private var pendingDeviceConfigWatchdogJob: Job? = null
     private var pendingWriteModelType: CalibrationModelType? = null
     private var preferredLaserPlatformModel: PlatformModel = PlatformModel.PLUS
     private var testSessionStore: TestSessionUi? = null
@@ -285,7 +296,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         hadConnectedSession = false
         awaitingCalibrationCaptureResult = false
         awaitingModelWriteResult = false
-        awaitingDeviceConfigWriteResult = false
+        clearPendingDeviceConfigWriteState()
         pendingWriteModelType = null
         pendingWaveStartRequest = null
         pendingWaveStopRequest = null
@@ -385,17 +396,23 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 }.getOrNull()
 
                 _uiState.update {
+                    val probeCapabilities = probe?.capabilities
+                    val probedFallStopEnabled = probeCapabilities?.let(::isFallStopEnabled)
                     withCaptureAvailability(
                         it.copy(
                             isDeviceSheetVisible = false,
-                            capabilityInfo = probe?.let(::formatCapabilityInfo),
-                            devicePlatformModel = probe?.capabilities?.let(::platformModelFromCapabilities),
-                            deviceLaserInstalled = probe?.capabilities?.let(::laserInstalledFromCapabilities),
-                            motionSamplingModeEnabled = probe?.capabilities?.let(::isMotionSamplingModeEnabled) ?: false,
-                            fallStopEnabled = probe?.capabilities?.let(::isFallStopEnabled) ?: true,
-                            fallStopStateKnown = probe?.capabilities?.let(::isFallStopEnabled) != null,
+                            capabilityInfo = probe?.let(::formatCapabilityInfo) ?: it.capabilityInfo,
+                            devicePlatformModel = probeCapabilities?.let(::platformModelFromCapabilities) ?: it.devicePlatformModel,
+                            deviceLaserInstalled = probeCapabilities?.let(::laserInstalledFromCapabilities) ?: it.deviceLaserInstalled,
+                            motionSamplingModeEnabled = probeCapabilities?.let(::isMotionSamplingModeEnabled)
+                                ?: it.motionSamplingModeEnabled,
+                            fallStopEnabled = probedFallStopEnabled ?: it.fallStopEnabled,
+                            fallStopStateKnown = probedFallStopEnabled != null || it.fallStopStateKnown,
                             isFallStopSyncInProgress = false,
-                            protocolMode = probe?.mode ?: ProtocolMode.UNKNOWN,
+                            protocolMode = mergeProtocolMode(
+                                currentMode = it.protocolMode,
+                                observedMode = probe?.mode,
+                            ),
                             lastAckOrError = probe?.reason ?: text(R.string.message_connected),
                         ),
                     )
@@ -403,8 +420,14 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 probe?.reason?.let { reason ->
                     appendSystemLog(text(R.string.log_capability_probe_result, reason))
                 }
-                if (probe?.mode == ProtocolMode.PRIMARY) {
+                val nextProtocolMode = mergeProtocolMode(
+                    currentMode = _uiState.value.protocolMode,
+                    observedMode = probe?.mode,
+                )
+                if (nextProtocolMode == ProtocolMode.PRIMARY) {
                     appendSystemLog(text(R.string.log_canonical_protocol_confirmed))
+                }
+                if (shouldAttemptPrimarySnapshotRefresh(nextProtocolMode)) {
                     requestSnapshotRefresh()
                 }
             }.onFailure { error ->
@@ -434,7 +457,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         hadConnectedSession = false
         awaitingCalibrationCaptureResult = false
         awaitingModelWriteResult = false
-        awaitingDeviceConfigWriteResult = false
+        clearPendingDeviceConfigWriteState()
         pendingWriteModelType = null
         pendingWaveStartRequest = null
         pendingWaveStopRequest = null
@@ -645,6 +668,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 freq = sanitized.toIntOrNull() ?: state.freq,
             )
         }
+        scheduleLiveWaveParamSend(trigger = "freq_input")
     }
 
     fun updateIntensityInput(value: String) {
@@ -659,12 +683,26 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 intensity = sanitized.toIntOrNull() ?: state.intensity,
             )
         }
+        scheduleLiveWaveParamSend(trigger = "intensity_input")
     }
 
     fun commitFreqInput() {
-        // Keep frequency editing permissive so values like "1" can become "15";
-        // final range clamping happens only when Start is pressed.
-        _uiState.update { state -> state.copy(freqInput = sanitizeWaveInput(state.freqInput)) }
+        _uiState.update { state ->
+            if (shouldAutoSendLiveWaveParams(state)) {
+                val normalized = normalizeWaveInput(
+                    input = state.freqInput,
+                    fallback = state.freq,
+                    min = WAVE_FREQUENCY_MIN,
+                    max = WAVE_FREQUENCY_MAX,
+                )
+                state.copy(freqInput = normalized.toString(), freq = normalized)
+            } else {
+                // Keep frequency editing permissive while idle so values like
+                // "1" can become "15"; hard clamping is deferred until send.
+                state.copy(freqInput = sanitizeWaveInput(state.freqInput))
+            }
+        }
+        scheduleLiveWaveParamSend(trigger = "freq_commit", immediate = true)
     }
 
     fun commitIntensityInput() {
@@ -677,16 +715,19 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             )
             state.copy(intensityInput = normalized.toString(), intensity = normalized)
         }
+        scheduleLiveWaveParamSend(trigger = "intensity_commit", immediate = true)
     }
 
     fun setPresetFrequency(freq: Int) {
         _uiState.update { it.copy(freqInput = freq.toString(), freq = freq) }
         appendSystemLog("[WAVE_UI] preset frequency=$freq")
+        scheduleLiveWaveParamSend(trigger = "freq_preset", immediate = true)
     }
 
     fun setPresetIntensity(intensity: Int) {
         _uiState.update { it.copy(intensityInput = intensity.toString(), intensity = intensity) }
         appendSystemLog("[WAVE_UI] preset intensity=$intensity")
+        scheduleLiveWaveParamSend(trigger = "intensity_preset", immediate = true)
     }
 
     fun sendZero() {
@@ -744,6 +785,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             intensity = intensity,
             requestedAtMs = System.currentTimeMillis(),
         )
+        lastRequestedWaveParams = null
         _uiState.update { it.syncWaveControlFlags() }
 
         viewModelScope.launch {
@@ -751,6 +793,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 client.send(Command.WaveSet(freqHz = freq, intensity = intensity))
                 client.send(Command.WaveStart)
             }.onSuccess {
+                lastRequestedWaveParams = freq to intensity
                 schedulePendingWaveTruthRefresh("WAVE_START_SENT")
                 _uiState.update {
                     it.copy(
@@ -774,10 +817,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendWaveStop() {
+        liveWaveParamSendJob?.cancel()
         pendingWaveStartRequest = null
         pendingWaveStopRequest = PendingWaveStopRequest(
             requestedAtMs = System.currentTimeMillis(),
         )
+        lastRequestedWaveParams = null
         stagePendingWaveStopCompletion(
             result = "NORMAL_STOP",
             stopReason = "USER_STOP",
@@ -1009,6 +1054,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         awaitingDeviceConfigWriteResult = true
+        pendingDeviceConfigRequest = PendingDeviceConfigRequest(
+            platformModel = platformModel,
+            laserInstalled = laserInstalled,
+            requestedAtMs = System.currentTimeMillis(),
+        )
         _uiState.update {
             it.copy(
                 isDeviceConfigWritePending = true,
@@ -1023,6 +1073,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 ),
             )
         }
+        scheduleDeviceConfigWriteWatchdog()
 
         viewModelScope.launch {
             runCatching {
@@ -1039,7 +1090,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             }.onFailure { error ->
-                awaitingDeviceConfigWriteResult = false
+                clearPendingDeviceConfigWriteState()
                 _uiState.update {
                     it.copy(
                         isDeviceConfigWritePending = false,
@@ -1271,7 +1322,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     fun setFallStopProtectionEnabled(enabled: Boolean) {
         val state = _uiState.value
         if (!state.isConnected ||
-            state.protocolMode != ProtocolMode.PRIMARY ||
+            state.protocolMode == ProtocolMode.LEGACY ||
             state.isFallStopSyncInProgress
         ) {
             return
@@ -1292,7 +1343,22 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             }.onSuccess { probe ->
                 val actualEnabled = probe.capabilities?.let(::isFallStopEnabled)
                 if (probe.mode != ProtocolMode.PRIMARY || actualEnabled == null) {
-                    throw IllegalStateException("fall stop capability sync unavailable")
+                    _uiState.update {
+                        it.copy(
+                            isFallStopSyncInProgress = false,
+                            protocolMode = probe.mode,
+                            capabilityInfo = probe.capabilities?.let(::formatCapabilities) ?: it.capabilityInfo,
+                            lastAckOrError = text(
+                                R.string.message_send_failed,
+                                actionLabel,
+                                probe.reason ?: "fall stop capability sync unavailable",
+                            ),
+                        )
+                    }
+                    appendSystemLog(
+                        "[FALL_STOP_UI] sync_unavailable requested=$enabled mode=${probe.mode.name} reason=${probe.reason ?: "UNKNOWN"}",
+                    )
+                    return@onSuccess
                 }
 
                 _uiState.update {
@@ -1485,11 +1551,13 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     hadConnectedSession = false
                     awaitingCalibrationCaptureResult = false
                     awaitingModelWriteResult = false
-                    awaitingDeviceConfigWriteResult = false
+                    clearPendingDeviceConfigWriteState()
                     pendingWriteModelType = null
                     pendingWaveStartRequest = null
                     pendingWaveStopRequest = null
                     pendingWaveStopCompletion = null
+                    lastRequestedWaveParams = null
+                    liveWaveParamSendJob?.cancel()
                     waveTruthRefreshJob?.cancel()
                     if (disconnectRequested) {
                         disconnectRequested = false
@@ -1573,7 +1641,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         sessionCaptureSignals = sessionCaptureSignals.copy(
                             baselineReady = event.baselineReady,
                             stableWeight = event.stableWeightKg,
-                            ma7 = event.ma7WeightKg,
+                            mainMa12 = event.ma12WeightKg,
                             deviation = event.deviationKg,
                             ratio = event.ratio,
                             mainState = event.mainState,
@@ -1587,7 +1655,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 deviceStartReady = event.startReady ?: it.deviceStartReady,
                                 deviceBaselineReady = event.baselineReady,
                                 stableWeight = event.stableWeightKg ?: it.stableWeight,
-                                stableWeightActive = event.stableWeightActive ?: it.stableWeightActive,
+                                stableWeightActive = event.baselineReady,
                             ).syncWaveControlFlags()
                         }
                     }
@@ -1615,7 +1683,15 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             stopSource = event.stopSource,
                         )
                         schedulePendingWaveTruthRefresh("EVT_STOP")
-                        _uiState.update { it.syncWaveControlFlags() }
+                        _uiState.update {
+                            it.applyWaveOutputTransition(false)
+                                .syncFormalWaveTruth()
+                                .syncWaveControlFlags()
+                        }
+                        reconcileTestSessionWithFormalWaveTruth(
+                            source = "EVT_STOP",
+                            waveOutputActive = _uiState.value.waveOutputActive,
+                        )
                     }
 
                     is Event.Stable -> _uiState.update {
@@ -1642,7 +1718,13 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         } else {
                             it.safetyStatus
                         }
-                        it.copy(
+                        it.applyWaveOutputTransition(
+                            resolveAuthoritativeWaveOutput(
+                                currentWaveOutputActive = it.waveOutputActive,
+                                authoritativeTopState = nextState,
+                                authoritativeWaveOutputActive = null,
+                            ),
+                        ).copy(
                             deviceState = nextState,
                             safetyStatus = nextSafetyStatus,
                         ).syncFormalWaveTruth().syncWaveControlFlags()
@@ -1705,6 +1787,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     is Event.Safety -> {
+                        val authoritativeWaveStopped = shouldTreatSafetyAsWaveStopped(event)
                         val safetyStatus = safetyStatusFromEvent(event)
                         _uiState.update {
                             val nextState = if (event.state != DeviceState.UNKNOWN) {
@@ -1716,7 +1799,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 reasonCode = safetyStatus.reasonCode,
                                 code = safetyStatus.code,
                             )
-                            it.copy(
+                            it.applyWaveOutputTransition(
+                                if (authoritativeWaveStopped) false else it.waveOutputActive,
+                            ).copy(
                                 deviceState = nextState,
                                 faultStatus = event.code?.let(::faultStatusFromCode) ?: it.faultStatus,
                                 deviceReasonCode = safetyStatus.reasonCode,
@@ -1756,19 +1841,37 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             )
                             schedulePendingWaveTruthRefresh("EVT_SAFETY")
                         }
+                        if (authoritativeWaveStopped) {
+                            reconcileTestSessionWithFormalWaveTruth(
+                                source = "EVT_SAFETY_AUTHORITATIVE_INACTIVE",
+                                waveOutputActive = _uiState.value.waveOutputActive,
+                            )
+                        }
                     }
 
                     is Event.Snapshot -> _uiState.update {
+                        val pendingDeviceConfigStatus = pendingDeviceConfigConfirmationStatus(
+                            observedPlatformModel = event.platformModel,
+                            observedLaserInstalled = event.laserInstalled,
+                        )
                         val nextDeviceState = if (event.topState != DeviceState.UNKNOWN) {
                             event.topState
                         } else {
                             it.deviceState
                         }
                         val startReadyMergeContext = currentSnapshotStartReadyMergeContext()
-                        val nextWaveOutputActive = event.waveOutputActive ?: it.waveOutputActive
+                        val nextWaveOutputActive = resolveAuthoritativeWaveOutput(
+                            currentWaveOutputActive = it.waveOutputActive,
+                            authoritativeTopState = nextDeviceState,
+                            authoritativeWaveOutputActive = event.waveOutputActive,
+                        )
                         val nextReasonCode = event.currentReasonCode ?: it.deviceReasonCode
                         val nextSafetyEffectCode = event.currentSafetyEffect ?: it.deviceSafetyEffectCode
                         it.applyWaveOutputTransition(nextWaveOutputActive).copy(
+                            protocolMode = mergeProtocolMode(
+                                currentMode = it.protocolMode,
+                                observedMode = ProtocolMode.PRIMARY,
+                            ),
                             deviceState = nextDeviceState,
                             devicePlatformModel = event.platformModel ?: it.devicePlatformModel,
                             deviceLaserInstalled = event.laserInstalled ?: it.deviceLaserInstalled,
@@ -1790,16 +1893,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 runtimeState = nextDeviceState,
                                 waveOutputActive = nextWaveOutputActive,
                             ),
-                            stableWeight = resolveSnapshotStableWeightValue(
-                                snapshotStableWeightKg = event.stableWeightKg,
-                                snapshotBaselineReady = event.baselineReady,
-                                currentStableWeight = it.stableWeight,
-                            ),
-                            stableWeightActive = resolveSnapshotStableWeightActive(
-                                snapshotStableWeightKg = event.stableWeightKg,
-                                snapshotBaselineReady = event.baselineReady,
-                                currentStableWeightActive = it.stableWeightActive,
-                            ),
+                            deviceConfigStatus = pendingDeviceConfigStatus ?: it.deviceConfigStatus,
+                            stableWeight = event.stableWeightKg ?: it.stableWeight,
+                            stableWeightActive = event.baselineReady ?: it.stableWeightActive,
+                            isDeviceConfigWritePending = awaitingDeviceConfigWriteResult,
                         ).syncFormalWaveTruth().syncWaveControlFlags()
                     }.also {
                         reconcileTestSessionWithFormalWaveTruth(
@@ -1819,6 +1916,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             .syncFormalWaveTruth()
                             .syncWaveControlFlags()
                     }.also {
+                        if (!event.active) {
+                            lastRequestedWaveParams = null
+                            liveWaveParamSendJob?.cancel()
+                        }
                         reconcileTestSessionWithFormalWaveTruth(
                             source = if (event.active) {
                                 "EVT_WAVE_OUTPUT_ACTIVE"
@@ -1895,10 +1996,18 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     is Event.Capabilities -> _uiState.update { state ->
                         val platformModel = platformModelFromCapabilities(event)
                         val laserInstalled = laserInstalledFromCapabilities(event)
+                        val pendingDeviceConfigStatus = pendingDeviceConfigConfirmationStatus(
+                            observedPlatformModel = platformModel,
+                            observedLaserInstalled = laserInstalled,
+                        )
                         if (platformModel != null && platformModel != PlatformModel.BASE) {
                             preferredLaserPlatformModel = platformModel
                         }
                         state.copy(
+                            protocolMode = mergeProtocolMode(
+                                currentMode = state.protocolMode,
+                                observedMode = ProtocolMode.PRIMARY,
+                            ),
                             capabilityInfo = formatCapabilities(event),
                             devicePlatformModel = platformModel ?: state.devicePlatformModel,
                             deviceLaserInstalled = laserInstalled ?: state.deviceLaserInstalled,
@@ -1908,26 +2017,26 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             fallStopEnabled = isFallStopEnabled(event) ?: state.fallStopEnabled,
                             fallStopStateKnown = isFallStopEnabled(event) != null || state.fallStopStateKnown,
                             isFallStopSyncInProgress = false,
+                            deviceConfigStatus = pendingDeviceConfigStatus ?: state.deviceConfigStatus,
+                            isDeviceConfigWritePending = awaitingDeviceConfigWriteResult,
                         )
                     }
 
                     is Event.DeviceConfig -> {
                         val devicePlatformModel = event.platformModel
+                        val eventLaserInstalled = event.laserInstalled
                         if (devicePlatformModel != null && devicePlatformModel != PlatformModel.BASE) {
                             preferredLaserPlatformModel = devicePlatformModel
                         }
                         val systemLogs = mutableListOf<String>()
                         val status = if (awaitingDeviceConfigWriteResult) {
-                            awaitingDeviceConfigWriteResult = false
-                            systemLogs += "[DEVICE_CONFIG] write success model=${devicePlatformModel?.name ?: "UNKNOWN"} laser=${event.laserInstalled ?: false}"
-                            text(
-                                R.string.device_config_status_success,
-                                devicePlatformModel?.name ?: text(R.string.common_not_available),
-                                if (event.laserInstalled == true) {
-                                    text(R.string.device_config_laser_installed)
-                                } else {
-                                    text(R.string.device_config_laser_not_installed)
-                                },
+                            val finalPlatformModel = devicePlatformModel ?: pendingDeviceConfigRequest?.platformModel
+                            val finalLaserInstalled = eventLaserInstalled ?: pendingDeviceConfigRequest?.laserInstalled
+                            clearPendingDeviceConfigWriteState()
+                            systemLogs += "[DEVICE_CONFIG] write success model=${finalPlatformModel?.name ?: "UNKNOWN"} laser=${finalLaserInstalled ?: false}"
+                            pendingDeviceConfigSuccessStatus(
+                                platformModel = finalPlatformModel,
+                                laserInstalled = finalLaserInstalled,
                             )
                         } else {
                             null
@@ -1935,11 +2044,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         _uiState.update {
                             it.copy(
                                 devicePlatformModel = devicePlatformModel ?: it.devicePlatformModel,
-                                deviceLaserInstalled = event.laserInstalled ?: it.deviceLaserInstalled,
+                                deviceLaserInstalled = eventLaserInstalled ?: it.deviceLaserInstalled,
                                 selectedPlatformModel = devicePlatformModel ?: it.selectedPlatformModel,
-                                selectedLaserInstalled = event.laserInstalled ?: it.selectedLaserInstalled,
+                                selectedLaserInstalled = eventLaserInstalled ?: it.selectedLaserInstalled,
                                 deviceConfigStatus = status ?: it.deviceConfigStatus,
-                                isDeviceConfigWritePending = false,
+                                isDeviceConfigWritePending = awaitingDeviceConfigWriteResult,
                                 lastAckOrError = event.raw,
                             )
                         }
@@ -2003,6 +2112,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
                     is Event.Ack -> {
                         val systemLogs = mutableListOf<String>()
+                        val acknowledgedManualStop = pendingWaveStopRequest != null &&
+                            event.raw.equals("ACK:OK", ignoreCase = true)
                         val captureStatus = if (awaitingCalibrationCaptureResult) {
                             awaitingCalibrationCaptureResult = false
                             systemLogs += "[CAL_AUDIT] captureAckUnexpected raw=${event.raw}"
@@ -2035,19 +2146,51 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             null
                         }
                         val deviceConfigStatus = if (awaitingDeviceConfigWriteResult) {
-                            awaitingDeviceConfigWriteResult = false
+                            clearPendingDeviceConfigWriteState()
                             systemLogs += "[DEVICE_CONFIG] write generic_ack raw=${event.raw}"
                             text(R.string.device_config_status_ack_fallback, event.raw)
                         } else {
                             null
                         }
                         _uiState.update {
-                            it.copy(
+                            val ackStopTargetState = if (acknowledgedManualStop) {
+                                resolveOptimisticStopState(
+                                    deviceStartReady = it.deviceStartReady,
+                                    deviceBaselineReady = it.deviceBaselineReady,
+                                    stableWeightActive = it.stableWeightActive,
+                                    stableWeight = it.stableWeight,
+                                )
+                            } else {
+                                it.deviceState
+                            }
+                            val nextState = if (acknowledgedManualStop) {
+                                it.applyWaveOutputTransition(false).copy(
+                                    deviceState = ackStopTargetState,
+                                    deviceReasonCode = "NONE",
+                                    deviceSafetyEffectCode = "NONE",
+                                    safetyStatus = safetyStatusFromSnapshot(
+                                        reasonCode = "NONE",
+                                        effectCode = "NONE",
+                                        runtimeState = ackStopTargetState,
+                                        waveOutputActive = false,
+                                    ),
+                                )
+                            } else {
+                                it
+                            }
+                            nextState.copy(
                                 lastAckOrError = event.raw,
-                                captureStatus = captureStatus ?: it.captureStatus,
-                                writeModelStatus = writeModelStatus ?: it.writeModelStatus,
-                                deviceConfigStatus = deviceConfigStatus ?: it.deviceConfigStatus,
-                                isDeviceConfigWritePending = false,
+                                captureStatus = captureStatus ?: nextState.captureStatus,
+                                writeModelStatus = writeModelStatus ?: nextState.writeModelStatus,
+                                deviceConfigStatus = deviceConfigStatus ?: nextState.deviceConfigStatus,
+                                isDeviceConfigWritePending = awaitingDeviceConfigWriteResult,
+                            ).syncFormalWaveTruth().syncWaveControlFlags()
+                        }
+                        if (acknowledgedManualStop) {
+                            appendSystemLog("[TEST_SESSION] stop ack fallback applied")
+                            reconcileTestSessionWithFormalWaveTruth(
+                                source = "ACK_WAVE_STOP",
+                                waveOutputActive = _uiState.value.waveOutputActive,
                             )
                         }
                         systemLogs.forEach(::appendSystemLog)
@@ -2090,7 +2233,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             null
                         }
                         val deviceConfigStatus = if (awaitingDeviceConfigWriteResult) {
-                            awaitingDeviceConfigWriteResult = false
+                            clearPendingDeviceConfigWriteState()
                             systemLogs += "[DEVICE_CONFIG] write failure reason=$reason"
                             text(R.string.device_config_status_failure, formatNackMessage(reason))
                         } else {
@@ -2102,7 +2245,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 captureStatus = captureStatus ?: it.captureStatus,
                                 writeModelStatus = writeModelStatus ?: it.writeModelStatus,
                                 deviceConfigStatus = deviceConfigStatus ?: it.deviceConfigStatus,
-                                isDeviceConfigWritePending = false,
+                                isDeviceConfigWritePending = awaitingDeviceConfigWriteResult,
                             )
                         }
                         systemLogs.forEach(::appendSystemLog)
@@ -2144,7 +2287,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             null
                         }
                         val deviceConfigStatus = if (awaitingDeviceConfigWriteResult) {
-                            awaitingDeviceConfigWriteResult = false
+                            clearPendingDeviceConfigWriteState()
                             systemLogs += "[DEVICE_CONFIG] write error reason=${event.reason}"
                             text(R.string.device_config_status_send_failed, event.reason)
                         } else {
@@ -2156,7 +2299,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 captureStatus = captureStatus ?: it.captureStatus,
                                 writeModelStatus = writeModelStatus ?: it.writeModelStatus,
                                 deviceConfigStatus = deviceConfigStatus ?: it.deviceConfigStatus,
-                                isDeviceConfigWritePending = false,
+                                isDeviceConfigWritePending = awaitingDeviceConfigWriteResult,
                             )
                         }
                         systemLogs.forEach(::appendSystemLog)
@@ -2835,7 +2978,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 sessionCaptureSignals = sessionCaptureSignals.copy(
                     mainState = event.state,
                     stableWeight = event.stableWeight ?: sessionCaptureSignals.stableWeight,
-                    ma7 = event.ma7 ?: sessionCaptureSignals.ma7,
+                    mainMa12 = event.mainMa12 ?: sessionCaptureSignals.mainMa12,
                     deviation = event.deviation ?: sessionCaptureSignals.deviation,
                     ratio = event.ratio ?: sessionCaptureSignals.ratio,
                     abnormalDurationMs = event.abnormalDurationMs ?: sessionCaptureSignals.abnormalDurationMs,
@@ -2922,7 +3065,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             ma12 = telemetryPoint.ma12,
             ma3 = telemetryPoint.ma3,
             ma5 = telemetryPoint.ma5,
-            ma7 = signals.ma7,
+            mainMa12 = signals.mainMa12,
             deviation = signals.deviation,
             ratio = signals.ratio,
             mainState = signals.mainState,
@@ -3053,14 +3196,22 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }.getOrNull()
 
-            if (probe?.mode == ProtocolMode.PRIMARY) {
+            val nextProtocolMode = mergeProtocolMode(
+                currentMode = _uiState.value.protocolMode,
+                observedMode = probe?.mode,
+            )
+            if (shouldAttemptPrimarySnapshotRefresh(nextProtocolMode)) {
                 requestSnapshotRefresh()
             }
         }
     }
 
     private fun requestSnapshotRefresh() {
-        if (!_uiState.value.isConnected || _uiState.value.protocolMode != ProtocolMode.PRIMARY) return
+        if (!_uiState.value.isConnected ||
+            !shouldAttemptPrimarySnapshotRefresh(_uiState.value.protocolMode)
+        ) {
+            return
+        }
         viewModelScope.launch {
             runCatching {
                 client.send(Command.SnapshotQuery)
@@ -3073,6 +3224,83 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
+    }
+
+    private fun scheduleDeviceConfigWriteWatchdog() {
+        pendingDeviceConfigWatchdogJob?.cancel()
+        pendingDeviceConfigWatchdogJob = viewModelScope.launch {
+            delay(DEVICE_CONFIG_WRITE_CONFIRM_REFRESH_DELAY_MS)
+            if (awaitingDeviceConfigWriteResult && _uiState.value.isConnected) {
+                appendSystemLog("[DEVICE_CONFIG] write awaiting confirmation, refreshing device truth")
+                refreshCapabilityAndSnapshot()
+            }
+
+            delay(DEVICE_CONFIG_WRITE_TIMEOUT_MS - DEVICE_CONFIG_WRITE_CONFIRM_REFRESH_DELAY_MS)
+            if (!awaitingDeviceConfigWriteResult) {
+                pendingDeviceConfigWatchdogJob = null
+                return@launch
+            }
+
+            clearPendingDeviceConfigWriteState(cancelWatchdog = false)
+            appendSystemLog("[DEVICE_CONFIG] write timeout waiting for confirmation")
+            _uiState.update {
+                it.copy(
+                    isDeviceConfigWritePending = false,
+                    deviceConfigStatus = text(R.string.device_config_status_timeout),
+                    lastAckOrError = text(R.string.device_config_status_timeout),
+                )
+            }
+        }
+    }
+
+    private fun pendingDeviceConfigSuccessStatus(
+        platformModel: PlatformModel?,
+        laserInstalled: Boolean?,
+    ): String {
+        return text(
+            R.string.device_config_status_success,
+            platformModel?.name ?: text(R.string.common_not_available),
+            if (laserInstalled == true) {
+                text(R.string.device_config_laser_installed)
+            } else {
+                text(R.string.device_config_laser_not_installed)
+            },
+        )
+    }
+
+    private fun pendingDeviceConfigConfirmationStatus(
+        observedPlatformModel: PlatformModel?,
+        observedLaserInstalled: Boolean?,
+    ): String? {
+        val request = pendingDeviceConfigRequest ?: return null
+        if (!awaitingDeviceConfigWriteResult) return null
+        if (!doesObservedDeviceConfigMatchRequested(
+                requestedPlatformModel = request.platformModel,
+                requestedLaserInstalled = request.laserInstalled,
+                observedPlatformModel = observedPlatformModel,
+                observedLaserInstalled = observedLaserInstalled,
+            )
+        ) {
+            return null
+        }
+
+        clearPendingDeviceConfigWriteState()
+        appendSystemLog(
+            "[DEVICE_CONFIG] write confirmed via device truth model=${request.platformModel.name} laser=${request.laserInstalled}",
+        )
+        return pendingDeviceConfigSuccessStatus(
+            platformModel = observedPlatformModel ?: request.platformModel,
+            laserInstalled = observedLaserInstalled ?: request.laserInstalled,
+        )
+    }
+
+    private fun clearPendingDeviceConfigWriteState(cancelWatchdog: Boolean = true) {
+        awaitingDeviceConfigWriteResult = false
+        pendingDeviceConfigRequest = null
+        if (cancelWatchdog) {
+            pendingDeviceConfigWatchdogJob?.cancel()
+        }
+        pendingDeviceConfigWatchdogJob = null
     }
 
     private fun formatNackMessage(reason: String): String {
@@ -3504,36 +3732,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(stableWeight = null, stableWeightActive = false) }
     }
 
-    private fun resolveSnapshotStableWeightValue(
-        snapshotStableWeightKg: Float?,
-        snapshotBaselineReady: Boolean?,
-        currentStableWeight: Float?,
-    ): Float? {
-        if (snapshotStableWeightKg != null && snapshotStableWeightKg > 0.0f) {
-            return snapshotStableWeightKg
-        }
-        return if (snapshotBaselineReady == false) {
-            null
-        } else {
-            currentStableWeight
-        }
-    }
-
-    private fun resolveSnapshotStableWeightActive(
-        snapshotStableWeightKg: Float?,
-        snapshotBaselineReady: Boolean?,
-        currentStableWeightActive: Boolean,
-    ): Boolean {
-        if (snapshotStableWeightKg != null) {
-            return snapshotBaselineReady == true && snapshotStableWeightKg > 0.0f
-        }
-        return if (snapshotBaselineReady == false) {
-            false
-        } else {
-            currentStableWeightActive
-        }
-    }
-
     private fun sanitizeWaveInput(value: String): String {
         return value.filter(Char::isDigit).take(3)
     }
@@ -3556,6 +3754,80 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         max: Int,
     ): Int {
         return (input.toIntOrNull() ?: fallback).coerceIn(min, max)
+    }
+
+    private fun shouldAutoSendLiveWaveParams(state: UiState): Boolean {
+        return state.isConnected &&
+            state.waveOutputActive &&
+            !state.isWaveStartPending &&
+            !state.isWaveStopPending
+    }
+
+    private fun parseLiveWaveParams(state: UiState): Pair<Int, Int>? {
+        val freq = state.freqInput.toIntOrNull() ?: return null
+        val intensity = state.intensityInput.toIntOrNull() ?: return null
+        if (freq !in WAVE_FREQUENCY_MIN..WAVE_FREQUENCY_MAX) return null
+        if (intensity !in WAVE_INTENSITY_MIN..WAVE_INTENSITY_MAX) return null
+        return freq to intensity
+    }
+
+    private fun scheduleLiveWaveParamSend(
+        trigger: String,
+        immediate: Boolean = false,
+    ) {
+        liveWaveParamSendJob?.cancel()
+        val state = _uiState.value
+        if (!shouldAutoSendLiveWaveParams(state)) {
+            return
+        }
+
+        val pendingParams = parseLiveWaveParams(state) ?: return
+        if (lastRequestedWaveParams == pendingParams) {
+            return
+        }
+
+        liveWaveParamSendJob = viewModelScope.launch {
+            if (!immediate) {
+                delay(LIVE_WAVE_PARAM_SEND_DEBOUNCE_MS)
+            }
+
+            val latestState = _uiState.value
+            if (!shouldAutoSendLiveWaveParams(latestState)) {
+                return@launch
+            }
+
+            val latestParams = parseLiveWaveParams(latestState) ?: return@launch
+            if (lastRequestedWaveParams == latestParams) {
+                return@launch
+            }
+
+            val (freq, intensity) = latestParams
+            runCatching {
+                client.send(Command.WaveSet(freqHz = freq, intensity = intensity))
+            }.onSuccess {
+                lastRequestedWaveParams = latestParams
+                _uiState.update {
+                    it.copy(
+                        freq = freq,
+                        intensity = intensity,
+                        lastAckOrError = text(R.string.message_sent, "WAVE:SET"),
+                    )
+                }
+                appendSystemLog(
+                    "[WAVE_UI] live update trigger=$trigger freq=$freq intensity=$intensity",
+                )
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(
+                        lastAckOrError = text(
+                            R.string.message_send_failed,
+                            "WAVE:SET",
+                            error.message ?: text(R.string.common_not_available),
+                        ),
+                    )
+                }
+            }
+        }
     }
 
     private fun shouldClearStableBaseline(
@@ -3726,6 +3998,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         streamWatchdogJob?.cancel()
         waveTruthRefreshJob?.cancel()
+        liveWaveParamSendJob?.cancel()
+        pendingDeviceConfigWatchdogJob?.cancel()
         runCatching {
             recordingSession?.let { recorder.stopSession(it) }
         }
@@ -3740,6 +4014,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         private const val DISPLAY_THROTTLE_MS = 125L
         private const val RAW_LOG_PUBLISH_INTERVAL_MS = 200L
         private const val TEST_SESSION_PANEL_PUBLISH_INTERVAL_MS = 200L
+        private const val DEVICE_CONFIG_WRITE_CONFIRM_REFRESH_DELAY_MS = 500L
+        private const val DEVICE_CONFIG_WRITE_TIMEOUT_MS = 3_000L
         private const val MEASUREMENT_CONSUME_LOG_INTERVAL = 50L
         private const val MAX_RAW_LOG_LINES = 200
         private const val TELEMETRY_WINDOW_MS = 20_000L
@@ -3748,6 +4024,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         private const val WAVE_FREQUENCY_MAX = 50
         private const val WAVE_INTENSITY_MIN = 0
         private const val WAVE_INTENSITY_MAX = 120
+        private const val LIVE_WAVE_PARAM_SEND_DEBOUNCE_MS = 300L
         private const val PENDING_WAVE_TRUTH_REFRESH_ATTEMPTS = 4
         private const val PENDING_WAVE_TRUTH_REFRESH_INTERVAL_MS = 250L
         private val CSV_STREAM_REGEX = Regex("""^-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?$""")
@@ -3758,6 +4035,26 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 internal enum class SnapshotStartReadyMergeContext {
     AUTHORITATIVE,
     CONTROL_LIFECYCLE_REFRESH,
+}
+
+internal fun resolveAuthoritativeWaveOutput(
+    currentWaveOutputActive: Boolean,
+    authoritativeTopState: DeviceState,
+    authoritativeWaveOutputActive: Boolean?,
+): Boolean {
+    authoritativeWaveOutputActive?.let { return it }
+    return when (authoritativeTopState) {
+        DeviceState.IDLE, DeviceState.ARMED, DeviceState.FAULT_STOP -> false
+        DeviceState.RUNNING, DeviceState.UNKNOWN -> currentWaveOutputActive
+    }
+}
+
+internal fun shouldTreatSafetyAsWaveStopped(event: Event.Safety): Boolean {
+    return event.wave == WaveState.STOPPED ||
+        event.state == DeviceState.IDLE ||
+        event.state == DeviceState.FAULT_STOP ||
+        event.effect == SafetyEffect.ABNORMAL_STOP ||
+        event.effect == SafetyEffect.RECOVERABLE_PAUSE
 }
 
 // Lifecycle-triggered snapshot refresh is used to reconcile formal control/session truth and
@@ -3773,5 +4070,50 @@ internal fun resolveSnapshotStartReady(
         mergeContext == SnapshotStartReadyMergeContext.CONTROL_LIFECYCLE_REFRESH &&
             currentStartReady == true -> currentStartReady
         else -> false
+    }
+}
+
+internal fun mergeProtocolMode(
+    currentMode: ProtocolMode,
+    observedMode: ProtocolMode?,
+): ProtocolMode {
+    return when {
+        currentMode == ProtocolMode.PRIMARY || observedMode == ProtocolMode.PRIMARY -> ProtocolMode.PRIMARY
+        currentMode == ProtocolMode.LEGACY || observedMode == ProtocolMode.LEGACY -> ProtocolMode.LEGACY
+        else -> ProtocolMode.UNKNOWN
+    }
+}
+
+internal fun shouldAttemptPrimarySnapshotRefresh(protocolMode: ProtocolMode): Boolean {
+    return protocolMode != ProtocolMode.LEGACY
+}
+
+internal fun doesObservedDeviceConfigMatchRequested(
+    requestedPlatformModel: PlatformModel?,
+    requestedLaserInstalled: Boolean?,
+    observedPlatformModel: PlatformModel?,
+    observedLaserInstalled: Boolean?,
+): Boolean {
+    return requestedPlatformModel != null &&
+        requestedLaserInstalled != null &&
+        observedPlatformModel == requestedPlatformModel &&
+        observedLaserInstalled == requestedLaserInstalled
+}
+
+internal fun resolveOptimisticStopState(
+    deviceStartReady: Boolean?,
+    deviceBaselineReady: Boolean?,
+    stableWeightActive: Boolean,
+    stableWeight: Float?,
+): DeviceState {
+    return if (
+        deviceStartReady == true &&
+        deviceBaselineReady == true &&
+        stableWeightActive &&
+        stableWeight != null
+    ) {
+        DeviceState.ARMED
+    } else {
+        DeviceState.IDLE
     }
 }
