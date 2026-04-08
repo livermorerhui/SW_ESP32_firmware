@@ -6,10 +6,28 @@
 
 class ProtocolCodec {
 public:
+  static constexpr uint16_t kSingleNotifyBudgetMtu = 185;
+  static constexpr uint16_t kSingleNotifyPayloadBudget = kSingleNotifyBudgetMtu - 3;
+  static constexpr size_t kCapTruthPayloadBudgetBytes = 140;
+  static constexpr size_t kConnectSnapshotPayloadBudgetBytes = kSingleNotifyPayloadBudget;
+
   static bool isSnapshotQuery(const String& in) {
     String s = in;
     s.trim();
     return s.equalsIgnoreCase("SNAPSHOT?");
+  }
+
+  static void logTruthPayloadBudgetWarningIfNeeded(const char* frameKind,
+                                                   size_t framedLen,
+                                                   size_t budgetBytes,
+                                                   const String& payload) {
+    if (framedLen <= budgetBytes) return;
+    Serial.printf(
+        "[PROTO] warn=%s_budget_exceeded framed_len=%u budget=%u payload=%s\n",
+        frameKind,
+        static_cast<unsigned>(framedLen),
+        static_cast<unsigned>(budgetBytes),
+        payload.c_str());
   }
 
   static String encodeSnapshot(const PlatformSnapshot& snapshot) {
@@ -37,6 +55,11 @@ public:
     s += snapshot.degradedStartAvailable ? "1" : "0";
     s += " degraded_start_enabled=";
     s += snapshot.degradedStartEnabled ? "1" : "0";
+    logTruthPayloadBudgetWarningIfNeeded(
+        "runtime_truth",
+        s.length() + 1,
+        kConnectSnapshotPayloadBudgetBytes,
+        s);
     return s;
   }
 

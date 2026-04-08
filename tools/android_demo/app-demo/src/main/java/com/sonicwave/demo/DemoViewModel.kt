@@ -26,6 +26,7 @@ import com.sonicwave.protocol.WaveState
 import com.sonicwave.sdk.SonicWaveClient
 import com.sonicwave.transport.BleScanResult
 import com.sonicwave.transport.ConnectionState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -3078,7 +3079,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private fun schedulePendingWaveTruthRefresh(source: String) {
         if (!_uiState.value.isConnected || _uiState.value.protocolMode != ProtocolMode.PRIMARY) return
         waveTruthRefreshJob?.cancel()
-        waveTruthRefreshJob = viewModelScope.launch {
+        val refreshJob = viewModelScope.launch {
             repeat(PENDING_WAVE_TRUTH_REFRESH_ATTEMPTS) {
                 if (!_uiState.value.isConnected || _uiState.value.protocolMode != ProtocolMode.PRIMARY) {
                     return@launch
@@ -3086,15 +3087,27 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 if (!hasPendingWaveLifecycleTruthRefresh()) {
                     return@launch
                 }
-                runCatching {
+                try {
                     client.send(Command.SnapshotQuery)
-                }.onFailure { error ->
+                } catch (error: Throwable) {
+                    if (error is CancellationException) {
+                        throw error
+                    }
+                    if (!hasPendingWaveLifecycleTruthRefresh()) {
+                        return@launch
+                    }
                     appendSystemLog(
                         "[TEST_SESSION] truth refresh failed source=$source reason=${error.message ?: "UNKNOWN"}",
                     )
                     return@launch
                 }
                 delay(PENDING_WAVE_TRUTH_REFRESH_INTERVAL_MS)
+            }
+        }
+        waveTruthRefreshJob = refreshJob
+        refreshJob.invokeOnCompletion {
+            if (waveTruthRefreshJob === refreshJob) {
+                waveTruthRefreshJob = null
             }
         }
     }

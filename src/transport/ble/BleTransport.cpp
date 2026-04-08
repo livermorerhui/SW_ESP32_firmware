@@ -18,10 +18,6 @@ static constexpr uint16_t kConnParamMinInterval = 12;
 static constexpr uint16_t kConnParamMaxInterval = 24;
 static constexpr uint16_t kConnParamLatency = 0;
 static constexpr uint16_t kConnParamTimeout = 400;
-static constexpr uint16_t kSingleNotifyBudgetMtu = 185;
-static constexpr uint16_t kSingleNotifyPayloadBudget = kSingleNotifyBudgetMtu - 3;
-static constexpr size_t kCapTruthPayloadBudgetBytes = 140;
-static constexpr size_t kConnectSnapshotPayloadBudgetBytes = kSingleNotifyPayloadBudget;
 static constexpr uint32_t kStreamControlHoldoffMs = 35;
 
 const char* BleTransport::disconnectReasonCodeName(DisconnectReasonCode code) {
@@ -740,20 +736,20 @@ void BleTransport::noteQueueWatermark(const char* queueName, UBaseType_t depth, 
 void BleTransport::logTruthPayloadBudgetWarningIfNeeded(const char* s, size_t framedLen) const {
   if (!s) return;
 
-  if (strncmp(s, "ACK:CAP ", 8) == 0 && framedLen > kCapTruthPayloadBudgetBytes) {
+  if (strncmp(s, "ACK:CAP ", 8) == 0 && framedLen > ProtocolCodec::kCapTruthPayloadBudgetBytes) {
     Serial.printf(
         "[BLE TX] warn=bootstrap_truth_budget_exceeded framed_len=%u budget=%u prefix=%s\n",
         static_cast<unsigned>(framedLen),
-        static_cast<unsigned>(kCapTruthPayloadBudgetBytes),
+        static_cast<unsigned>(ProtocolCodec::kCapTruthPayloadBudgetBytes),
         s);
     return;
   }
 
-  if (strncmp(s, "SNAPSHOT:", 9) == 0 && framedLen > kConnectSnapshotPayloadBudgetBytes) {
+  if (strncmp(s, "SNAPSHOT:", 9) == 0 && framedLen > ProtocolCodec::kConnectSnapshotPayloadBudgetBytes) {
     Serial.printf(
         "[BLE TX] warn=runtime_truth_budget_exceeded framed_len=%u budget=%u prefix=%s\n",
         static_cast<unsigned>(framedLen),
-        static_cast<unsigned>(kConnectSnapshotPayloadBudgetBytes),
+        static_cast<unsigned>(ProtocolCodec::kConnectSnapshotPayloadBudgetBytes),
         s);
   }
 }

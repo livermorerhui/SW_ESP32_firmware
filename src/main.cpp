@@ -54,6 +54,11 @@ public:
             " laser_installed=" + String(l->laserInstalled() ? 1 : 0) +
             " fall_stop_enabled=" + String(sm->fallStopEnabled() ? 1 : 0) +
             " fall_stop_mode=" + String(sm->fallStopModeName());
+        ProtocolCodec::logTruthPayloadBudgetWarningIfNeeded(
+            "bootstrap_truth",
+            outAck.length() + 1,
+            ProtocolCodec::kCapTruthPayloadBudgetBytes,
+            outAck);
         return true;
       }
 
