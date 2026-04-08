@@ -18,6 +18,11 @@ static constexpr uint16_t kConnParamMinInterval = 12;
 static constexpr uint16_t kConnParamMaxInterval = 24;
 static constexpr uint16_t kConnParamLatency = 0;
 static constexpr uint16_t kConnParamTimeout = 400;
+static constexpr uint16_t kSingleNotifyBudgetMtu = 185;
+static constexpr uint16_t kSingleNotifyPayloadBudget = kSingleNotifyBudgetMtu - 3;
+static constexpr size_t kCapTruthPayloadBudgetBytes = 140;
+static constexpr size_t kConnectSnapshotPayloadBudgetBytes = kSingleNotifyPayloadBudget;
+static constexpr uint32_t kStreamControlHoldoffMs = 35;
 
 const char* BleTransport::disconnectReasonCodeName(DisconnectReasonCode code) {
   switch (code) {
@@ -702,6 +707,17 @@ bool BleTransport::enqueueStreamTxLine(const String& s) {
 bool BleTransport::enqueueStreamTxLineRaw(const char* s) {
   if (!txStreamQueue || !s) return false;
 
+  if (shouldDeferStreamForControl()) {
+    txStreamSuppressedForControlCount += 1;
+    if ((txStreamSuppressedForControlCount % 50UL) == 1UL) {
+      Serial.printf(
+          "[BLE TX] queue=stream suppressed_for_control=%lu control_depth=%u\n",
+          static_cast<unsigned long>(txStreamSuppressedForControlCount),
+          txControlQueue ? static_cast<unsigned>(uxQueueMessagesWaiting(txControlQueue)) : 0U);
+    }
+    return true;
+  }
+
   TxMsg msg{};
   msg.priority = TxMsg::Priority::STREAM;
   strlcpy(msg.line, s, sizeof(msg.line));
@@ -719,6 +735,39 @@ void BleTransport::noteQueueWatermark(const char* queueName, UBaseType_t depth, 
   if (depth <= highWatermark) return;
   highWatermark = depth;
   Serial.printf("[BLE TX] queue=%s high_watermark=%u\n", queueName, static_cast<unsigned>(highWatermark));
+}
+
+void BleTransport::logTruthPayloadBudgetWarningIfNeeded(const char* s, size_t framedLen) const {
+  if (!s) return;
+
+  if (strncmp(s, "ACK:CAP ", 8) == 0 && framedLen > kCapTruthPayloadBudgetBytes) {
+    Serial.printf(
+        "[BLE TX] warn=bootstrap_truth_budget_exceeded framed_len=%u budget=%u prefix=%s\n",
+        static_cast<unsigned>(framedLen),
+        static_cast<unsigned>(kCapTruthPayloadBudgetBytes),
+        s);
+    return;
+  }
+
+  if (strncmp(s, "SNAPSHOT:", 9) == 0 && framedLen > kConnectSnapshotPayloadBudgetBytes) {
+    Serial.printf(
+        "[BLE TX] warn=runtime_truth_budget_exceeded framed_len=%u budget=%u prefix=%s\n",
+        static_cast<unsigned>(framedLen),
+        static_cast<unsigned>(kConnectSnapshotPayloadBudgetBytes),
+        s);
+  }
+}
+
+bool BleTransport::shouldDeferStreamForControl() const {
+  if (txControlQueue && uxQueueMessagesWaiting(txControlQueue) > 0) {
+    return true;
+  }
+  const uint32_t nowMs = millis();
+  return lastControlTxAtMs != 0 && (nowMs - lastControlTxAtMs) < kStreamControlHoldoffMs;
+}
+
+bool BleTransport::isStreamFrame(const char* s) const {
+  return s && strncmp(s, "EVT:STREAM ", 11) == 0;
 }
 
 bool BleTransport::tryHandleDirectQuery(const String& s) {
@@ -767,6 +816,8 @@ void BleTransport::sendLineNow(const char* s) {
     return;
   }
 
+  logTruthPayloadBudgetWarningIfNeeded(s, framed.length());
+
   if (negotiatedMtu >= 23) {
     const uint16_t notifyPayloadLimit = negotiatedMtu - 3;
     if (framed.length() > notifyPayloadLimit) {
@@ -781,7 +832,11 @@ void BleTransport::sendLineNow(const char* s) {
 
   pTx->setValue((uint8_t*)framed.c_str(), framed.length());
   pTx->notify();
-  noteTxNotifyIssued(millis(), framed.length(), strncmp(s, "EVT:STREAM ", 11) == 0);
+  const bool streamFrame = isStreamFrame(s);
+  if (!streamFrame) {
+    lastControlTxAtMs = millis();
+  }
+  noteTxNotifyIssued(millis(), framed.length(), streamFrame);
 #if DEBUG_BLE_TX_VERBOSE
   Serial.println("[BLE TX] notify() called");
 #endif
@@ -866,6 +921,10 @@ void BleTransport::txTaskLoop() {
     }
 
     if (xQueueReceive(txStreamQueue, &msg, 0) == pdTRUE) {
+      if (shouldDeferStreamForControl()) {
+        xQueueOverwrite(txStreamQueue, &msg);
+        continue;
+      }
       sendLineNow(msg.line);
     }
   }

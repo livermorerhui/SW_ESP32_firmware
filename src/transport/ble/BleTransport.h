@@ -149,6 +149,9 @@ private:
   bool enqueueStreamTxLineRaw(const char* s);
   bool tryHandleDirectQuery(const String& s);
   void noteQueueWatermark(const char* queueName, UBaseType_t depth, UBaseType_t& highWatermark);
+  void logTruthPayloadBudgetWarningIfNeeded(const char* s, size_t framedLen) const;
+  bool isStreamFrame(const char* s) const;
+  bool shouldDeferStreamForControl() const;
 
   friend class MyServerCallbacks;
   friend class MyRxCallbacks;
@@ -195,6 +198,8 @@ private:
   UBaseType_t txStreamHighWatermark = 0;
   uint32_t txControlDropCount = 0;
   uint32_t txStreamReplaceCount = 0;
+  uint32_t txStreamSuppressedForControlCount = 0;
+  uint32_t lastControlTxAtMs = 0;
   uint32_t lastRecoveryDisconnectMs = 0;
   std::string advertisedDeviceName;
   std::string advertisedModelName;
