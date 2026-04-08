@@ -27,7 +27,15 @@ fun FallStopProtectionSection(
         uiState.protocolMode != ProtocolMode.LEGACY &&
         !uiState.isFallStopSyncInProgress
     val statusText = when {
+        uiState.isFallStopSyncInProgress && uiState.fallStopAckConfirmed && uiState.fallStopEnabled ->
+            stringResource(R.string.value_fall_stop_protection_ack_enabled_verifying)
+        uiState.isFallStopSyncInProgress && uiState.fallStopAckConfirmed ->
+            stringResource(R.string.value_fall_stop_protection_ack_disabled_verifying)
         uiState.isFallStopSyncInProgress -> stringResource(R.string.value_fall_stop_protection_syncing)
+        uiState.fallStopAckConfirmed && uiState.fallStopEnabled ->
+            stringResource(R.string.value_fall_stop_protection_ack_enabled_unverified)
+        uiState.fallStopAckConfirmed ->
+            stringResource(R.string.value_fall_stop_protection_ack_disabled_unverified)
         !uiState.fallStopStateKnown -> stringResource(R.string.value_fall_stop_protection_unknown)
         uiState.fallStopEnabled -> stringResource(R.string.value_fall_stop_protection_enabled)
         else -> stringResource(R.string.value_fall_stop_protection_disabled)

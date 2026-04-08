@@ -10,8 +10,78 @@ static constexpr uint8_t kTxStreamQueueLen = 1;
 static constexpr uint32_t kAdvRestartMinIntervalMs = 300;
 static constexpr uint32_t kAdvRecoveryCheckIntervalMs = 400;
 static constexpr uint32_t kControlLatencyWarnMs = 80;
-static constexpr uint32_t kInitialProtocolActivityTimeoutMs = 3500;
+static constexpr uint32_t kRecoveryObservationWindowMs = 5000;
+static constexpr uint8_t kRecoveryObservationMinChecks = 3;
 static constexpr uint32_t kRecoveryDisconnectMinIntervalMs = 1200;
+static constexpr uint16_t kPreferredMtu = 247;
+static constexpr uint16_t kConnParamMinInterval = 12;
+static constexpr uint16_t kConnParamMaxInterval = 24;
+static constexpr uint16_t kConnParamLatency = 0;
+static constexpr uint16_t kConnParamTimeout = 400;
+
+const char* BleTransport::disconnectReasonCodeName(DisconnectReasonCode code) {
+  switch (code) {
+    case DisconnectReasonCode::PEER_DISCONNECT:
+      return "PEER_DISCONNECT";
+    case DisconnectReasonCode::LOCAL_FORCE_DISCONNECT:
+      return "LOCAL_FORCE_DISCONNECT";
+    case DisconnectReasonCode::RECOVERY_FORCE_DISCONNECT:
+      return "RECOVERY_FORCE_DISCONNECT";
+    case DisconnectReasonCode::UNKNOWN:
+      return "UNKNOWN";
+  }
+  return "UNKNOWN";
+}
+
+const char* BleTransport::negotiationStatusCodeName(NegotiationStatusCode code) {
+  switch (code) {
+    case NegotiationStatusCode::NOT_ATTEMPTED:
+      return "NOT_ATTEMPTED";
+    case NegotiationStatusCode::REQUESTED:
+      return "REQUESTED";
+    case NegotiationStatusCode::APPLIED:
+      return "APPLIED";
+    case NegotiationStatusCode::FAILED:
+      return "FAILED";
+    case NegotiationStatusCode::UNKNOWN_RESULT:
+      return "UNKNOWN_RESULT";
+  }
+  return "UNKNOWN_RESULT";
+}
+
+const char* BleTransport::recoveryAnomalyCodeName(RecoveryAnomalyCode code) {
+  switch (code) {
+    case RecoveryAnomalyCode::NONE:
+      return "NONE";
+    case RecoveryAnomalyCode::LOCAL_CONNECTED_BUT_SERVER_COUNT_ZERO:
+      return "LOCAL_CONNECTED_BUT_SERVER_COUNT_ZERO";
+    case RecoveryAnomalyCode::LOCAL_SERVER_CONN_ID_MISMATCH:
+      return "LOCAL_SERVER_CONN_ID_MISMATCH";
+  }
+  return "NONE";
+}
+
+const char* BleTransport::recoverySkipReasonCodeName(RecoverySkipReasonCode code) {
+  switch (code) {
+    case RecoverySkipReasonCode::NONE:
+      return "NONE";
+    case RecoverySkipReasonCode::NO_ANOMALY:
+      return "NO_ANOMALY";
+    case RecoverySkipReasonCode::PROHIBITED_SCENARIO:
+      return "PROHIBITED_SCENARIO";
+    case RecoverySkipReasonCode::WINDOW_NOT_REACHED:
+      return "WINDOW_NOT_REACHED";
+    case RecoverySkipReasonCode::SESSION_CHANGED:
+      return "SESSION_CHANGED";
+    case RecoverySkipReasonCode::RATE_LIMITED:
+      return "RATE_LIMITED";
+  }
+  return "NONE";
+}
+
+bool BleTransport::recoveryAnomalyAllowedInPhase1(RecoveryAnomalyCode code) {
+  return code == RecoveryAnomalyCode::LOCAL_CONNECTED_BUT_SERVER_COUNT_ZERO;
+}
 
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer*) override {}
@@ -19,25 +89,37 @@ class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* server, esp_ble_gatts_cb_param_t* param) override {
     if (g_self) {
       const uint16_t connId = param ? param->connect.conn_id : (server ? server->getConnId() : 0);
-      g_self->updateConnectionTrackingOnConnect(server, connId, true);
+      const esp_bd_addr_t* remoteBda = param ? &param->connect.remote_bda : nullptr;
+      g_self->resetSessionOnConnect(server, connId, true, remoteBda, millis());
       g_self->enqueueConnectEvent();
     }
-    Serial.printf("%s BLE connected conn_id=%u\n",
-                  LogMarker::kBleConnected,
-                  static_cast<unsigned>(param ? param->connect.conn_id : 0));
+  }
+
+  void onMtuChanged(BLEServer*, esp_ble_gatts_cb_param_t* param) override {
+    if (!g_self || !param) return;
+    g_self->noteMtuNegotiationResult(
+        g_self->sessionId,
+        BleTransport::NegotiationStatusCode::APPLIED,
+        param->mtu.mtu);
   }
 
   void onDisconnect(BLEServer*) override {}
 
   void onDisconnect(BLEServer* server, esp_ble_gatts_cb_param_t* param) override {
     if (g_self) {
-      g_self->updateConnectionTrackingOnDisconnect();
+      const uint16_t connId = param ? param->disconnect.conn_id : 0;
+      const uint16_t rawReason = param ? param->disconnect.reason : 0;
+      const BleTransport::DisconnectReasonCode reasonCode =
+          (g_self->lastDisconnectReasonCode == BleTransport::DisconnectReasonCode::RECOVERY_FORCE_DISCONNECT)
+              ? BleTransport::DisconnectReasonCode::RECOVERY_FORCE_DISCONNECT
+              : BleTransport::DisconnectReasonCode::PEER_DISCONNECT;
+      g_self->resetSessionOnDisconnect(
+          connId,
+          reasonCode,
+          rawReason,
+          millis());
       g_self->enqueueDisconnectEvent();
     }
-    Serial.printf("%s BLE disconnected conn_id=%u connected_count=%lu\n",
-                  LogMarker::kBleDisconnected,
-                  static_cast<unsigned>(param ? param->disconnect.conn_id : 0),
-                  static_cast<unsigned long>(server ? server->getConnectedCount() : 0));
   }
 };
 
@@ -45,10 +127,9 @@ class MyRxCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* c) override {
     if (!g_self) return;
 
-    g_self->noteProtocolActivity();
-
     std::string v = c->getValue();
     if (v.empty()) return;
+    g_self->noteRxActivity(millis(), v.size());
 
     if (!g_self->enqueueCommand(v)) {
       g_self->enqueueTxLineRaw("NACK:BUSY");
@@ -67,6 +148,22 @@ void BleTransport::txTaskThunk(void* arg) {
 void BleTransport::begin(CommandBus* cb, const char* deviceName, const char* advertisedModel) {
   bus = cb;
   g_self = this;
+  sessionId = 0;
+  clearRecoveryState();
+  rxActivityObserved = false;
+  lastRxActivityAtMs = 0;
+  txNotifyIssuedObserved = false;
+  lastTxNotifyIssuedAtMs = 0;
+  sessionProgressAtMs = 0;
+  notifySubscriptionState = NotifySubscriptionState::UNKNOWN;
+  mtuNegotiationState = NegotiationStatusCode::NOT_ATTEMPTED;
+  negotiatedMtu = 23;
+  connParamUpdateState = NegotiationStatusCode::NOT_ATTEMPTED;
+  lastDisconnectReasonCode = DisconnectReasonCode::UNKNOWN;
+  lastRecoveryReasonCode = RecoveryAnomalyCode::NONE;
+  remoteBdaValid = false;
+  memset(remoteBda, 0, sizeof(remoteBda));
+  lastDisconnectRawReason = 0;
 
   controlQueue = xQueueCreate(kControlQueueLen, sizeof(ControlMsg));
   txControlQueue = xQueueCreate(kTxControlQueueLen, sizeof(TxMsg));
@@ -87,6 +184,16 @@ void BleTransport::begin(CommandBus* cb, const char* deviceName, const char* adv
   advertisedModelName = resolvedAdvertisedModel ? resolvedAdvertisedModel : "";
   BLEDevice::init(resolvedDeviceName);
   BLEDevice::setPower(ESP_PWR_LVL_P9);
+  const esp_err_t mtuErr = BLEDevice::setMTU(kPreferredMtu);
+  if (mtuErr == ESP_OK) {
+    negotiatedMtu = BLEDevice::getMTU();
+  }
+  logNegotiationEvent(
+      "mtu",
+      "local_preference",
+      sessionId,
+      mtuErr == ESP_OK ? NegotiationStatusCode::APPLIED : NegotiationStatusCode::FAILED,
+      negotiatedMtu);
 
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
@@ -126,64 +233,365 @@ void BleTransport::updateAdvertisingIdentity(const char* deviceName, const char*
   }
 }
 
-void BleTransport::updateConnectionTrackingOnConnect(BLEServer* server, uint16_t connId, bool connIdKnown) {
+void BleTransport::logSessionEvent(const char* eventName,
+                                   uint32_t sessionIdValue,
+                                   uint16_t connIdValue,
+                                   DisconnectReasonCode reasonCode,
+                                   uint16_t detailValue) const {
+  Serial.printf(
+      "[BLE SESSION] event=%s session_id=%lu conn_id=%u reason_code=%s detail=%u\n",
+      eventName ? eventName : "unknown",
+      static_cast<unsigned long>(sessionIdValue),
+      static_cast<unsigned>(connIdValue),
+      disconnectReasonCodeName(reasonCode),
+      static_cast<unsigned>(detailValue));
+}
+
+void BleTransport::logNegotiationEvent(const char* kind,
+                                       const char* action,
+                                       uint32_t sessionIdValue,
+                                       NegotiationStatusCode status,
+                                       uint16_t value) const {
+  Serial.printf(
+      "[BLE NEGOTIATION] kind=%s action=%s session_id=%lu status=%s value=%u\n",
+      kind ? kind : "unknown",
+      action ? action : "unknown",
+      static_cast<unsigned long>(sessionIdValue),
+      negotiationStatusCodeName(status),
+      static_cast<unsigned>(value));
+}
+
+void BleTransport::logRecoveryEvent(const char* action,
+                                    uint32_t sessionIdValue,
+                                    uint16_t connIdValue,
+                                    RecoveryAnomalyCode anomalyCode,
+                                    RecoverySkipReasonCode skipReason,
+                                    uint32_t observedForMs,
+                                    uint8_t checks) const {
+  Serial.printf(
+      "[BLE RECOVERY] action=%s session_id=%lu conn_id=%u anomaly=%s skip_reason=%s observed_for_ms=%lu checks=%u\n",
+      action ? action : "unknown",
+      static_cast<unsigned long>(sessionIdValue),
+      static_cast<unsigned>(connIdValue),
+      recoveryAnomalyCodeName(anomalyCode),
+      recoverySkipReasonCodeName(skipReason),
+      static_cast<unsigned long>(observedForMs),
+      static_cast<unsigned>(checks));
+}
+
+void BleTransport::resetSessionOnConnect(BLEServer* server,
+                                         uint16_t connId,
+                                         bool connIdKnown,
+                                         const esp_bd_addr_t* remoteBdaIn,
+                                         uint32_t nowMs) {
   deviceConnected = true;
   protocolActivityObserved = false;
   currentConnIdValid = connIdKnown;
   currentConnId = connId;
-  connectedAtMs = millis();
+  connectedAtMs = nowMs;
   lastProtocolActivityAtMs = connectedAtMs;
-  if (server) {
-    Serial.printf(
-        "[BLE RECOVERY] state=connected conn_id=%u connected_count=%lu\n",
-        static_cast<unsigned>(connId),
-        static_cast<unsigned long>(server->getConnectedCount()));
+  sessionId += 1;
+  rxActivityObserved = false;
+  lastRxActivityAtMs = 0;
+  txNotifyIssuedObserved = false;
+  lastTxNotifyIssuedAtMs = 0;
+  sessionProgressAtMs = nowMs;
+  notifySubscriptionState = NotifySubscriptionState::UNKNOWN;
+  mtuNegotiationState = NegotiationStatusCode::NOT_ATTEMPTED;
+  negotiatedMtu = BLEDevice::getMTU();
+  connParamUpdateState = NegotiationStatusCode::NOT_ATTEMPTED;
+  remoteBdaValid = remoteBdaIn != nullptr;
+  if (remoteBdaValid) {
+    memcpy(remoteBda, *remoteBdaIn, sizeof(remoteBda));
+  } else {
+    memset(remoteBda, 0, sizeof(remoteBda));
   }
+  clearRecoveryState();
+  lastDisconnectReasonCode = DisconnectReasonCode::UNKNOWN;
+  lastDisconnectRawReason = 0;
+  (void)server;
+  logSessionEvent("connect", sessionId, connId, DisconnectReasonCode::UNKNOWN);
 }
 
-void BleTransport::updateConnectionTrackingOnDisconnect() {
+void BleTransport::resetSessionOnDisconnect(uint16_t connId,
+                                            DisconnectReasonCode reasonCode,
+                                            uint16_t rawReason,
+                                            uint32_t nowMs) {
   deviceConnected = false;
   protocolActivityObserved = false;
   currentConnIdValid = false;
   currentConnId = 0;
   connectedAtMs = 0;
   lastProtocolActivityAtMs = 0;
+  rxActivityObserved = false;
+  lastRxActivityAtMs = 0;
+  txNotifyIssuedObserved = false;
+  lastTxNotifyIssuedAtMs = 0;
+  sessionProgressAtMs = nowMs;
+  notifySubscriptionState = NotifySubscriptionState::UNKNOWN;
+  mtuNegotiationState = NegotiationStatusCode::NOT_ATTEMPTED;
+  negotiatedMtu = BLEDevice::getMTU();
+  connParamUpdateState = NegotiationStatusCode::NOT_ATTEMPTED;
+  remoteBdaValid = false;
+  memset(remoteBda, 0, sizeof(remoteBda));
+  clearRecoveryState();
+  lastDisconnectReasonCode = reasonCode;
+  lastDisconnectRawReason = rawReason;
+  logSessionEvent("disconnect", sessionId, connId, reasonCode, rawReason);
 }
 
-void BleTransport::noteProtocolActivity() {
+void BleTransport::noteRxActivity(uint32_t nowMs, size_t rxBytes) {
   protocolActivityObserved = true;
-  lastProtocolActivityAtMs = millis();
+  lastProtocolActivityAtMs = nowMs;
+  lastRxActivityAtMs = nowMs;
+  sessionProgressAtMs = nowMs;
+  if (!rxActivityObserved) {
+    rxActivityObserved = true;
+    Serial.printf(
+        "[BLE SESSION] event=rx_first session_id=%lu conn_id=%u bytes=%u\n",
+        static_cast<unsigned long>(sessionId),
+        static_cast<unsigned>(currentConnId),
+        static_cast<unsigned>(rxBytes));
+  }
+}
+
+void BleTransport::noteTxNotifyIssued(uint32_t nowMs, size_t txBytes, bool isStreamFrame) {
+  protocolActivityObserved = true;
+  lastProtocolActivityAtMs = nowMs;
+  lastTxNotifyIssuedAtMs = nowMs;
+  sessionProgressAtMs = nowMs;
+  if (!txNotifyIssuedObserved) {
+    txNotifyIssuedObserved = true;
+    Serial.printf(
+        "[BLE SESSION] event=tx_notify_first session_id=%lu conn_id=%u bytes=%u stream=%d\n",
+        static_cast<unsigned long>(sessionId),
+        static_cast<unsigned>(currentConnId),
+        static_cast<unsigned>(txBytes),
+        isStreamFrame ? 1 : 0);
+  }
+}
+
+void BleTransport::requestMtuNegotiation(uint32_t expectedSessionId) {
+  if (!deviceConnected || expectedSessionId != sessionId) {
+    return;
+  }
+
+  const esp_err_t err = BLEDevice::setMTU(kPreferredMtu);
+  if (err != ESP_OK) {
+    noteMtuNegotiationResult(expectedSessionId, NegotiationStatusCode::FAILED, negotiatedMtu);
+    return;
+  }
+
+  mtuNegotiationState = NegotiationStatusCode::REQUESTED;
+  sessionProgressAtMs = millis();
+  logNegotiationEvent("mtu", "request", expectedSessionId, mtuNegotiationState, kPreferredMtu);
+}
+
+void BleTransport::noteMtuNegotiationResult(uint32_t observedSessionId,
+                                            NegotiationStatusCode status,
+                                            uint16_t negotiatedMtuValue) {
+  if (observedSessionId != sessionId) {
+    return;
+  }
+
+  mtuNegotiationState = status;
+  if (negotiatedMtuValue >= 23) {
+    negotiatedMtu = negotiatedMtuValue;
+  }
+  sessionProgressAtMs = millis();
+  logNegotiationEvent("mtu", "result", observedSessionId, status, negotiatedMtu);
+}
+
+void BleTransport::requestConnectionParamUpdate(uint32_t expectedSessionId) {
+  if (!deviceConnected || expectedSessionId != sessionId) {
+    return;
+  }
+  if (!pServer || !remoteBdaValid) {
+    noteConnectionParamUpdateResult(expectedSessionId, NegotiationStatusCode::UNKNOWN_RESULT);
+    return;
+  }
+
+  connParamUpdateState = NegotiationStatusCode::REQUESTED;
+  sessionProgressAtMs = millis();
+  logNegotiationEvent("conn_params", "request", expectedSessionId, connParamUpdateState, 0);
+  pServer->updateConnParams(
+      remoteBda,
+      kConnParamMinInterval,
+      kConnParamMaxInterval,
+      kConnParamLatency,
+      kConnParamTimeout);
+  noteConnectionParamUpdateResult(expectedSessionId, NegotiationStatusCode::UNKNOWN_RESULT);
+}
+
+void BleTransport::noteConnectionParamUpdateResult(uint32_t observedSessionId,
+                                                   NegotiationStatusCode status) {
+  if (observedSessionId != sessionId) {
+    return;
+  }
+
+  connParamUpdateState = status;
+  sessionProgressAtMs = millis();
+  logNegotiationEvent("conn_params", "result", observedSessionId, status, 0);
+}
+
+BleTransport::RecoveryAnomalyCode BleTransport::detectRecoveryAnomaly(uint16_t serverConnectedCount,
+                                                                      bool serverConnIdAvailable,
+                                                                      uint16_t serverConnId) const {
+  if (!deviceConnected) {
+    return RecoveryAnomalyCode::NONE;
+  }
+  if (serverConnectedCount == 0) {
+    return RecoveryAnomalyCode::LOCAL_CONNECTED_BUT_SERVER_COUNT_ZERO;
+  }
+  if (currentConnIdValid && serverConnIdAvailable && currentConnId != serverConnId) {
+    return RecoveryAnomalyCode::LOCAL_SERVER_CONN_ID_MISMATCH;
+  }
+  return RecoveryAnomalyCode::NONE;
+}
+
+bool BleTransport::evaluateRecoveryWindow(uint32_t nowMs,
+                                          uint32_t expectedSessionId,
+                                          RecoveryAnomalyCode anomalyCode,
+                                          RecoverySkipReasonCode& outSkipReason) {
+  if (expectedSessionId != sessionId || !deviceConnected) {
+    outSkipReason = RecoverySkipReasonCode::SESSION_CHANGED;
+    return false;
+  }
+  if (!recoveryAnomalyAllowedInPhase1(anomalyCode)) {
+    outSkipReason = RecoverySkipReasonCode::PROHIBITED_SCENARIO;
+    return false;
+  }
+  if (nowMs - lastRecoveryDisconnectMs < kRecoveryDisconnectMinIntervalMs) {
+    outSkipReason = RecoverySkipReasonCode::RATE_LIMITED;
+    return false;
+  }
+  if (recoveryAnomalySinceMs == 0 ||
+      nowMs - recoveryAnomalySinceMs < kRecoveryObservationWindowMs ||
+      recoveryAnomalyChecks < kRecoveryObservationMinChecks) {
+    outSkipReason = RecoverySkipReasonCode::WINDOW_NOT_REACHED;
+    return false;
+  }
+  outSkipReason = RecoverySkipReasonCode::NONE;
+  return true;
+}
+
+void BleTransport::clearRecoveryState() {
+  recoveryAnomalyCode = RecoveryAnomalyCode::NONE;
+  recoveryAnomalySinceMs = 0;
+  recoveryAnomalyChecks = 0;
 }
 
 void BleTransport::recoverStalledConnection(uint32_t nowMs) {
-  if (!deviceConnected || protocolActivityObserved || connectedAtMs == 0) {
+  if (!pServer) {
+    clearRecoveryState();
+    lastRecoverySkipReason = RecoverySkipReasonCode::PROHIBITED_SCENARIO;
+    logRecoveryEvent(
+        "skip",
+        sessionId,
+        currentConnId,
+        RecoveryAnomalyCode::NONE,
+        lastRecoverySkipReason,
+        0,
+        0);
     return;
   }
-  if (nowMs - connectedAtMs < kInitialProtocolActivityTimeoutMs) {
+
+  if (!deviceConnected) {
+    clearRecoveryState();
     return;
   }
-  forceDisconnectCurrentClient("initial_protocol_idle_timeout", nowMs);
+
+  const uint32_t expectedSessionId = sessionId;
+  const uint16_t serverConnectedCount = static_cast<uint16_t>(pServer->getConnectedCount());
+  const bool serverConnIdAvailable = serverConnectedCount > 0;
+  const uint16_t serverConnId = serverConnIdAvailable ? pServer->getConnId() : 0;
+  const RecoveryAnomalyCode anomalyCode =
+      detectRecoveryAnomaly(serverConnectedCount, serverConnIdAvailable, serverConnId);
+
+  if (anomalyCode == RecoveryAnomalyCode::NONE) {
+    clearRecoveryState();
+    lastRecoverySkipReason = RecoverySkipReasonCode::NO_ANOMALY;
+    return;
+  }
+
+  if (!recoveryAnomalyAllowedInPhase1(anomalyCode)) {
+    clearRecoveryState();
+    lastRecoverySkipReason = RecoverySkipReasonCode::PROHIBITED_SCENARIO;
+    logRecoveryEvent(
+        "skip",
+        expectedSessionId,
+        currentConnId,
+        anomalyCode,
+        lastRecoverySkipReason,
+        0,
+        0);
+    return;
+  }
+
+  if (recoveryAnomalyCode != anomalyCode) {
+    recoveryAnomalyCode = anomalyCode;
+    recoveryAnomalySinceMs = nowMs;
+    recoveryAnomalyChecks = 1;
+  } else if (recoveryAnomalyChecks < 0xFF) {
+    recoveryAnomalyChecks += 1;
+  }
+
+  RecoverySkipReasonCode skipReason = RecoverySkipReasonCode::NONE;
+  if (!evaluateRecoveryWindow(nowMs, expectedSessionId, anomalyCode, skipReason)) {
+    lastRecoverySkipReason = skipReason;
+    logRecoveryEvent(
+        "skip",
+        expectedSessionId,
+        currentConnId,
+        anomalyCode,
+        skipReason,
+        recoveryAnomalySinceMs == 0 ? 0 : (nowMs - recoveryAnomalySinceMs),
+        recoveryAnomalyChecks);
+    return;
+  }
+
+  if (!forceDisconnectCurrentClient(anomalyCode, expectedSessionId, nowMs)) {
+    lastRecoverySkipReason = RecoverySkipReasonCode::RATE_LIMITED;
+    logRecoveryEvent(
+        "skip",
+        expectedSessionId,
+        currentConnId,
+        anomalyCode,
+        lastRecoverySkipReason,
+        recoveryAnomalySinceMs == 0 ? 0 : (nowMs - recoveryAnomalySinceMs),
+        recoveryAnomalyChecks);
+    return;
+  }
+
+  clearRecoveryState();
 }
 
-void BleTransport::forceDisconnectCurrentClient(const char* reason, uint32_t nowMs) {
-  if (!pServer || !deviceConnected) return;
-  if (nowMs - lastRecoveryDisconnectMs < kRecoveryDisconnectMinIntervalMs) return;
+bool BleTransport::forceDisconnectCurrentClient(RecoveryAnomalyCode reasonCode,
+                                                uint32_t expectedSessionId,
+                                                uint32_t nowMs) {
+  if (!pServer || !deviceConnected) return false;
+  if (expectedSessionId != sessionId) return false;
+  if (nowMs - lastRecoveryDisconnectMs < kRecoveryDisconnectMinIntervalMs) return false;
 
   uint16_t connId = currentConnId;
   if (!currentConnIdValid) {
-    connId = pServer->getConnId();
-    currentConnIdValid = true;
-    currentConnId = connId;
+    return false;
   }
 
   lastRecoveryDisconnectMs = nowMs;
-  Serial.printf(
-      "[BLE RECOVERY] action=force_disconnect reason=%s conn_id=%u connected_for_ms=%lu last_activity_ms=%lu\n",
-      reason ? reason : "unknown",
-      static_cast<unsigned>(connId),
-      static_cast<unsigned long>(connectedAtMs == 0 ? 0 : (nowMs - connectedAtMs)),
-      static_cast<unsigned long>(lastProtocolActivityAtMs == 0 ? 0 : (nowMs - lastProtocolActivityAtMs)));
+  lastRecoveryReasonCode = reasonCode;
+  lastDisconnectReasonCode = DisconnectReasonCode::RECOVERY_FORCE_DISCONNECT;
+  logRecoveryEvent(
+      "force_disconnect",
+      expectedSessionId,
+      connId,
+      reasonCode,
+      RecoverySkipReasonCode::NONE,
+      recoveryAnomalySinceMs == 0 ? 0 : (nowMs - recoveryAnomalySinceMs),
+      recoveryAnomalyChecks);
+  logSessionEvent("local_disconnect", expectedSessionId, connId, DisconnectReasonCode::RECOVERY_FORCE_DISCONNECT);
   pServer->disconnect(connId);
+  return true;
 }
 
 void BleTransport::configureAdvertising(const char* deviceName, const char* advertisedModel) {
@@ -359,8 +767,21 @@ void BleTransport::sendLineNow(const char* s) {
     return;
   }
 
+  if (negotiatedMtu >= 23) {
+    const uint16_t notifyPayloadLimit = negotiatedMtu - 3;
+    if (framed.length() > notifyPayloadLimit) {
+      Serial.printf(
+          "[BLE TX] warn=payload_exceeds_mtu framed_len=%u mtu=%u payload_limit=%u prefix=%s\n",
+          static_cast<unsigned>(framed.length()),
+          static_cast<unsigned>(negotiatedMtu),
+          static_cast<unsigned>(notifyPayloadLimit),
+          s);
+    }
+  }
+
   pTx->setValue((uint8_t*)framed.c_str(), framed.length());
   pTx->notify();
+  noteTxNotifyIssued(millis(), framed.length(), strncmp(s, "EVT:STREAM ", 11) == 0);
 #if DEBUG_BLE_TX_VERBOSE
   Serial.println("[BLE TX] notify() called");
 #endif
@@ -384,6 +805,8 @@ void BleTransport::controlTaskLoop() {
       if (disconnectSink) {
         disconnectSink->onBleConnected();
       }
+      requestMtuNegotiation(sessionId);
+      requestConnectionParamUpdate(sessionId);
       continue;
     }
 

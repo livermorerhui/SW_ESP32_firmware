@@ -47,6 +47,10 @@ class ProtocolCodecTest {
             "DEBUG:MOTION_SAMPLING enabled=1",
             ProtocolCodec.encode(Command.MotionSamplingModeSet(enabled = true)),
         )
+        assertEquals(
+            "DEBUG:DEGRADED_START enabled=1",
+            ProtocolCodec.encode(Command.DegradedStartSet(enabled = true)),
+        )
     }
 
     @Test
@@ -83,9 +87,27 @@ class ProtocolCodecTest {
     }
 
     @Test
+    fun decodeFallStopAckAsDedicatedEvent() {
+        val event = ProtocolCodec.decode("ACK:FALL_STOP enabled=0 mode=DETECT_ONLY")
+        val ack = assertIs<Event.FallStopProtection>(event)
+        assertEquals(false, ack.enabled)
+        assertEquals("DETECT_ONLY", ack.mode)
+        assertEquals("ACK:FALL_STOP enabled=0 mode=DETECT_ONLY", ack.raw)
+    }
+
+    @Test
+    fun decodeDegradedStartAckAsDedicatedEvent() {
+        val event = ProtocolCodec.decode("ACK:DEGRADED_START enabled=1 available=1")
+        val ack = assertIs<Event.DegradedStart>(event)
+        assertEquals(true, ack.enabled)
+        assertEquals(true, ack.available)
+        assertEquals("ACK:DEGRADED_START enabled=1 available=1", ack.raw)
+    }
+
+    @Test
     fun decodeSnapshotTruth() {
         val event = ProtocolCodec.decode(
-            "SNAPSHOT: top_state=ARMED user_present=0 runtime_ready=1 start_ready=1 baseline_ready=0 wave_output_active=0 current_reason_code=NONE current_safety_effect=NONE stable_weight=0.00 current_frequency=20.00 current_intensity=80 platform_model=BASE laser_installed=0 laser_available=0 protection_degraded=1",
+            "SNAPSHOT: top_state=ARMED user_present=0 runtime_ready=1 start_ready=1 baseline_ready=0 wave_output_active=0 current_reason_code=NONE current_safety_effect=NONE stable_weight=0.00 current_frequency=20.00 current_intensity=80 platform_model=BASE laser_installed=0 laser_available=0 protection_degraded=1 degraded_start_available=0 degraded_start_enabled=0",
         )
         val snapshot = assertIs<Event.Snapshot>(event)
         assertEquals(DeviceState.ARMED, snapshot.topState)
@@ -103,6 +125,8 @@ class ProtocolCodecTest {
         assertEquals(false, snapshot.laserInstalled)
         assertEquals(false, snapshot.laserAvailable)
         assertEquals(true, snapshot.protectionDegraded)
+        assertEquals(false, snapshot.degradedStartAvailable)
+        assertEquals(false, snapshot.degradedStartEnabled)
     }
 
     @Test

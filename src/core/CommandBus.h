@@ -5,6 +5,7 @@
 enum class CmdType : uint8_t {
   CAP_QUERY,
   DEVICE_SET_CONFIG,
+  DEGRADED_START_SET,
   WAVE_SET,      // set freq/intensity (not necessarily start)
   WAVE_START,
   WAVE_STOP,
@@ -41,6 +42,10 @@ struct DeviceConfigCommand {
   bool laserInstalled = true;
 };
 
+struct DegradedStartCommand {
+  bool enabled = false;
+};
+
 struct Command {
   CmdType type = CmdType::CAP_QUERY;
   WaveParams wave{};
@@ -51,6 +56,7 @@ struct Command {
   FallStopCommand fallStop{};
   MotionSamplingModeCommand motionSamplingMode{};
   DeviceConfigCommand deviceConfig{};
+  DegradedStartCommand degradedStart{};
 };
 
 class CommandHandler {

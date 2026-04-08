@@ -48,6 +48,9 @@ public:
   void applyFallSuspectedAction(const FallStopActionDecision& decision);
   void setMotionSamplingMode(bool enabled);
   bool motionSamplingModeEnabled() const;
+  void setDegradedStartAuthorized(bool enabled);
+  bool degradedStartAvailable() const;
+  bool degradedStartAuthorized() const;
   void setRuntimeReady(bool ready);
   void setStartReadiness(bool ready, float stableWeightKg);
   bool startReady() const;
@@ -94,6 +97,7 @@ private:
   bool effectiveStartReady() const;
   bool effectiveLaserAvailable() const;
   bool effectiveProtectionDegraded() const;
+  bool degradedStartBypassActive() const;
   bool canEnterArmedState() const;
   void syncSnapshotDecisionContext();
 
@@ -112,6 +116,7 @@ private:
   uint32_t clear_candidate_ms = 0;
   bool fall_stop_enabled = FALL_STOP_ENABLED_DEFAULT;
   bool motion_sampling_mode_enabled = false;
+  bool degraded_start_authorized = false;
   uint32_t last_suppressed_fall_notice_ms = 0;
   // runtime_ready 只表示“人是否仍在平台上”的 presence 结果。
   // 本轮修复后，它不再直接承担正式 start allow 的语义。

@@ -7,6 +7,7 @@ sealed class Command {
         val platformModel: PlatformModel,
         val laserInstalled: Boolean,
     ) : Command()
+    data class DegradedStartSet(val enabled: Boolean) : Command()
     data class WaveSet(val freqHz: Int, val intensity: Int) : Command()
     data object WaveStart : Command()
     data object WaveStop : Command()
@@ -95,6 +96,8 @@ sealed class Event {
         val laserInstalled: Boolean?,
         val laserAvailable: Boolean?,
         val protectionDegraded: Boolean?,
+        val degradedStartAvailable: Boolean?,
+        val degradedStartEnabled: Boolean?,
         val raw: String,
     ) : Event()
     data class WaveOutput(
@@ -183,6 +186,16 @@ sealed class Event {
     data class DeviceConfig(
         val platformModel: PlatformModel?,
         val laserInstalled: Boolean?,
+        val raw: String,
+    ) : Event()
+    data class FallStopProtection(
+        val enabled: Boolean,
+        val mode: String?,
+        val raw: String,
+    ) : Event()
+    data class DegradedStart(
+        val enabled: Boolean,
+        val available: Boolean,
         val raw: String,
     ) : Event()
     data class Capabilities(val values: Map<String, String>, val raw: String) : Event()

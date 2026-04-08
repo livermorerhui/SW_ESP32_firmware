@@ -2,6 +2,7 @@ package com.sonicwave.demo
 
 import com.sonicwave.protocol.CalibrationModelType
 import com.sonicwave.protocol.DeviceState
+import com.sonicwave.protocol.PlatformModel
 import com.sonicwave.protocol.SafetyEffect
 import com.sonicwave.protocol.WaveState
 
@@ -373,10 +374,9 @@ fun UiState.waveStartAvailability(): WaveStartAvailabilityUi {
         faultStatus.severity == FaultSeverityUi.BLOCKING
     val safetyBlocked = safetyStatus.effectCode == SafetyEffect.RECOVERABLE_PAUSE.name ||
         deviceSafetyEffectCode == SafetyEffect.RECOVERABLE_PAUSE.name
-    val hasStableWeight = stableWeightActive && stableWeight != null
-    val startReady = hasStableWeight &&
-        deviceStartReady == true &&
-        deviceBaselineReady == true
+    val laserlessProfileReady = isLaserlessStartProfile(this)
+    val degradedStartReady = laserlessProfileReady || deviceDegradedStartAvailable == true
+    val startReady = degradedStartReady || deviceStartReady == true
 
     return when {
         !isConnected -> WaveStartAvailabilityUi.DISCONNECTED
@@ -393,3 +393,13 @@ fun UiState.waveStartAvailability(): WaveStartAvailabilityUi {
 }
 
 fun UiState.canStartWave(): Boolean = waveStartAvailability() == WaveStartAvailabilityUi.READY
+
+internal fun isLaserlessStartProfile(state: UiState): Boolean {
+    return state.devicePlatformModel == PlatformModel.BASE || isPlusModelWithoutLaser(state)
+}
+
+internal fun isPlusModelWithoutLaser(state: UiState): Boolean {
+    return state.devicePlatformModel != null &&
+        state.devicePlatformModel != PlatformModel.BASE &&
+        state.deviceLaserInstalled == false
+}

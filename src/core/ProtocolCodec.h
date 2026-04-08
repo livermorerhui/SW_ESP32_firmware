@@ -14,38 +14,29 @@ public:
 
   static String encodeSnapshot(const PlatformSnapshot& snapshot) {
     String s;
-    s.reserve(420);
+    // Keep connect-time snapshot within a single BLE notify frame for the
+    // common MTU=185 path. Startup/start-button truth must not depend on a
+    // multi-fragment SNAPSHOT.
+    s.reserve(220);
     s = "SNAPSHOT:";
     s += "top_state=";
     s += topStateName(snapshot.topState);
-    s += " user_present=";
-    s += snapshot.userPresent ? "1" : "0";
     s += " runtime_ready=";
     s += snapshot.runtimeReady ? "1" : "0";
     s += " start_ready=";
     s += snapshot.startReady ? "1" : "0";
     s += " baseline_ready=";
     s += snapshot.baselineReady ? "1" : "0";
-    s += " wave_output_active=";
-    s += snapshot.waveOutputActive ? "1" : "0";
-    s += " current_reason_code=";
-    s += faultCodeName(snapshot.currentReasonCode);
-    s += " current_safety_effect=";
-    s += safetySignalName(snapshot.currentSafetyEffect);
-    s += " stable_weight=";
-    s += String(snapshot.stableWeightKg, 2);
-    s += " current_frequency=";
-    s += String(snapshot.currentFrequencyHz, 2);
-    s += " current_intensity=";
-    s += String(snapshot.currentIntensity);
     s += " platform_model=";
     s += platformModelName(snapshot.platformModel);
     s += " laser_installed=";
     s += snapshot.laserInstalled ? "1" : "0";
     s += " laser_available=";
     s += snapshot.laserAvailable ? "1" : "0";
-    s += " protection_degraded=";
-    s += snapshot.protectionDegraded ? "1" : "0";
+    s += " degraded_start_available=";
+    s += snapshot.degradedStartAvailable ? "1" : "0";
+    s += " degraded_start_enabled=";
+    s += snapshot.degradedStartEnabled ? "1" : "0";
     return s;
   }
 
@@ -135,6 +126,21 @@ public:
 
       out.deviceConfig.platformModel = platformModel;
       out.deviceConfig.laserInstalled = laserInstalled;
+      return true;
+    }
+    if (s.startsWith("DEBUG:DEGRADED_START")) {
+      out.type = CmdType::DEGRADED_START_SET;
+
+      String enabledStr;
+      bool hasEnabled = readParam("enabled=", enabledStr) || readParam("mode=", enabledStr);
+      if (!hasEnabled) { err = "INVALID_PARAM"; return false; }
+
+      bool enabled = false;
+      if (!parseBoolValue(enabledStr, enabled)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+      out.degradedStart.enabled = enabled;
       return true;
     }
 

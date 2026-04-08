@@ -62,6 +62,7 @@ void SystemStateMachine::begin(EventBus* eb, WaveModule* waveModule) {
   clear_candidate_ms = 0;
   fall_stop_enabled = FALL_STOP_ENABLED_DEFAULT;
   motion_sampling_mode_enabled = false;
+  degraded_start_authorized = false;
   last_suppressed_fall_notice_ms = 0;
   runtime_ready = false;
   start_ready = false;
@@ -116,12 +117,26 @@ bool SystemStateMachine::laserlessRuntimeStrategyActive() const {
   return !laserConfiguredInstalled();
 }
 
+bool SystemStateMachine::degradedStartAvailable() const {
+  return laserConfiguredInstalled() &&
+      sensor_state_known &&
+      !sensor_healthy;
+}
+
+bool SystemStateMachine::degradedStartAuthorized() const {
+  return degraded_start_authorized;
+}
+
+bool SystemStateMachine::degradedStartBypassActive() const {
+  return degradedStartAvailable() && degraded_start_authorized;
+}
+
 bool SystemStateMachine::effectiveRuntimeReady() const {
-  return laserlessRuntimeStrategyActive() ? true : runtime_ready;
+  return (laserlessRuntimeStrategyActive() || degradedStartBypassActive()) ? true : runtime_ready;
 }
 
 bool SystemStateMachine::effectiveStartReady() const {
-  return laserlessRuntimeStrategyActive() ? true : start_ready;
+  return (laserlessRuntimeStrategyActive() || degradedStartBypassActive()) ? true : start_ready;
 }
 
 bool SystemStateMachine::effectiveLaserAvailable() const {
@@ -150,6 +165,8 @@ PlatformSnapshot SystemStateMachine::snapshot() const {
   out.laserInstalled = laserConfiguredInstalled();
   out.laserAvailable = effectiveLaserAvailable();
   out.protectionDegraded = effectiveProtectionDegraded();
+  out.degradedStartAvailable = degradedStartAvailable();
+  out.degradedStartEnabled = degradedStartBypassActive();
 
   if (wave) {
     float ignoredIntensityNormalized = 0.0f;
@@ -613,6 +630,7 @@ void SystemStateMachine::onBleConnected() {
 }
 
 void SystemStateMachine::onBleDisconnected() {
+  degraded_start_authorized = false;
   if (SAFETY_POLICY_DISCONNECT_STOPS_WAVE) {
     enterBlockingFault(FaultCode::BLE_DISCONNECTED, "ble_disconnected");
     return;
@@ -694,6 +712,22 @@ void SystemStateMachine::setMotionSamplingMode(bool enabled) {
   Serial.printf("[MOTION_SAMPLE_MODE] enabled=%s\n", enabled ? "true" : "false");
 }
 
+void SystemStateMachine::setDegradedStartAuthorized(bool enabled) {
+  const bool available = degradedStartAvailable();
+  const bool nextAuthorized = enabled && available;
+  if (degraded_start_authorized == nextAuthorized) return;
+
+  degraded_start_authorized = nextAuthorized;
+  Serial.printf(
+      "[DEGRADED_START] authorized=%d available=%d platform_laser_installed=%d sensor_known=%d sensor_healthy=%d\n",
+      degraded_start_authorized ? 1 : 0,
+      available ? 1 : 0,
+      laserConfiguredInstalled() ? 1 : 0,
+      sensor_state_known ? 1 : 0,
+      sensor_healthy ? 1 : 0);
+  syncReadyState();
+}
+
 void SystemStateMachine::onSensorErr() {
   setSensorHealthy(false);
 }
@@ -763,6 +797,7 @@ void SystemStateMachine::setSensorHealthy(bool healthy) {
   if (!laserConfiguredInstalled()) {
     sensor_state_known = false;
     sensor_healthy = false;
+    degraded_start_authorized = false;
 
     if (blocking_fault_code == FaultCode::MEASUREMENT_UNAVAILABLE) {
       clearBlockingFault("laser_not_installed");
@@ -777,6 +812,9 @@ void SystemStateMachine::setSensorHealthy(bool healthy) {
   bool changed = (!sensor_state_known || sensor_healthy != healthy);
   sensor_state_known = true;
   sensor_healthy = healthy;
+  if (healthy) {
+    degraded_start_authorized = false;
+  }
 
   if (!healthy && changed) {
     if (SAFETY_POLICY_MEASUREMENT_UNAVAILABLE_STOPS_WAVE && st == TopState::RUNNING) {

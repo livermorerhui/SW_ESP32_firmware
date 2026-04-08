@@ -73,26 +73,79 @@ class DemoStartReadyRegressionTest {
     }
 
     @Test
-    fun startButtonStaysBlockedWithoutStableWeight() {
+    fun plusStartButtonUsesAuthoritativeDeviceReadyTruth() {
         val state = UiState(
             isConnected = true,
+            devicePlatformModel = PlatformModel.PLUS,
+            deviceLaserInstalled = true,
+            deviceDegradedStartAvailable = false,
             deviceStartReady = true,
-            deviceBaselineReady = true,
             stableWeight = null,
             stableWeightActive = false,
         )
 
-        assertFalse(state.canStartWave())
+        assertTrue(state.canStartWave())
     }
 
     @Test
-    fun startButtonBecomesReadyWithStableWeightAndRecoveredStartReady() {
+    fun baseStartButtonBecomesReadyWithoutStableWeight() {
         val state = UiState(
             isConnected = true,
+            devicePlatformModel = PlatformModel.BASE,
+            deviceLaserInstalled = false,
+            deviceStartReady = false,
+            stableWeight = null,
+            stableWeightActive = false,
+        )
+
+        assertTrue(state.canStartWave())
+        assertTrue(isLaserlessStartProfile(state))
+    }
+
+    @Test
+    fun plusWithoutLaserStartButtonBecomesReadyWithoutStableWeight() {
+        val state = UiState(
+            isConnected = true,
+            devicePlatformModel = PlatformModel.PLUS,
+            deviceLaserInstalled = false,
+            deviceStartReady = false,
+            stableWeight = null,
+            stableWeightActive = false,
+        )
+
+        assertTrue(state.canStartWave())
+        assertTrue(isLaserlessStartProfile(state))
+        assertTrue(isPlusModelWithoutLaser(state))
+    }
+
+    @Test
+    fun plusStartButtonBecomesReadyWithStableWeightAndRecoveredStartReady() {
+        val state = UiState(
+            isConnected = true,
+            devicePlatformModel = PlatformModel.PLUS,
+            deviceLaserInstalled = true,
+            deviceDegradedStartAvailable = false,
             deviceStartReady = true,
             deviceBaselineReady = true,
             stableWeight = 68.4f,
             stableWeightActive = true,
+        )
+
+        assertTrue(state.canStartWave())
+    }
+
+    @Test
+    fun startButtonBecomesReadyWhenDegradedStartIsAvailableEvenBeforeConfirmation() {
+        val state = UiState(
+            isConnected = true,
+            devicePlatformModel = PlatformModel.PLUS,
+            deviceLaserInstalled = true,
+            deviceDegradedStartAvailable = true,
+            deviceDegradedStartEnabled = false,
+            stableWeight = null,
+            stableWeightActive = false,
+            deviceStartReady = false,
+            deviceBaselineReady = false,
         )
 
         assertTrue(state.canStartWave())

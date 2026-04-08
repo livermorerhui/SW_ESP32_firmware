@@ -19,4 +19,6 @@ struct PlatformSnapshot {
   bool laserInstalled = true;
   bool laserAvailable = false;
   bool protectionDegraded = true;
+  bool degradedStartAvailable = false;
+  bool degradedStartEnabled = false;
 };

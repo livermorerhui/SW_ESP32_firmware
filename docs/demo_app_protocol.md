@@ -21,19 +21,24 @@
   - `DEVICE:SET_CONFIG platform_model=<BASE|PLUS|PRO|ULTRA>,laser_installed=<0|1>`
 - 一致性规则:
   - `BASE` 必须搭配 `laser_installed=0`
-  - `PLUS/PRO/ULTRA` 必须搭配 `laser_installed=1`
+  - `PLUS/PRO/ULTRA` 允许 `laser_installed=0|1`
 - 固件成功回包:
   - `ACK:DEVICE_CONFIG platform_model=<...> laser_installed=<0|1>`
 
 #### 2.3 运行时快照
 - 请求: `SNAPSHOT?`
 - 预期回包:
-  - `SNAPSHOT: top_state=... user_present=... runtime_ready=... start_ready=... baseline_ready=... wave_output_active=... current_reason_code=... current_safety_effect=... stable_weight=... current_frequency=... current_intensity=... platform_model=... laser_installed=... laser_available=... protection_degraded=...`
+  - `SNAPSHOT: top_state=... runtime_ready=... start_ready=... baseline_ready=... platform_model=... laser_installed=... laser_available=... degraded_start_available=... degraded_start_enabled=...`
 
 控制确认约定：
 - `ACK:OK` 只表示 command accepted，不表示启动/停止已经成功。
 - `top_state=RUNNING` 只表示状态机进入运行态，不等价于物理输出已生效。
 - `wave_output_active=1` 才是 Demo APP 判断“波形输出已真正生效”的正式 truth。
+
+启动按钮约定：
+- `BASE`：连接后即可开始。
+- `PLUS` 且 `laser_installed=0`：连接后即可开始，但需要提示当前为无激光模式。
+- `PLUS` 且 `laser_installed=1`：以 firmware `start_ready` / `degraded_start_available` 为准。
 
 #### 2.4 波形控制
 - 设置参数: `WAVE:SET f=<freq>,i=<intensity>`
@@ -75,7 +80,7 @@
     - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=1 ma12_ready=<0|1> distance=<distance> weight=<weightKg> [ma12=<ma12Kg>]`
   - invalid sample:
     - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=0 ma12_ready=0 reason=<READ_FAIL|OUT_OF_RANGE_LOW|...>`
-- `SNAPSHOT: ... platform_model=... laser_installed=... laser_available=... protection_degraded=...`
+- `SNAPSHOT: ... platform_model=... laser_installed=... laser_available=... degraded_start_available=... degraded_start_enabled=...`
 
 说明：
 

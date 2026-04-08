@@ -37,11 +37,13 @@ public:
       case CmdType::CAP_QUERY: {
         const PlatformSnapshot snapshot = sm->snapshot();
         Serial.printf(
-            "[LAYER:CONFIG_TRUTH] source=CAP_QUERY platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d runtime_ready=%d start_ready=%d baseline_ready=%d top_state=%s\n",
+            "[LAYER:CONFIG_TRUTH] source=CAP_QUERY platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d degraded_start_available=%d degraded_start_enabled=%d runtime_ready=%d start_ready=%d baseline_ready=%d top_state=%s\n",
             platformModelName(snapshot.platformModel),
             snapshot.laserInstalled ? 1 : 0,
             snapshot.laserAvailable ? 1 : 0,
             snapshot.protectionDegraded ? 1 : 0,
+            snapshot.degradedStartAvailable ? 1 : 0,
+            snapshot.degradedStartEnabled ? 1 : 0,
             snapshot.runtimeReady ? 1 : 0,
             snapshot.startReady ? 1 : 0,
             snapshot.baselineReady ? 1 : 0,
@@ -51,9 +53,7 @@ public:
             " platform_model=" + String(platformModelName(l->platformModel())) +
             " laser_installed=" + String(l->laserInstalled() ? 1 : 0) +
             " fall_stop_enabled=" + String(sm->fallStopEnabled() ? 1 : 0) +
-            " fall_stop_mode=" + String(sm->fallStopModeName()) +
-            " motion_sampling_mode=" + String(sm->motionSamplingModeEnabled() ? 1 : 0) +
-            " fall_action_suppressed=" + String(sm->fallStopEnabled() ? 0 : 1);
+            " fall_stop_mode=" + String(sm->fallStopModeName());
         return true;
       }
 
@@ -80,15 +80,26 @@ public:
             platformModelName(l->platformModel()));
         const PlatformSnapshot snapshot = sm->snapshot();
         Serial.printf(
-            "[LAYER:CONFIG_TRUTH] source=DEVICE_SET_CONFIG platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d runtime_ready=%d start_ready=%d baseline_ready=%d top_state=%s\n",
+            "[LAYER:CONFIG_TRUTH] source=DEVICE_SET_CONFIG platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d degraded_start_available=%d degraded_start_enabled=%d runtime_ready=%d start_ready=%d baseline_ready=%d top_state=%s\n",
             platformModelName(snapshot.platformModel),
             snapshot.laserInstalled ? 1 : 0,
             snapshot.laserAvailable ? 1 : 0,
             snapshot.protectionDegraded ? 1 : 0,
+            snapshot.degradedStartAvailable ? 1 : 0,
+            snapshot.degradedStartEnabled ? 1 : 0,
             snapshot.runtimeReady ? 1 : 0,
             snapshot.startReady ? 1 : 0,
             snapshot.baselineReady ? 1 : 0,
             topStateName(snapshot.topState));
+        return true;
+      }
+
+      case CmdType::DEGRADED_START_SET: {
+        sm->setDegradedStartAuthorized(c.degradedStart.enabled);
+        const PlatformSnapshot snapshot = sm->snapshot();
+        outAck = String("ACK:DEGRADED_START enabled=") +
+            String(snapshot.degradedStartEnabled ? 1 : 0) +
+            " available=" + String(snapshot.degradedStartAvailable ? 1 : 0);
         return true;
       }
 
@@ -114,7 +125,7 @@ public:
       case CmdType::WAVE_START: {
         const PlatformSnapshot snapshot = sm->snapshot();
         Serial.printf(
-            "[LAYER:COMMAND_DISPATCH] cmd=WAVE:START owner=SystemStateMachine::requestStart top_state=%s runtime_ready=%d start_ready=%d baseline_ready=%d platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d\n",
+            "[LAYER:COMMAND_DISPATCH] cmd=WAVE:START owner=SystemStateMachine::requestStart top_state=%s runtime_ready=%d start_ready=%d baseline_ready=%d platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d degraded_start_available=%d degraded_start_enabled=%d\n",
             topStateName(snapshot.topState),
             snapshot.runtimeReady ? 1 : 0,
             snapshot.startReady ? 1 : 0,
@@ -122,7 +133,9 @@ public:
             platformModelName(snapshot.platformModel),
             snapshot.laserInstalled ? 1 : 0,
             snapshot.laserAvailable ? 1 : 0,
-            snapshot.protectionDegraded ? 1 : 0);
+            snapshot.protectionDegraded ? 1 : 0,
+            snapshot.degradedStartAvailable ? 1 : 0,
+            snapshot.degradedStartEnabled ? 1 : 0);
         FaultCode reason = FaultCode::NONE;
         if (!sm->requestStart(reason)) {
           outAck = (reason == FaultCode::FAULT_LOCKED) ? "NACK:FAULT_LOCKED" : "NACK:NOT_ARMED";

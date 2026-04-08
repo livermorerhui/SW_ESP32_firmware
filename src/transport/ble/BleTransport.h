@@ -44,16 +44,99 @@ private:
     uint32_t enqueuedAtMs = 0;
   };
 
+  enum class NotifySubscriptionState : uint8_t {
+    UNKNOWN = 0,
+    ENABLED,
+    OBSERVED_DISABLED
+  };
+
+  enum class NegotiationStatusCode : uint8_t {
+    NOT_ATTEMPTED = 0,
+    REQUESTED,
+    APPLIED,
+    FAILED,
+    UNKNOWN_RESULT
+  };
+
+  enum class RecoveryAnomalyCode : uint8_t {
+    NONE = 0,
+    LOCAL_CONNECTED_BUT_SERVER_COUNT_ZERO,
+    LOCAL_SERVER_CONN_ID_MISMATCH
+  };
+
+  enum class RecoverySkipReasonCode : uint8_t {
+    NONE = 0,
+    NO_ANOMALY,
+    PROHIBITED_SCENARIO,
+    WINDOW_NOT_REACHED,
+    SESSION_CHANGED,
+    RATE_LIMITED
+  };
+
+  enum class DisconnectReasonCode : uint8_t {
+    UNKNOWN = 0,
+    PEER_DISCONNECT,
+    LOCAL_FORCE_DISCONNECT,
+    RECOVERY_FORCE_DISCONNECT
+  };
+
   static void controlTaskThunk(void* arg);
   static void txTaskThunk(void* arg);
+  static const char* disconnectReasonCodeName(DisconnectReasonCode code);
+  static const char* negotiationStatusCodeName(NegotiationStatusCode code);
+  static const char* recoveryAnomalyCodeName(RecoveryAnomalyCode code);
+  static const char* recoverySkipReasonCodeName(RecoverySkipReasonCode code);
+  static bool recoveryAnomalyAllowedInPhase1(RecoveryAnomalyCode code);
 
   void controlTaskLoop();
   void txTaskLoop();
-  void updateConnectionTrackingOnConnect(BLEServer* server, uint16_t connId, bool connIdKnown);
-  void updateConnectionTrackingOnDisconnect();
-  void noteProtocolActivity();
+  void logSessionEvent(const char* eventName,
+                       uint32_t sessionIdValue,
+                       uint16_t connIdValue,
+                       DisconnectReasonCode reasonCode,
+                       uint16_t detailValue = 0) const;
+  void logNegotiationEvent(const char* kind,
+                           const char* action,
+                           uint32_t sessionIdValue,
+                           NegotiationStatusCode status,
+                           uint16_t value = 0) const;
+  void logRecoveryEvent(const char* action,
+                        uint32_t sessionIdValue,
+                        uint16_t connIdValue,
+                        RecoveryAnomalyCode anomalyCode,
+                        RecoverySkipReasonCode skipReason,
+                        uint32_t observedForMs,
+                        uint8_t checks) const;
+  void resetSessionOnConnect(BLEServer* server,
+                             uint16_t connId,
+                             bool connIdKnown,
+                             const esp_bd_addr_t* remoteBda,
+                             uint32_t nowMs);
+  void resetSessionOnDisconnect(uint16_t connId,
+                                DisconnectReasonCode reasonCode,
+                                uint16_t rawReason,
+                                uint32_t nowMs);
+  void noteRxActivity(uint32_t nowMs, size_t rxBytes);
+  void noteTxNotifyIssued(uint32_t nowMs, size_t txBytes, bool isStreamFrame);
+  void requestMtuNegotiation(uint32_t expectedSessionId);
+  void noteMtuNegotiationResult(uint32_t observedSessionId,
+                                NegotiationStatusCode status,
+                                uint16_t negotiatedMtu);
+  void requestConnectionParamUpdate(uint32_t expectedSessionId);
+  void noteConnectionParamUpdateResult(uint32_t observedSessionId,
+                                       NegotiationStatusCode status);
+  RecoveryAnomalyCode detectRecoveryAnomaly(uint16_t serverConnectedCount,
+                                            bool serverConnIdAvailable,
+                                            uint16_t serverConnId) const;
+  bool evaluateRecoveryWindow(uint32_t nowMs,
+                              uint32_t expectedSessionId,
+                              RecoveryAnomalyCode anomalyCode,
+                              RecoverySkipReasonCode& outSkipReason);
+  void clearRecoveryState();
   void recoverStalledConnection(uint32_t nowMs);
-  void forceDisconnectCurrentClient(const char* reason, uint32_t nowMs);
+  bool forceDisconnectCurrentClient(RecoveryAnomalyCode reasonCode,
+                                    uint32_t expectedSessionId,
+                                    uint32_t nowMs);
   void sendLineNow(const char* s);
   void startAdvertisingSafe();
   void configureAdvertising(const char* deviceName, const char* advertisedModel);
@@ -82,6 +165,25 @@ private:
   volatile uint16_t currentConnId = 0;
   volatile uint32_t connectedAtMs = 0;
   volatile uint32_t lastProtocolActivityAtMs = 0;
+  volatile uint32_t sessionId = 0;
+  bool rxActivityObserved = false;
+  uint32_t lastRxActivityAtMs = 0;
+  bool txNotifyIssuedObserved = false;
+  uint32_t lastTxNotifyIssuedAtMs = 0;
+  uint32_t sessionProgressAtMs = 0;
+  NotifySubscriptionState notifySubscriptionState = NotifySubscriptionState::UNKNOWN;
+  NegotiationStatusCode mtuNegotiationState = NegotiationStatusCode::NOT_ATTEMPTED;
+  uint16_t negotiatedMtu = 23;
+  NegotiationStatusCode connParamUpdateState = NegotiationStatusCode::NOT_ATTEMPTED;
+  RecoveryAnomalyCode recoveryAnomalyCode = RecoveryAnomalyCode::NONE;
+  uint32_t recoveryAnomalySinceMs = 0;
+  uint8_t recoveryAnomalyChecks = 0;
+  RecoverySkipReasonCode lastRecoverySkipReason = RecoverySkipReasonCode::NONE;
+  DisconnectReasonCode lastDisconnectReasonCode = DisconnectReasonCode::UNKNOWN;
+  RecoveryAnomalyCode lastRecoveryReasonCode = RecoveryAnomalyCode::NONE;
+  esp_bd_addr_t remoteBda{};
+  bool remoteBdaValid = false;
+  uint16_t lastDisconnectRawReason = 0;
   QueueHandle_t controlQueue = nullptr;
   QueueHandle_t txControlQueue = nullptr;
   QueueHandle_t txStreamQueue = nullptr;

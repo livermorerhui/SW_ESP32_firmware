@@ -67,6 +67,8 @@ data class UiState(
     val deviceLaserInstalled: Boolean? = null,
     val deviceLaserAvailable: Boolean? = null,
     val deviceProtectionDegraded: Boolean? = null,
+    val deviceDegradedStartAvailable: Boolean? = null,
+    val deviceDegradedStartEnabled: Boolean? = null,
     val deviceRuntimeReady: Boolean? = null,
     val deviceStartReady: Boolean? = null,
     val deviceBaselineReady: Boolean? = null,
@@ -131,6 +133,8 @@ data class UiState(
     val waveOutputActive: Boolean = false,
     val isWaveStartPending: Boolean = false,
     val isWaveStopPending: Boolean = false,
+    val isDegradedStartWritePending: Boolean = false,
+    val showDegradedStartDialog: Boolean = false,
     val testSession: TestSessionUi? = null,
     val testSessionNotice: String? = null,
     val isMotionSamplingActive: Boolean = false,
@@ -139,6 +143,8 @@ data class UiState(
     val motionSamplingModeEnabled: Boolean = false,
     val fallStopEnabled: Boolean = true,
     val fallStopStateKnown: Boolean = false,
+    val fallStopAckConfirmed: Boolean = false,
+    val fallStopCapabilityVerified: Boolean = false,
     val isFallStopSyncInProgress: Boolean = false,
     val isDeviceSheetVisible: Boolean = false,
     val scanResults: List<BleScanResult> = emptyList(),
@@ -213,6 +219,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private var pendingDeviceConfigRequest: PendingDeviceConfigRequest? = null
     private var pendingDeviceConfigWatchdogJob: Job? = null
     private var pendingWriteModelType: CalibrationModelType? = null
+    private var degradedStartDialogSuppressed: Boolean = false
     private var preferredLaserPlatformModel: PlatformModel = PlatformModel.PLUS
     private var testSessionStore: TestSessionUi? = null
     private var motionSamplingSessionStore: MotionSamplingSessionUi? = null
@@ -302,6 +309,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         pendingWaveStopRequest = null
         pendingWaveStopCompletion = null
         preferredLaserPlatformModel = PlatformModel.PLUS
+        degradedStartDialogSuppressed = false
         sessionCaptureSignals = SessionCaptureSignals()
         client.stopScan()
         streamWatchdogJob?.cancel()
@@ -326,6 +334,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         deviceLaserInstalled = null,
                         deviceLaserAvailable = null,
                         deviceProtectionDegraded = null,
+                        deviceDegradedStartAvailable = null,
+                        deviceDegradedStartEnabled = null,
                         deviceRuntimeReady = null,
                         deviceStartReady = null,
                         deviceBaselineReady = null,
@@ -348,8 +358,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         waveOutputActive = false,
                         isWaveStartPending = false,
                         isWaveStopPending = false,
+                        isDegradedStartWritePending = false,
+                        showDegradedStartDialog = false,
                         fallStopEnabled = true,
                         fallStopStateKnown = false,
+                        fallStopAckConfirmed = false,
+                        fallStopCapabilityVerified = false,
                         isFallStopSyncInProgress = false,
                         testSession = null,
                         testSessionNotice = null,
@@ -384,16 +398,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 telemetrySessionStartMs = connectAtMs
                 startStreamWatchdog(connectAtMs)
 
-                val probe = runCatching {
-                    client.capabilityProbe()
-                }.onFailure { error ->
-                    appendSystemLog(
-                        text(
-                            R.string.log_capability_probe_failed,
-                            error.message ?: text(R.string.common_not_available),
-                        ),
-                    )
-                }.getOrNull()
+                val probe = probeCapabilitiesWithRetry(source = "connect")
 
                 _uiState.update {
                     val probeCapabilities = probe?.capabilities
@@ -408,6 +413,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 ?: it.motionSamplingModeEnabled,
                             fallStopEnabled = probedFallStopEnabled ?: it.fallStopEnabled,
                             fallStopStateKnown = probedFallStopEnabled != null || it.fallStopStateKnown,
+                            fallStopAckConfirmed = false,
+                            fallStopCapabilityVerified = probedFallStopEnabled != null,
                             isFallStopSyncInProgress = false,
                             protocolMode = mergeProtocolMode(
                                 currentMode = it.protocolMode,
@@ -429,6 +436,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 if (shouldAttemptPrimarySnapshotRefresh(nextProtocolMode)) {
                     requestSnapshotRefresh()
+                } else if (_uiState.value.isConnected) {
+                    appendSystemLog("[DEVICE_TRUTH] capability probe incomplete after connect, requesting snapshot fallback")
+                    requestSnapshotRefresh(force = true)
                 }
             }.onFailure { error ->
                 _uiState.update {
@@ -462,6 +472,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         pendingWaveStartRequest = null
         pendingWaveStopRequest = null
         pendingWaveStopCompletion = null
+        degradedStartDialogSuppressed = false
         finishTestSessionIfRecording(
             result = "ABNORMAL_STOP",
             stopReason = "BLE_DISCONNECTED",
@@ -491,6 +502,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         deviceLaserInstalled = null,
                         deviceLaserAvailable = null,
                         deviceProtectionDegraded = null,
+                        deviceDegradedStartAvailable = null,
+                        deviceDegradedStartEnabled = null,
                         deviceRuntimeReady = null,
                         deviceStartReady = null,
                         deviceBaselineReady = null,
@@ -507,8 +520,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         waveOutputActive = false,
                         isWaveStartPending = false,
                         isWaveStopPending = false,
+                        isDegradedStartWritePending = false,
+                        showDegradedStartDialog = false,
                         fallStopEnabled = true,
                         fallStopStateKnown = false,
+                        fallStopAckConfirmed = false,
+                        fallStopCapabilityVerified = false,
                         isFallStopSyncInProgress = false,
                         testSessionNotice = text(R.string.test_session_notice_stopped_disconnect),
                         captureStatus = null,
@@ -771,6 +788,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val normalizedState = _uiState.value
+        if (requiresDegradedStartAuthorizationBeforeWaveStart(normalizedState)) {
+            degradedStartDialogSuppressed = false
+            _uiState.update { syncDegradedStartUi(it).syncWaveControlFlags() }
+            return
+        }
+
         if (!normalizedState.canStartWave()) {
             _uiState.update {
                 it.copy(lastAckOrError = startBlockedMessage(normalizedState))
@@ -1109,6 +1132,76 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun dismissDegradedStartDialog() {
+        degradedStartDialogSuppressed = true
+        _uiState.update { it.copy(showDegradedStartDialog = false) }
+    }
+
+    fun confirmDegradedStart() {
+        val state = _uiState.value
+        if (isPlusModelWithoutLaser(state)) {
+            degradedStartDialogSuppressed = true
+            _uiState.update {
+                it.copy(
+                    showDegradedStartDialog = false,
+                    lastAckOrError = text(R.string.plus_without_laser_start_enabled_status),
+                ).syncWaveControlFlags()
+            }
+            return
+        }
+        if (!state.isConnected || state.protocolMode != ProtocolMode.PRIMARY) {
+            _uiState.update {
+                it.copy(lastAckOrError = text(R.string.degraded_start_requires_primary))
+            }
+            return
+        }
+        if (state.deviceDegradedStartAvailable != true) {
+            _uiState.update {
+                it.copy(lastAckOrError = text(R.string.degraded_start_unavailable))
+            }
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                isDegradedStartWritePending = true,
+                lastAckOrError = text(R.string.degraded_start_pending),
+            )
+        }
+
+        viewModelScope.launch {
+            runCatching {
+                client.setDegradedStartAndAwaitAck(enabled = true)
+            }.onSuccess { ack ->
+                degradedStartDialogSuppressed = false
+                _uiState.update {
+                    syncDegradedStartUi(
+                        it.copy(
+                            deviceDegradedStartAvailable = ack.available,
+                            deviceDegradedStartEnabled = ack.enabled,
+                            isDegradedStartWritePending = false,
+                            lastAckOrError = text(R.string.degraded_start_enabled_status),
+                        ),
+                    ).syncWaveControlFlags()
+                }
+                requestSnapshotRefresh()
+            }.onFailure { error ->
+                degradedStartDialogSuppressed = false
+                _uiState.update {
+                    syncDegradedStartUi(
+                        it.copy(
+                            isDegradedStartWritePending = false,
+                            lastAckOrError = text(
+                                R.string.degraded_start_send_failed,
+                                error.message ?: text(R.string.common_not_available),
+                            ),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
     fun sendCalibrationZero() {
         appendSystemLog("[CAL_UI] calZeroRequested")
         sendCommand(Command.CalibrationZero, "CAL:ZERO")
@@ -1334,48 +1427,68 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             text(R.string.action_disable_fall_stop_protection)
         }
 
-        _uiState.update { it.copy(isFallStopSyncInProgress = true) }
+        _uiState.update {
+            it.copy(
+                isFallStopSyncInProgress = true,
+                fallStopAckConfirmed = false,
+                fallStopCapabilityVerified = false,
+            )
+        }
 
         viewModelScope.launch {
             runCatching {
-                client.send(Command.FallStopProtectionSet(enabled))
-                client.capabilityProbe()
-            }.onSuccess { probe ->
-                val actualEnabled = probe.capabilities?.let(::isFallStopEnabled)
-                if (probe.mode != ProtocolMode.PRIMARY || actualEnabled == null) {
+                val ack = client.setFallStopProtectionAndAwaitAck(enabled)
+                val probe = runCatching { client.capabilityProbe() }.getOrNull()
+                ack to probe
+            }.onSuccess { (ack, probe) ->
+                val actualEnabled = probe?.capabilities?.let(::isFallStopEnabled)
+                if (probe?.mode == ProtocolMode.PRIMARY && actualEnabled != null) {
                     _uiState.update {
                         it.copy(
+                            fallStopEnabled = actualEnabled,
+                            fallStopStateKnown = true,
+                            fallStopAckConfirmed = false,
+                            fallStopCapabilityVerified = true,
                             isFallStopSyncInProgress = false,
-                            protocolMode = probe.mode,
                             capabilityInfo = probe.capabilities?.let(::formatCapabilities) ?: it.capabilityInfo,
-                            lastAckOrError = text(
-                                R.string.message_send_failed,
-                                actionLabel,
-                                probe.reason ?: "fall stop capability sync unavailable",
-                            ),
+                            protocolMode = probe.mode,
+                            lastAckOrError = text(R.string.message_sent, actionLabel),
                         )
                     }
                     appendSystemLog(
-                        "[FALL_STOP_UI] sync_unavailable requested=$enabled mode=${probe.mode.name} reason=${probe.reason ?: "UNKNOWN"}",
+                        "[FALL_STOP_UI] requested=$enabled applied=$actualEnabled mode=${probe.mode.name}",
                     )
                     return@onSuccess
                 }
 
                 _uiState.update {
                     it.copy(
-                        fallStopEnabled = actualEnabled,
+                        fallStopEnabled = ack.enabled,
                         fallStopStateKnown = true,
+                        fallStopAckConfirmed = true,
+                        fallStopCapabilityVerified = false,
                         isFallStopSyncInProgress = false,
-                        capabilityInfo = probe.capabilities?.let(::formatCapabilities) ?: it.capabilityInfo,
-                        protocolMode = probe.mode,
-                        lastAckOrError = text(R.string.message_sent, actionLabel),
+                        capabilityInfo = probe?.capabilities?.let(::formatCapabilities) ?: it.capabilityInfo,
+                        protocolMode = mergeProtocolMode(
+                            currentMode = it.protocolMode,
+                            observedMode = probe?.mode ?: ProtocolMode.PRIMARY,
+                        ),
+                        lastAckOrError = text(
+                            R.string.message_sent_with_partial_confirmation,
+                            actionLabel,
+                            probe?.reason ?: text(R.string.fall_stop_capability_sync_soft_failure),
+                        ),
                     )
                 }
-                appendSystemLog("[FALL_STOP_UI] requested=$enabled applied=$actualEnabled mode=${probe.mode.name}")
+                appendSystemLog(
+                    "[FALL_STOP_UI] ack_confirmed requested=$enabled applied=${ack.enabled} capability_verify=unavailable mode=${probe?.mode?.name ?: "PRIMARY"} reason=${probe?.reason ?: "UNKNOWN"}",
+                )
             }.onFailure { error ->
                 _uiState.update {
                     it.copy(
                         isFallStopSyncInProgress = false,
+                        fallStopAckConfirmed = false,
+                        fallStopCapabilityVerified = false,
                         lastAckOrError = text(
                             R.string.message_send_failed,
                             actionLabel,
@@ -1568,6 +1681,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     stopMotionSamplingIfActive(text(R.string.motion_sampling_status_stopped_disconnect))
                     resetMeasurementDisplayState()
                     resetSessionStores(clearTestSession = false)
+                    degradedStartDialogSuppressed = false
                     _uiState.update { state ->
                         resetCalibrationSessionState(
                             withCaptureAvailability(
@@ -1576,6 +1690,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                     deviceLaserInstalled = null,
                                     deviceLaserAvailable = null,
                                     deviceProtectionDegraded = null,
+                                    deviceDegradedStartAvailable = null,
+                                    deviceDegradedStartEnabled = null,
                                     deviceRuntimeReady = null,
                                     deviceStartReady = null,
                                     deviceBaselineReady = null,
@@ -1587,12 +1703,16 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                     waveOutputActive = false,
                                     isWaveStartPending = false,
                                     isWaveStopPending = false,
+                                    isDegradedStartWritePending = false,
+                                    showDegradedStartDialog = false,
                                     captureStatus = null,
                                     writeModelStatus = null,
                                     deviceConfigStatus = null,
                                     isDeviceConfigWritePending = false,
                                     fallStopEnabled = true,
                                     fallStopStateKnown = false,
+                                    fallStopAckConfirmed = false,
+                                    fallStopCapabilityVerified = false,
                                     isFallStopSyncInProgress = false,
                                 ),
                             ),
@@ -1758,13 +1878,27 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 reasonCode = faultStatus.codeName,
                                 code = faultStatus.code,
                             )
-                            it.copy(
+                            val measurementUnavailable = faultStatus.codeName == "MEASUREMENT_UNAVAILABLE"
+                            syncDegradedStartUi(it.copy(
                                 faultStatus = faultStatus,
                                 deviceReasonCode = faultStatus.codeName,
+                                deviceDegradedStartAvailable = if (measurementUnavailable &&
+                                    it.devicePlatformModel != PlatformModel.BASE &&
+                                    it.deviceLaserInstalled == true
+                                ) {
+                                    true
+                                } else {
+                                    false
+                                },
+                                deviceDegradedStartEnabled = if (measurementUnavailable) {
+                                    it.deviceDegradedStartEnabled
+                                } else {
+                                    false
+                                },
                                 lastAckOrError = text(R.string.message_fault, faultStatus.label),
                                 stableWeight = if (clearsStableBaseline) null else it.stableWeight,
                                 stableWeightActive = if (clearsStableBaseline) false else it.stableWeightActive,
-                            ).syncFormalWaveTruth().syncWaveControlFlags()
+                            )).syncFormalWaveTruth().syncWaveControlFlags()
                         }
                         if (pendingWaveStopRequest == null &&
                             (_uiState.value.waveOutputActive ||
@@ -1799,18 +1933,32 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 reasonCode = safetyStatus.reasonCode,
                                 code = safetyStatus.code,
                             )
-                            it.applyWaveOutputTransition(
+                            val measurementUnavailable = safetyStatus.reasonCode == "MEASUREMENT_UNAVAILABLE"
+                            syncDegradedStartUi(it.applyWaveOutputTransition(
                                 if (authoritativeWaveStopped) false else it.waveOutputActive,
                             ).copy(
                                 deviceState = nextState,
                                 faultStatus = event.code?.let(::faultStatusFromCode) ?: it.faultStatus,
                                 deviceReasonCode = safetyStatus.reasonCode,
                                 deviceSafetyEffectCode = safetyStatus.effectCode,
+                                deviceDegradedStartAvailable = if (measurementUnavailable &&
+                                    it.devicePlatformModel != PlatformModel.BASE &&
+                                    it.deviceLaserInstalled == true
+                                ) {
+                                    true
+                                } else {
+                                    false
+                                },
+                                deviceDegradedStartEnabled = if (measurementUnavailable) {
+                                    it.deviceDegradedStartEnabled
+                                } else {
+                                    false
+                                },
                                 safetyStatus = safetyStatus,
                                 lastAckOrError = formatSafetyStatusMessage(safetyStatus),
                                 stableWeight = if (clearsStableBaseline) null else it.stableWeight,
                                 stableWeightActive = if (clearsStableBaseline) false else it.stableWeightActive,
-                            ).syncFormalWaveTruth().syncWaveControlFlags()
+                            )).syncFormalWaveTruth().syncWaveControlFlags()
                         }
                         if (
                             event.effect == SafetyEffect.ABNORMAL_STOP ||
@@ -1867,7 +2015,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         )
                         val nextReasonCode = event.currentReasonCode ?: it.deviceReasonCode
                         val nextSafetyEffectCode = event.currentSafetyEffect ?: it.deviceSafetyEffectCode
-                        it.applyWaveOutputTransition(nextWaveOutputActive).copy(
+                        syncDegradedStartUi(it.applyWaveOutputTransition(nextWaveOutputActive).copy(
                             protocolMode = mergeProtocolMode(
                                 currentMode = it.protocolMode,
                                 observedMode = ProtocolMode.PRIMARY,
@@ -1877,6 +2025,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             deviceLaserInstalled = event.laserInstalled ?: it.deviceLaserInstalled,
                             deviceLaserAvailable = event.laserAvailable,
                             deviceProtectionDegraded = event.protectionDegraded,
+                            deviceDegradedStartAvailable = event.degradedStartAvailable,
+                            deviceDegradedStartEnabled = event.degradedStartEnabled,
                             deviceRuntimeReady = event.runtimeReady,
                             deviceStartReady = resolveSnapshotStartReady(
                                 currentStartReady = it.deviceStartReady,
@@ -1897,7 +2047,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             stableWeight = event.stableWeightKg ?: it.stableWeight,
                             stableWeightActive = event.baselineReady ?: it.stableWeightActive,
                             isDeviceConfigWritePending = awaitingDeviceConfigWriteResult,
-                        ).syncFormalWaveTruth().syncWaveControlFlags()
+                        )).syncFormalWaveTruth().syncWaveControlFlags()
                     }.also {
                         reconcileTestSessionWithFormalWaveTruth(
                             source = if (_uiState.value.waveOutputActive) {
@@ -2016,6 +2166,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             motionSamplingModeEnabled = isMotionSamplingModeEnabled(event),
                             fallStopEnabled = isFallStopEnabled(event) ?: state.fallStopEnabled,
                             fallStopStateKnown = isFallStopEnabled(event) != null || state.fallStopStateKnown,
+                            fallStopAckConfirmed = false,
+                            fallStopCapabilityVerified = isFallStopEnabled(event) != null,
                             isFallStopSyncInProgress = false,
                             deviceConfigStatus = pendingDeviceConfigStatus ?: state.deviceConfigStatus,
                             isDeviceConfigWritePending = awaitingDeviceConfigWriteResult,
@@ -2054,6 +2206,38 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         }
                         systemLogs.forEach(::appendSystemLog)
                         refreshCapabilityAndSnapshot()
+                    }
+
+                    is Event.DegradedStart -> {
+                        _uiState.update {
+                            syncDegradedStartUi(
+                                it.copy(
+                                    deviceDegradedStartAvailable = event.available,
+                                    deviceDegradedStartEnabled = event.enabled,
+                                    isDegradedStartWritePending = false,
+                                    lastAckOrError = event.raw,
+                                ),
+                            ).syncWaveControlFlags()
+                        }
+                    }
+
+                    is Event.FallStopProtection -> {
+                        _uiState.update {
+                            it.copy(
+                                fallStopEnabled = event.enabled,
+                                fallStopStateKnown = true,
+                                fallStopAckConfirmed = true,
+                                fallStopCapabilityVerified = false,
+                                protocolMode = mergeProtocolMode(
+                                    currentMode = it.protocolMode,
+                                    observedMode = ProtocolMode.PRIMARY,
+                                ),
+                                lastAckOrError = event.raw,
+                            )
+                        }
+                        appendSystemLog(
+                            "[FALL_STOP_UI] ack enabled=${event.enabled} mode=${event.mode ?: "UNKNOWN"}",
+                        )
                     }
 
                     is Event.CalibrationSetModelResult -> {
@@ -3134,6 +3318,33 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    private fun shouldOfferDegradedStart(state: UiState): Boolean {
+        return state.isConnected &&
+            state.protocolMode == ProtocolMode.PRIMARY &&
+            state.devicePlatformModel != PlatformModel.BASE &&
+            (isPlusModelWithoutLaser(state) || state.deviceDegradedStartAvailable == true) &&
+            (isPlusModelWithoutLaser(state) || state.deviceDegradedStartEnabled != true)
+    }
+
+    private fun requiresDegradedStartAuthorizationBeforeWaveStart(state: UiState): Boolean {
+        return state.isConnected &&
+            state.protocolMode == ProtocolMode.PRIMARY &&
+            !isPlusModelWithoutLaser(state) &&
+            state.deviceDegradedStartAvailable == true &&
+            state.deviceDegradedStartEnabled != true &&
+            !state.isDegradedStartWritePending
+    }
+
+    private fun syncDegradedStartUi(state: UiState): UiState {
+        val shouldOffer = shouldOfferDegradedStart(state)
+        if (!shouldOffer || state.deviceDegradedStartEnabled == true) {
+            degradedStartDialogSuppressed = false
+        }
+        return state.copy(
+            showDegradedStartDialog = shouldOffer && !degradedStartDialogSuppressed,
+        )
+    }
+
     private fun formatCapabilityInfo(result: CapabilityResult): String {
         return result.capabilities?.let(::formatCapabilities)
             ?: result.reason
@@ -3182,19 +3393,47 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private suspend fun probeCapabilitiesWithRetry(source: String): CapabilityResult? {
+        delay(CAPABILITY_PROBE_INITIAL_DELAY_MS)
+
+        val firstProbe = runCatching {
+            client.capabilityProbe()
+        }.onFailure { error ->
+            appendSystemLog(
+                text(
+                    R.string.log_capability_probe_failed,
+                    error.message ?: text(R.string.common_not_available),
+                ),
+            )
+        }.getOrNull()
+
+        if (!_uiState.value.isConnected || firstProbe?.mode == ProtocolMode.PRIMARY) {
+            return firstProbe
+        }
+
+        appendSystemLog(
+            "[DEVICE_TRUTH] capability probe retry source=$source first_mode=${firstProbe?.mode?.name ?: "UNKNOWN"}",
+        )
+        delay(CAPABILITY_PROBE_RETRY_DELAY_MS)
+
+        val retryProbe = runCatching {
+            client.capabilityProbe(timeoutMs = CAPABILITY_PROBE_RETRY_TIMEOUT_MS)
+        }.onFailure { error ->
+            appendSystemLog(
+                text(
+                    R.string.log_capability_probe_failed,
+                    error.message ?: text(R.string.common_not_available),
+                ),
+            )
+        }.getOrNull()
+
+        return retryProbe ?: firstProbe
+    }
+
     private fun refreshCapabilityAndSnapshot() {
         if (!_uiState.value.isConnected) return
         viewModelScope.launch {
-            val probe = runCatching {
-                client.capabilityProbe()
-            }.onFailure { error ->
-                appendSystemLog(
-                    text(
-                        R.string.log_capability_probe_failed,
-                        error.message ?: text(R.string.common_not_available),
-                    ),
-                )
-            }.getOrNull()
+            val probe = probeCapabilitiesWithRetry(source = "refresh")
 
             val nextProtocolMode = mergeProtocolMode(
                 currentMode = _uiState.value.protocolMode,
@@ -3202,14 +3441,18 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             )
             if (shouldAttemptPrimarySnapshotRefresh(nextProtocolMode)) {
                 requestSnapshotRefresh()
+            } else if (_uiState.value.isConnected) {
+                appendSystemLog("[DEVICE_TRUTH] capability probe incomplete during refresh, requesting snapshot fallback")
+                requestSnapshotRefresh(force = true)
             }
         }
     }
 
-    private fun requestSnapshotRefresh() {
-        if (!_uiState.value.isConnected ||
-            !shouldAttemptPrimarySnapshotRefresh(_uiState.value.protocolMode)
-        ) {
+    private fun requestSnapshotRefresh(force: Boolean = false) {
+        if (!_uiState.value.isConnected) {
+            return
+        }
+        if (!force && !shouldAttemptPrimarySnapshotRefresh(_uiState.value.protocolMode)) {
             return
         }
         viewModelScope.launch {
@@ -4016,6 +4259,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         private const val TEST_SESSION_PANEL_PUBLISH_INTERVAL_MS = 200L
         private const val DEVICE_CONFIG_WRITE_CONFIRM_REFRESH_DELAY_MS = 500L
         private const val DEVICE_CONFIG_WRITE_TIMEOUT_MS = 3_000L
+        private const val CAPABILITY_PROBE_INITIAL_DELAY_MS = 250L
+        private const val CAPABILITY_PROBE_RETRY_DELAY_MS = 300L
+        private const val CAPABILITY_PROBE_RETRY_TIMEOUT_MS = 2_000L
         private const val MEASUREMENT_CONSUME_LOG_INTERVAL = 50L
         private const val MAX_RAW_LOG_LINES = 200
         private const val TELEMETRY_WINDOW_MS = 20_000L

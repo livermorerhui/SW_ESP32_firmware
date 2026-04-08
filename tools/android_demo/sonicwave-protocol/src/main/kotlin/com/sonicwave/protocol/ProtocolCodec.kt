@@ -8,6 +8,7 @@ object ProtocolCodec {
             "DEVICE:SET_CONFIG platform_model=${command.platformModel.name}," +
                 "laser_installed=${if (command.laserInstalled) 1 else 0}"
         }
+        is Command.DegradedStartSet -> "DEBUG:DEGRADED_START enabled=${if (command.enabled) 1 else 0}"
         is Command.WaveSet -> "WAVE:SET f=${command.freqHz},i=${command.intensity}"
         Command.WaveStart -> "WAVE:START"
         Command.WaveStop -> "WAVE:STOP"
@@ -34,6 +35,8 @@ object ProtocolCodec {
 
         parseCapabilities(raw)?.let { return it }
         parseDeviceConfig(raw)?.let { return it }
+        parseFallStopProtection(raw)?.let { return it }
+        parseDegradedStart(raw)?.let { return it }
         parseCalibrationModel(raw)?.let { return it }
         parseCalibrationSetModelResult(raw)?.let { return it }
         parseCalibrationPoint(raw)?.let { return it }
@@ -89,6 +92,31 @@ object ProtocolCodec {
         return Event.DeviceConfig(
             platformModel = parsePlatformModel(kv["PLATFORM_MODEL"]),
             laserInstalled = parseBooleanFlag(kv["LASER_INSTALLED"]),
+            raw = raw,
+        )
+    }
+
+    private fun parseFallStopProtection(raw: String): Event.FallStopProtection? {
+        if (!raw.startsWith("ACK:FALL_STOP", ignoreCase = true)) return null
+        val payload = raw.substringAfter("ACK:FALL_STOP", "").trim()
+        val kv = parseKeyValuePayload(payload)
+        val enabled = parseBooleanFlag(kv["ENABLED"]) ?: return null
+        return Event.FallStopProtection(
+            enabled = enabled,
+            mode = kv["MODE"],
+            raw = raw,
+        )
+    }
+
+    private fun parseDegradedStart(raw: String): Event.DegradedStart? {
+        if (!raw.startsWith("ACK:DEGRADED_START", ignoreCase = true)) return null
+        val payload = raw.substringAfter("ACK:DEGRADED_START", "").trim()
+        val kv = parseKeyValuePayload(payload)
+        val enabled = parseBooleanFlag(kv["ENABLED"]) ?: return null
+        val available = parseBooleanFlag(kv["AVAILABLE"]) ?: false
+        return Event.DegradedStart(
+            enabled = enabled,
+            available = available,
             raw = raw,
         )
     }
@@ -170,6 +198,8 @@ object ProtocolCodec {
             laserInstalled = parseBooleanFlag(kv["LASER_INSTALLED"]),
             laserAvailable = parseBooleanFlag(kv["LASER_AVAILABLE"]),
             protectionDegraded = parseBooleanFlag(kv["PROTECTION_DEGRADED"]),
+            degradedStartAvailable = parseBooleanFlag(kv["DEGRADED_START_AVAILABLE"]),
+            degradedStartEnabled = parseBooleanFlag(kv["DEGRADED_START_ENABLED"]),
             raw = raw,
         )
     }

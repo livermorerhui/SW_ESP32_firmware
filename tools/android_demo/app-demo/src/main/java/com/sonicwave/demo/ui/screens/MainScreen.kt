@@ -19,6 +19,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
@@ -38,6 +39,7 @@ import com.sonicwave.demo.PermissionState
 import com.sonicwave.demo.R
 import com.sonicwave.demo.ScanState
 import com.sonicwave.demo.UiState
+import com.sonicwave.demo.isPlusModelWithoutLaser
 import com.sonicwave.demo.ui.components.CalibrationToolsSection
 import com.sonicwave.demo.ui.components.DeviceConnectSection
 import com.sonicwave.demo.ui.components.DeviceProfileSection
@@ -165,6 +167,57 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
                 onConnect = viewModel::connectToDevice,
             )
         }
+    }
+
+    if (uiState.showDegradedStartDialog) {
+        val plusWithoutLaser = isPlusModelWithoutLaser(uiState)
+        AlertDialog(
+            onDismissRequest = viewModel::dismissDegradedStartDialog,
+            title = {
+                Text(
+                    stringResource(
+                        if (plusWithoutLaser) {
+                            R.string.plus_without_laser_dialog_title
+                        } else {
+                            R.string.degraded_start_dialog_title
+                        },
+                    ),
+                )
+            },
+            text = {
+                Text(
+                    stringResource(
+                        if (plusWithoutLaser) {
+                            R.string.plus_without_laser_dialog_message
+                        } else {
+                            R.string.degraded_start_dialog_message
+                        },
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = viewModel::confirmDegradedStart,
+                    enabled = !uiState.isDegradedStartWritePending,
+                ) {
+                    Text(
+                        if (uiState.isDegradedStartWritePending) {
+                            stringResource(R.string.degraded_start_pending_action)
+                        } else {
+                            stringResource(R.string.degraded_start_confirm_action)
+                        },
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = viewModel::dismissDegradedStartDialog,
+                    enabled = !uiState.isDegradedStartWritePending,
+                ) {
+                    Text(stringResource(R.string.degraded_start_cancel_action))
+                }
+            },
+        )
     }
 }
 
