@@ -53,6 +53,7 @@ Thumbs.db
 # Tooling metadata
 # =========================
 compile_commands.json
+tools/android_demo/sonicwave-protocol/bin/
 
 # =========================
 # Development audit/task reports
