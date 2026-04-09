@@ -165,6 +165,7 @@ Current document anchors:
 
 - `docs/system/base_plus_degraded_delivery_plan.md`
 - `docs/system/base_plus_degraded_regression_checklist.md`
+- `docs/system/current_delivery_release_boundary.md`
 - `docs/system/current_hardware_validation_boundary.md`
 - `docs/ble-init-contract.md`
 - `docs/start-readiness-contract.md`
