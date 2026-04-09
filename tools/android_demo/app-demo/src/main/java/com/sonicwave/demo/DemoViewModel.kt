@@ -1066,7 +1066,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
         val platformModel = state.selectedPlatformModel
         val laserInstalled = state.selectedLaserInstalled
-        if ((platformModel == PlatformModel.BASE) != !laserInstalled) {
+        if (!isSupportedDeviceConfigSelection(platformModel = platformModel, laserInstalled = laserInstalled)) {
             _uiState.update {
                 it.copy(
                     lastAckOrError = text(R.string.device_config_status_conflict),
@@ -1140,16 +1140,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun confirmDegradedStart() {
         val state = _uiState.value
-        if (isPlusModelWithoutLaser(state)) {
-            degradedStartDialogSuppressed = true
-            _uiState.update {
-                it.copy(
-                    showDegradedStartDialog = false,
-                    lastAckOrError = text(R.string.plus_without_laser_start_enabled_status),
-                ).syncWaveControlFlags()
-            }
-            return
-        }
         if (!state.isConnected || state.protocolMode != ProtocolMode.PRIMARY) {
             _uiState.update {
                 it.copy(lastAckOrError = text(R.string.degraded_start_requires_primary))
@@ -2571,6 +2561,20 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun publishTestSessionPanel(force: Boolean = false) {
+        if (!shouldTrackTestSessionAutomation(_uiState.value)) {
+            testSessionStore = null
+            if (_uiState.value.testSessionNotice != null) {
+                _uiState.update { it.copy(testSessionNotice = null) }
+            }
+            if (
+                _testSessionPanelState.value.session != null ||
+                _testSessionPanelState.value.notice != null
+            ) {
+                _testSessionPanelState.value = TestSessionPanelUiState()
+            }
+            lastTestSessionPanelPublishAtMs = System.currentTimeMillis()
+            return
+        }
         val now = System.currentTimeMillis()
         if (!force && now - lastTestSessionPanelPublishAtMs < TEST_SESSION_PANEL_PUBLISH_INTERVAL_MS) return
         lastTestSessionPanelPublishAtMs = now
@@ -2619,10 +2623,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun isHighPriorityLog(line: String): Boolean {
+        val trackTestSessions = shouldTrackTestSessionAutomation(_uiState.value)
         return line.contains("EVT:FAULT") ||
             line.contains("EVT:SAFETY") ||
             line.contains("[FAULT]") ||
-            line.contains("[TEST_SESSION]") ||
+            (trackTestSessions && line.contains("[TEST_SESSION]")) ||
             line.contains("[DEVICE_CONFIG]") ||
             line.contains("[LAYER:MEASUREMENT_CONSUME]")
     }
@@ -2636,6 +2641,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun appendTestSessionSample(sample: TestSessionSampleUi) {
+        if (!shouldTrackTestSessionAutomation(_uiState.value)) return
         val session = testSessionStore ?: return
         if (session.status != TestSessionStatusUi.RECORDING) return
         val samples = mutableTestSessionSamples(session)
@@ -2824,11 +2830,16 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             ma5 = recentMovingAverage(5),
             ma7 = recentMovingAverage(7),
         )
-        val testSessionSample = buildTestSessionSample(
-            telemetryPoint = point,
-            signals = currentSignals,
-            sessionStartMs = testSessionStore?.startedAtMs,
-        )
+        val trackTestSessions = shouldTrackTestSessionAutomation(currentState)
+        val testSessionSample = if (trackTestSessions) {
+            buildTestSessionSample(
+                telemetryPoint = point,
+                signals = currentSignals,
+                sessionStartMs = testSessionStore?.startedAtMs,
+            )
+        } else {
+            null
+        }
         appendTelemetryDisplayPoint(point)
         latestDistance = distance
         latestWeight = weight
@@ -2838,7 +2849,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         samplingRow?.let(::appendMotionSamplingRow)
         testSessionSample?.let(::appendTestSessionSample)
         publishMeasurementDisplay()
-        publishTestSessionPanel()
+        if (trackTestSessions) {
+            publishTestSessionPanel()
+        }
 
         if (currentSignals.pendingEventAux != null) {
             sessionCaptureSignals = sessionCaptureSignals.copy(pendingEventAux = null)
@@ -2890,6 +2903,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         freq: Int,
         intensity: Int,
     ) {
+        if (!shouldTrackTestSessionAutomation(_uiState.value)) return
         val now = System.currentTimeMillis()
         testSessionStore = testSessionManager.startSession(
             nowMs = now,
@@ -2915,6 +2929,16 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        val trackTestSessions = shouldTrackTestSessionAutomation(_uiState.value)
+        if (!trackTestSessions) {
+            pendingWaveStartRequest = null
+            cancelPendingWaveTruthRefreshIfIdle()
+            _uiState.update {
+                it.copy(testSessionNotice = null).syncWaveControlFlags()
+            }
+            return
+        }
+
         startNewTestSession(
             freq = freq ?: pending.freq,
             intensity = intensity ?: pending.intensity,
@@ -2936,7 +2960,15 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val pending = pendingWaveStartRequest ?: return
         pendingWaveStartRequest = null
         cancelPendingWaveTruthRefreshIfIdle()
-        _uiState.update { it.syncWaveControlFlags() }
+        val trackTestSessions = shouldTrackTestSessionAutomation(_uiState.value)
+        _uiState.update {
+            if (trackTestSessions) {
+                it.syncWaveControlFlags()
+            } else {
+                it.copy(testSessionNotice = null).syncWaveControlFlags()
+            }
+        }
+        if (!trackTestSessions) return
         appendSystemLog(
             "[TEST_SESSION] start pending cleared source=$source latency_ms=${System.currentTimeMillis() - pending.requestedAtMs}",
         )
@@ -2963,7 +2995,15 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         pendingWaveStopRequest = null
         pendingWaveStopCompletion = null
         cancelPendingWaveTruthRefreshIfIdle()
-        _uiState.update { it.syncWaveControlFlags() }
+        val trackTestSessions = shouldTrackTestSessionAutomation(_uiState.value)
+        _uiState.update {
+            if (trackTestSessions) {
+                it.syncWaveControlFlags()
+            } else {
+                it.copy(testSessionNotice = null).syncWaveControlFlags()
+            }
+        }
+        if (!trackTestSessions) return
         completion?.let {
             finishTestSessionIfRecording(
                 result = it.result,
@@ -2983,7 +3023,15 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         pendingWaveStopRequest = null
         pendingWaveStopCompletion = null
         cancelPendingWaveTruthRefreshIfIdle()
-        _uiState.update { it.syncWaveControlFlags() }
+        val trackTestSessions = shouldTrackTestSessionAutomation(_uiState.value)
+        _uiState.update {
+            if (trackTestSessions) {
+                it.syncWaveControlFlags()
+            } else {
+                it.copy(testSessionNotice = null).syncWaveControlFlags()
+            }
+        }
+        if (!trackTestSessions) return
         pending?.let {
             appendSystemLog(
                 "[TEST_SESSION] stop pending cleared source=$source latency_ms=${System.currentTimeMillis() - it.requestedAtMs}",
@@ -2996,6 +3044,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         freqHz: Float? = null,
         intensity: Int? = null,
     ) {
+        if (!shouldTrackTestSessionAutomation(_uiState.value)) return
         if (testSessionStore?.status == TestSessionStatusUi.RECORDING) return
         startNewTestSession(
             freq = resolveFormalSessionFrequency(freqHz),
@@ -3154,6 +3203,16 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private fun handleSessionLogLine(line: String) {
         when (val event = SessionLogParser.parse(line)) {
             is SessionLogEvent.TestStart -> {
+                if (!shouldTrackTestSessionAutomation(_uiState.value)) {
+                    sessionCaptureSignals = sessionCaptureSignals.copy(
+                        testId = event.testId ?: sessionCaptureSignals.testId,
+                        freqHz = event.freqHz ?: sessionCaptureSignals.freqHz,
+                        intensity = event.intensity ?: sessionCaptureSignals.intensity,
+                        intensityNorm = event.intensityNorm ?: sessionCaptureSignals.intensityNorm,
+                        stableWeight = event.stableWeight ?: sessionCaptureSignals.stableWeight,
+                    )
+                    return
+                }
                 sessionCaptureSignals = sessionCaptureSignals.copy(
                     testId = event.testId ?: sessionCaptureSignals.testId,
                     freqHz = event.freqHz ?: sessionCaptureSignals.freqHz,
@@ -3192,6 +3251,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             is SessionLogEvent.AutoStop -> {
+                if (!shouldTrackTestSessionAutomation(_uiState.value)) return
                 _uiState.update {
                     it.copy(testSessionNotice = text(R.string.test_session_notice_auto_stopped, event.stopReason))
                 }
@@ -3199,8 +3259,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             is SessionLogEvent.StopSummary -> {
+                val trackTestSessions = shouldTrackTestSessionAutomation(_uiState.value)
                 testSessionStore = testSessionStore?.let { session ->
-                    if (session.status == TestSessionStatusUi.RECORDING) {
+                    if (!trackTestSessions || session.status == TestSessionStatusUi.RECORDING) {
                         session
                     } else {
                         testSessionManager.applyStopSummary(
@@ -3210,16 +3271,18 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                 }
-                _uiState.update {
-                    it.copy(
-                        testSessionNotice = text(
-                            R.string.test_session_notice_summary_received,
-                            event.result,
-                            event.stopReason,
-                        ),
-                    )
+                if (trackTestSessions) {
+                    _uiState.update {
+                        it.copy(
+                            testSessionNotice = text(
+                                R.string.test_session_notice_summary_received,
+                                event.result,
+                                event.stopReason,
+                            ),
+                        )
+                    }
+                    publishTestSessionPanel(force = true)
                 }
-                publishTestSessionPanel(force = true)
                 sessionCaptureSignals = sessionCaptureSignals.copy(
                     testId = event.testId ?: sessionCaptureSignals.testId,
                     freqHz = event.freqHz ?: sessionCaptureSignals.freqHz,
@@ -3281,8 +3344,13 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             delay(NO_STREAM_WARNING_TIMEOUT_MS)
             val state = _uiState.value
             if (!state.isConnected || lastStreamAtMs >= connectAtMs) return@launch
-            if (state.deviceLaserInstalled == false) {
-                appendRawLog("SYS", "INFO measurement plane intentionally absent on no-laser profile")
+            if (formalMeasurementPlaneIsOptionalForCurrentDeliverySubset(state)) {
+                val profileLabel = if (isBaseDeliveryProfile(state)) {
+                    "BASE"
+                } else {
+                    "PLUS degraded-start"
+                }
+                appendRawLog("SYS", "INFO measurement plane intentionally optional on $profileLabel delivery path")
                 return@launch
             }
 
@@ -3335,14 +3403,13 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         return state.isConnected &&
             state.protocolMode == ProtocolMode.PRIMARY &&
             state.devicePlatformModel != PlatformModel.BASE &&
-            (isPlusModelWithoutLaser(state) || state.deviceDegradedStartAvailable == true) &&
-            (isPlusModelWithoutLaser(state) || state.deviceDegradedStartEnabled != true)
+            state.deviceDegradedStartAvailable == true &&
+            state.deviceDegradedStartEnabled != true
     }
 
     private fun requiresDegradedStartAuthorizationBeforeWaveStart(state: UiState): Boolean {
         return state.isConnected &&
             state.protocolMode == ProtocolMode.PRIMARY &&
-            !isPlusModelWithoutLaser(state) &&
             state.deviceDegradedStartAvailable == true &&
             state.deviceDegradedStartEnabled != true &&
             !state.isDegradedStartWritePending
@@ -3371,6 +3438,16 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun platformModelFromCapabilities(capabilities: Event.Capabilities): PlatformModel? {
         return parsePlatformModel(capabilities.values["PLATFORM_MODEL"])
+    }
+
+    private fun isSupportedDeviceConfigSelection(
+        platformModel: PlatformModel,
+        laserInstalled: Boolean,
+    ): Boolean {
+        return when (platformModel) {
+            PlatformModel.BASE -> !laserInstalled
+            PlatformModel.PLUS, PlatformModel.PRO, PlatformModel.ULTRA -> laserInstalled
+        }
     }
 
     private fun laserInstalledFromCapabilities(capabilities: Event.Capabilities): Boolean? {

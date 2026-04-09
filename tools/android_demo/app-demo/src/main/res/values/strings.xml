@@ -48,7 +48,7 @@
     <string name="status_protocol_mode">Protocol mode: %1$s</string>
     <string name="status_capability_info">Protocol capability: %1$s</string>
     <string name="section_device_profile">Device Profile</string>
-    <string name="device_profile_hint">Write the device truth source here. BASE is always no-laser; PLUS/PRO/ULTRA are always laser-installed.</string>
+    <string name="device_profile_hint">Write the device truth source here. Current delivery subset: BASE and PLUS degraded-start. BASE is the no-laser product. PLUS/PRO/ULTRA are laser-required profiles.</string>
     <string name="device_profile_current_truth">Device config truth: MODEL=%1$s | LASER=%2$s</string>
     <string name="device_profile_runtime_truth">Runtime health truth: laser_available=%1$s | protection_degraded=%2$s</string>
     <string name="device_profile_select_model">Select platform_model</string>
@@ -64,27 +64,30 @@
     <string name="device_config_status_send_failed">Write failed before ACK: %1$s</string>
     <string name="device_config_status_ack_fallback">Device returned generic ACK: %1$s</string>
     <string name="device_config_status_timeout">Timed out waiting for device profile confirmation. Try again.</string>
-    <string name="device_config_status_conflict">The selected model and laser_installed value conflict.</string>
+    <string name="device_config_status_conflict">Unsupported model/laser selection. BASE cannot be laser-installed, and PLUS/PRO/ULTRA require laser_installed=1.</string>
     <string name="device_config_status_requires_primary">Device profile write requires a primary-protocol connection.</string>
     <string name="degraded_start_dialog_title">Laser chain requires service</string>
-    <string name="degraded_start_dialog_message">The PLUS laser or MAX485 link is unavailable. Repair is required. Confirm to allow base-like start without laser measurement.</string>
+    <string name="degraded_start_dialog_message">The PLUS laser or MAX485 path is unavailable. Repair is recommended. Confirm to allow degraded start while measurement remains unavailable.</string>
     <string name="degraded_start_confirm_action">Confirm and continue</string>
     <string name="degraded_start_cancel_action">Later</string>
     <string name="degraded_start_pending_action">Confirming…</string>
     <string name="degraded_start_requires_primary">Degraded-start confirmation requires a primary-protocol connection.</string>
     <string name="degraded_start_unavailable">Degraded start is currently unavailable.</string>
     <string name="degraded_start_pending">Sending degraded-start confirmation…</string>
-    <string name="degraded_start_enabled_status">Degraded start confirmed. Start is allowed without laser measurement.</string>
+    <string name="degraded_start_enabled_status">Degraded start confirmed. Start is allowed while measurement remains unavailable.</string>
     <string name="degraded_start_send_failed">Degraded-start confirmation failed: %1$s</string>
-    <string name="plus_without_laser_dialog_title">PLUS is running without laser</string>
-    <string name="plus_without_laser_dialog_message">This PLUS device is configured without laser hardware. Start is allowed in base-like mode, but laser measurement will be unavailable.</string>
-    <string name="plus_without_laser_start_enabled_status">PLUS no-laser mode acknowledged. Start is allowed without laser measurement.</string>
     <string name="device_truth_refresh_failed">Device truth refresh failed: %1$s</string>
     <string name="notify_status_enabled">Enabled</string>
     <string name="notify_status_disabled">Disabled</string>
 
     <string name="permission_required_hint">Bluetooth permission is required to scan and connect devices.</string>
     <string name="permission_missing">Missing: %1$s</string>
+
+    <string name="section_delivery_boundary">Current Delivery Boundary</string>
+    <string name="delivery_boundary_profile_base">Current profile: BASE</string>
+    <string name="delivery_boundary_profile_plus_degraded">Current profile: PLUS degraded-start</string>
+    <string name="delivery_boundary_profile_other">Current profile: measurement-capable path</string>
+    <string name="delivery_boundary_measurement_hidden">This stage delivers BLE connect, profile refresh, and start/stop for BASE and the current PLUS degraded-start path. Measurement charts and calibration tools are hidden here because MAX485, laser ranging, and PCM5102A remain outside the current validation boundary.</string>
 
     <string name="section_system_status">System Status</string>
     <string name="section_fall_stop_protection">Fall Stop Protection</string>

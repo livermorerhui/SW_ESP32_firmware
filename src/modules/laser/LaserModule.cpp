@@ -1,9 +1,12 @@
 #include "LaserModule.h"
 #include "core/LogMarkers.h"
 #include <math.h>
+#include <string.h>
 #include "modules/wave/WaveModule.h"
 
 namespace {
+constexpr uint32_t kModbusReadFailureSummaryIntervalMs = 10000UL;
+
 struct WindowStats {
   float mean = NAN;
   float stddev = NAN;
@@ -1064,6 +1067,12 @@ void LaserModule::noteDistanceValidity(
     return;
   }
 
+  if (reason && strcmp(reason, "READ_FAIL") == 0) {
+    lastMeasurementValid = false;
+    lastInvalidReason = reason;
+    return;
+  }
+
   const bool shouldLog =
       lastMeasurementValid ||
       lastInvalidReason != reason ||
@@ -1087,6 +1096,51 @@ void LaserModule::noteDistanceValidity(
 
   lastMeasurementValid = false;
   lastInvalidReason = reason;
+}
+
+void LaserModule::noteModbusReadFailure(uint8_t result, uint32_t now) {
+  if (!hasLoggedModbusReadFailure || lastModbusReadFailureCode != result) {
+    clearModbusReadFailureBurst(now, true);
+    Serial.printf("❌ Modbus read fail (0x%02X)\n", result);
+    hasLoggedModbusReadFailure = true;
+    lastModbusReadFailureCode = result;
+    lastModbusReadFailureLogMs = now;
+    suppressedModbusReadFailureCount = 0;
+    return;
+  }
+
+  suppressedModbusReadFailureCount += 1;
+  const uint32_t windowMs = now - lastModbusReadFailureLogMs;
+  if (windowMs < kModbusReadFailureSummaryIntervalMs) {
+    return;
+  }
+
+  if (suppressedModbusReadFailureCount > 0) {
+    Serial.printf(
+        "❌ Modbus read fail (0x%02X) suppressed=%lu window_ms=%lu\n",
+        result,
+        static_cast<unsigned long>(suppressedModbusReadFailureCount),
+        static_cast<unsigned long>(windowMs));
+  }
+
+  hasLoggedModbusReadFailure = true;
+  lastModbusReadFailureCode = result;
+  lastModbusReadFailureLogMs = now;
+  suppressedModbusReadFailureCount = 0;
+}
+
+void LaserModule::clearModbusReadFailureBurst(uint32_t now, bool flushSummary) {
+  if (flushSummary && hasLoggedModbusReadFailure && suppressedModbusReadFailureCount > 0) {
+    Serial.printf(
+        "❌ Modbus read fail (0x%02X) suppressed=%lu window_ms=%lu\n",
+        lastModbusReadFailureCode,
+        static_cast<unsigned long>(suppressedModbusReadFailureCount),
+        static_cast<unsigned long>(now - lastModbusReadFailureLogMs));
+  }
+  hasLoggedModbusReadFailure = false;
+  lastModbusReadFailureCode = 0;
+  lastModbusReadFailureLogMs = 0;
+  suppressedModbusReadFailureCount = 0;
 }
 
 void LaserModule::pushStableSample(float distance, float weight) {
@@ -1995,6 +2049,7 @@ void LaserModule::taskLoop() {
     lastRead = now;
 
     if (!deviceConfig.laserInstalled) {
+      clearModbusReadFailureBurst(now, true);
       lastMeasurementValid = false;
       lastInvalidReason = "LASER_NOT_INSTALLED";
       resetMeasurementPlane("no_laser_config", false);
@@ -2010,11 +2065,7 @@ void LaserModule::taskLoop() {
 
     uint8_t result = node.readInputRegisters(REG_DISTANCE, 1);
     if (result != node.ku8MBSuccess) {
-      static uint32_t lastErr = 0;
-      if (now - lastErr > 1000) {
-        Serial.printf("❌ Modbus read fail (0x%02X)\n", result);
-        lastErr = now;
-      }
+      noteModbusReadFailure(result, now);
       noteDistanceValidity(false, 0, 0, NAN, false, "READ_FAIL", now);
       if (sm) sm->setSensorHealthy(false);
       resetMeasurementPlane("modbus_read_fail", false);
@@ -2023,6 +2074,7 @@ void LaserModule::taskLoop() {
       continue;
     }
 
+    clearModbusReadFailureBurst(now, true);
     if (sm) sm->setSensorHealthy(true);
 
     const uint16_t rawRegister = node.getResponseBuffer(0);

@@ -127,6 +127,9 @@ private:
   float start_ready_stable_weight_kg = 0.0f;
   bool sensor_healthy = false;
   bool sensor_state_known = false;
+  bool has_logged_start_ready = false;
+  bool last_logged_start_ready = false;
+  float last_logged_start_ready_weight_kg = 0.0f;
   const char* pending_stop_reason_text = nullptr;
   VerificationStopSource pending_stop_source = VerificationStopSource::NONE;
   const char* last_stop_reason_text = "NONE";

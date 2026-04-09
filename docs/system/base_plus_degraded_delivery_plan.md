@@ -1,14 +1,15 @@
-# BASE / PLUS+No-Laser Delivery Plan
+# BASE / PLUS Degraded Delivery Plan
 
 ## Purpose
 
-This document defines the deliverable subset that can be completed now without
-waiting for MAX485, PCM5102A, or the laser range sensor.
+This document defines the deliverable subset that can be completed now with the
+current bench constraints and without waiting for full healthy measurement-path
+validation.
 
 The intent is to cut scope cleanly and deliver a stable subset for:
 
 - `BASE`
-- `PLUS + no laser installed`
+- `PLUS + laser installed + measurement unavailable`
 
 This is a deliberate product slice, not a temporary workaround.
 
@@ -41,23 +42,23 @@ Expected behavior:
 - no laser availability requirement
 - `WAVE:SET / WAVE:START / WAVE:STOP` remain usable
 
-### `PLUS + no laser installed`
+### `PLUS + laser installed + measurement unavailable`
 
 Expected behavior:
 
 - `platform_model=PLUS`
-- `laser_installed=0`
-- Demo APP explicitly indicates no-laser mode
-- start button remains available
-- no stable-weight requirement
-- no laser availability requirement
+- `laser_installed=1`
+- `laser_available=0`
+- `degraded_start_available=1`
+- Demo APP explicitly indicates degraded-start / repair-needed state
+- after degraded-start confirmation, start remains available
 - `WAVE:SET / WAVE:START / WAVE:STOP` remain usable
 
 ## Explicitly Out Of Scope For This Stage
 
 The following items are not blockers for the current subset delivery:
 
-- real laser distance measurement
+- real healthy laser distance measurement
 - real MAX485 communication
 - real PCM5102A output-path verification
 - correct distance / weight telemetry
@@ -80,8 +81,8 @@ The firmware must keep the current compatibility-safe BLE contract:
 For this subset specifically:
 
 - `BASE` truth must remain sufficient for immediate start readiness
-- `PLUS + no laser installed` truth must remain sufficient for immediate start
-  availability
+- `PLUS` degraded-start truth must remain sufficient for reconnect-time
+  degraded authorization and start availability
 - current BLE control-priority behavior must remain intact
 
 ## Demo APP Contract For This Subset
@@ -96,7 +97,8 @@ The Demo APP must keep the current initialization order:
 For this subset specifically:
 
 - `BASE` must not be blocked by stable-weight assumptions
-- `PLUS + no laser installed` must not be blocked by laser-required assumptions
+- `PLUS` degraded-start path must follow `degraded_start_available /
+  degraded_start_enabled` truth rather than local UI heuristics
 - the start button must follow bootstrap/runtime truth rather than hidden UI
   heuristics
 - profile writes must be followed by `CAP? -> SNAPSHOT?` refresh
@@ -114,17 +116,18 @@ The subset is acceptable only if all of the following remain true:
 - `WAVE:SET / START / STOP` remain stable
 - reconnect does not regress start-button readiness
 
-### `PLUS + no laser installed`
+### `PLUS + laser installed + measurement unavailable`
 
 The subset is acceptable only if all of the following remain true:
 
 - connect / reconnect is stable
 - `ACK:CAP` is received reliably
 - `SNAPSHOT` is received reliably
-- the APP clearly indicates no-laser mode
-- start button remains available
+- the APP clearly indicates degraded-start / repair-needed state
+- degraded-start authorization remains available
+- start becomes available after degraded-start confirmation
 - `WAVE:SET / START / STOP` remain stable
-- reconnect does not regress the no-laser start path
+- reconnect does not regress the degraded-start path
 
 ### Shared BLE / Truth Criteria
 
@@ -137,6 +140,13 @@ The subset is not acceptable if any of the following reappear:
 - start-button truth drifting away from firmware truth
 - BLE mis-disconnect caused by initialization timing
 
+## Regression Checklist
+
+Use the focused checklist in:
+
+- `docs/system/base_plus_degraded_regression_checklist.md`
+- `docs/system/base_plus_degraded_manual_validation.md`
+
 ## Implementation Priorities
 
 ### Now
@@ -146,7 +156,7 @@ The current priorities for this subset are:
 1. keep the BLE initialization contract frozen
 2. keep truth packet budgets frozen
 3. keep Demo APP start-readiness behavior frozen for `BASE` and
-   `PLUS + no laser installed`
+   `PLUS` degraded-start
 4. avoid reintroducing measurement-dependent assumptions into these two paths
 
 ### Later
@@ -162,8 +172,23 @@ The following belongs to the later measurement-capable product track:
 
 The current stage should be described as:
 
-- a stable BLE-controlled subset for `BASE` and `PLUS + no laser installed`
+- a stable BLE-controlled subset for `BASE` and `PLUS` degraded-start
 - not the final full-measurement product
 
 That boundary must be kept explicit in demos, testing notes, and future task
 planning.
+
+## Phase 3 Closure Note
+
+For the current delivery subset, the bounded low-risk Phase 3 pass is now
+considered complete.
+
+That completion specifically covers:
+
+- lower serial-log pressure on the current bench
+- lower BLE suppression-log noise
+- lower Demo APP background noise for the current subset
+- no observed regression of `BASE` and `PLUS` degraded-start control flow
+
+It does not reopen the full-measurement product track and does not replace the
+need for later Phase 4 power work.

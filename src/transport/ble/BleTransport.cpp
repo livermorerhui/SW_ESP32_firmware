@@ -285,6 +285,7 @@ void BleTransport::resetSessionOnConnect(BLEServer* server,
                                          bool connIdKnown,
                                          const esp_bd_addr_t* remoteBdaIn,
                                          uint32_t nowMs) {
+  flushStreamSuppressionSummaryIfNeeded(nowMs);
   deviceConnected = true;
   protocolActivityObserved = false;
   currentConnIdValid = connIdKnown;
@@ -318,6 +319,7 @@ void BleTransport::resetSessionOnDisconnect(uint16_t connId,
                                             DisconnectReasonCode reasonCode,
                                             uint16_t rawReason,
                                             uint32_t nowMs) {
+  flushStreamSuppressionSummaryIfNeeded(nowMs);
   deviceConnected = false;
   protocolActivityObserved = false;
   currentConnIdValid = false;
@@ -704,16 +706,13 @@ bool BleTransport::enqueueStreamTxLineRaw(const char* s) {
   if (!txStreamQueue || !s) return false;
 
   if (shouldDeferStreamForControl()) {
-    txStreamSuppressedForControlCount += 1;
-    if ((txStreamSuppressedForControlCount % 50UL) == 1UL) {
-      Serial.printf(
-          "[BLE TX] queue=stream suppressed_for_control=%lu control_depth=%u\n",
-          static_cast<unsigned long>(txStreamSuppressedForControlCount),
-          txControlQueue ? static_cast<unsigned>(uxQueueMessagesWaiting(txControlQueue)) : 0U);
-    }
+    noteStreamSuppressedForControl(
+        txControlQueue ? uxQueueMessagesWaiting(txControlQueue) : 0U,
+        millis());
     return true;
   }
 
+  flushStreamSuppressionSummaryIfNeeded(millis());
   TxMsg msg{};
   msg.priority = TxMsg::Priority::STREAM;
   strlcpy(msg.line, s, sizeof(msg.line));
@@ -731,6 +730,30 @@ void BleTransport::noteQueueWatermark(const char* queueName, UBaseType_t depth, 
   if (depth <= highWatermark) return;
   highWatermark = depth;
   Serial.printf("[BLE TX] queue=%s high_watermark=%u\n", queueName, static_cast<unsigned>(highWatermark));
+}
+
+void BleTransport::noteStreamSuppressedForControl(UBaseType_t controlDepth, uint32_t nowMs) {
+  txStreamSuppressedForControlCount += 1;
+  if (txStreamSuppressionBurstCount == 0) {
+    txStreamSuppressionBurstStartedAtMs = nowMs;
+    txStreamSuppressionBurstMaxControlDepth = controlDepth;
+  } else if (controlDepth > txStreamSuppressionBurstMaxControlDepth) {
+    txStreamSuppressionBurstMaxControlDepth = controlDepth;
+  }
+  txStreamSuppressionBurstCount += 1;
+}
+
+void BleTransport::flushStreamSuppressionSummaryIfNeeded(uint32_t nowMs) {
+  if (txStreamSuppressionBurstCount == 0) return;
+  Serial.printf(
+      "[BLE TX] queue=stream suppressed_for_control burst_count=%lu total=%lu max_control_depth=%u window_ms=%lu\n",
+      static_cast<unsigned long>(txStreamSuppressionBurstCount),
+      static_cast<unsigned long>(txStreamSuppressedForControlCount),
+      static_cast<unsigned>(txStreamSuppressionBurstMaxControlDepth),
+      static_cast<unsigned long>(nowMs - txStreamSuppressionBurstStartedAtMs));
+  txStreamSuppressionBurstCount = 0;
+  txStreamSuppressionBurstStartedAtMs = 0;
+  txStreamSuppressionBurstMaxControlDepth = 0;
 }
 
 void BleTransport::logTruthPayloadBudgetWarningIfNeeded(const char* s, size_t framedLen) const {

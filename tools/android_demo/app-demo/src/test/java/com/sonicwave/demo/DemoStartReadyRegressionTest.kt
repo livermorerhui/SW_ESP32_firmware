@@ -103,7 +103,7 @@ class DemoStartReadyRegressionTest {
     }
 
     @Test
-    fun plusWithoutLaserStartButtonBecomesReadyWithoutStableWeight() {
+    fun plusWithoutLaserIsNotTreatedAsLaserlessDeliveryProfile() {
         val state = UiState(
             isConnected = true,
             devicePlatformModel = PlatformModel.PLUS,
@@ -113,9 +113,62 @@ class DemoStartReadyRegressionTest {
             stableWeightActive = false,
         )
 
-        assertTrue(state.canStartWave())
-        assertTrue(isLaserlessStartProfile(state))
-        assertTrue(isPlusModelWithoutLaser(state))
+        assertFalse(state.canStartWave())
+        assertFalse(isLaserlessStartProfile(state))
+    }
+
+    @Test
+    fun plusDegradedDeliveryProfileTreatsFormalMeasurementPlaneAsOptional() {
+        val state = UiState(
+            isConnected = true,
+            devicePlatformModel = PlatformModel.PLUS,
+            deviceLaserInstalled = true,
+            deviceDegradedStartAvailable = true,
+            deviceDegradedStartEnabled = false,
+        )
+
+        assertTrue(isPlusDegradedDeliveryProfile(state))
+        assertTrue(formalMeasurementPlaneIsOptionalForCurrentDeliverySubset(state))
+    }
+
+    @Test
+    fun fullMeasurementPlusProfileStillExpectsFormalMeasurementPlane() {
+        val state = UiState(
+            isConnected = true,
+            devicePlatformModel = PlatformModel.PLUS,
+            deviceLaserInstalled = true,
+            deviceDegradedStartAvailable = false,
+            deviceDegradedStartEnabled = false,
+        )
+
+        assertFalse(isPlusDegradedDeliveryProfile(state))
+        assertFalse(formalMeasurementPlaneIsOptionalForCurrentDeliverySubset(state))
+    }
+
+    @Test
+    fun deliverySubsetProfilesDoNotTrackTestSessionAutomation() {
+        val base = UiState(
+            isConnected = true,
+            devicePlatformModel = PlatformModel.BASE,
+            deviceLaserInstalled = false,
+        )
+        val plusDegraded = UiState(
+            isConnected = true,
+            devicePlatformModel = PlatformModel.PLUS,
+            deviceLaserInstalled = true,
+            deviceDegradedStartAvailable = true,
+        )
+        val fullMeasurementPlus = UiState(
+            isConnected = true,
+            devicePlatformModel = PlatformModel.PLUS,
+            deviceLaserInstalled = true,
+            deviceDegradedStartAvailable = false,
+            deviceDegradedStartEnabled = false,
+        )
+
+        assertFalse(shouldTrackTestSessionAutomation(base))
+        assertFalse(shouldTrackTestSessionAutomation(plusDegraded))
+        assertTrue(shouldTrackTestSessionAutomation(fullMeasurementPlus))
     }
 
     @Test

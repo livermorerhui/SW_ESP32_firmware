@@ -51,7 +51,7 @@ The following items are considered validated with the current hardware:
 - Demo APP bootstrap truth and runtime truth refresh are logically aligned with
   the firmware.
 - Start button state is consistent with the current bootstrap/runtime truth in
-  the tested BASE / PLUS / degraded-start paths.
+  the tested BASE / PLUS degraded-start paths.
 - `DEBUG:DEGRADED_START -> ACK:DEGRADED_START` is stable.
 - `WAVE:SET` high-frequency control changes are stable.
 - `WAVE:START / WAVE:STOP` control flow is stable.
@@ -60,6 +60,12 @@ The following items are considered validated with the current hardware:
 - Repeated reconnect no longer drops initialization truth.
 - No current evidence shows `ACK:CAP` or connect-time `SNAPSHOT` being broken
   by MTU-sized first-packet issues.
+- The current low-risk runtime-log cleanup pass is validated on the bench:
+  - repeated `READ_FAIL` no longer emits paired `[LASER] INVALID ... READ_FAIL`
+  - repeated `READ_FAIL` now reports as periodic summary-style suppression
+  - control-priority stream suppression now reports burst summaries
+  - current delivery-subset APP flow no longer treats hidden test-session
+    automation as an always-hot background path
 
 ## Not Yet Validated In Current Setup
 
@@ -115,6 +121,8 @@ With the current hardware, it is reasonable to state:
 - degraded-start flow is validated.
 - Demo APP and firmware are logically compatible for bootstrap truth, runtime
   truth, and control commands.
+- one bounded low-risk runtime-efficiency pass is validated for the current
+  delivery subset.
 
 It is not yet reasonable to state:
 

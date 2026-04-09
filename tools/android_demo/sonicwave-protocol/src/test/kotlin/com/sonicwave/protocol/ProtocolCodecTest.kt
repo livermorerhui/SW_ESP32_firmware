@@ -65,13 +65,21 @@ class ProtocolCodecTest {
     @Test
     fun decodeCapabilityAck() {
         val event = ProtocolCodec.decode(
-            "ACK:CAP fw=SW-HUB-1.0.0 proto=2 platform_model=PRO laser_installed=1 fall_stop_enabled=0 fall_stop_mode=DETECT_ONLY motion_sampling_mode=1 fall_action_suppressed=1",
+            "ACK:CAP fw=SW-HUB-1.0.0 proto=2 platform_model=PRO laser_installed=1",
         )
         val cap = assertIs<Event.Capabilities>(event)
         assertEquals("SW-HUB-1.0.0", cap.values["FW"])
         assertEquals("2", cap.values["PROTO"])
         assertEquals("PRO", cap.values["PLATFORM_MODEL"])
         assertEquals("1", cap.values["LASER_INSTALLED"])
+    }
+
+    @Test
+    fun decodeCapabilityAckRetainsCompatibilityForExtraFields() {
+        val event = ProtocolCodec.decode(
+            "ACK:CAP fw=SW-HUB-1.0.0 proto=2 platform_model=PRO laser_installed=1 fall_stop_enabled=0 fall_stop_mode=DETECT_ONLY motion_sampling_mode=1 fall_action_suppressed=1",
+        )
+        val cap = assertIs<Event.Capabilities>(event)
         assertEquals("0", cap.values["FALL_STOP_ENABLED"])
         assertEquals("DETECT_ONLY", cap.values["FALL_STOP_MODE"])
         assertEquals("1", cap.values["MOTION_SAMPLING_MODE"])

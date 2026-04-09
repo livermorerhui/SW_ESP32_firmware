@@ -394,12 +394,31 @@ fun UiState.waveStartAvailability(): WaveStartAvailabilityUi {
 
 fun UiState.canStartWave(): Boolean = waveStartAvailability() == WaveStartAvailabilityUi.READY
 
-internal fun isLaserlessStartProfile(state: UiState): Boolean {
-    return state.devicePlatformModel == PlatformModel.BASE || isPlusModelWithoutLaser(state)
+internal fun isBaseDeliveryProfile(state: UiState): Boolean {
+    return state.devicePlatformModel == PlatformModel.BASE
 }
 
-internal fun isPlusModelWithoutLaser(state: UiState): Boolean {
-    return state.devicePlatformModel != null &&
-        state.devicePlatformModel != PlatformModel.BASE &&
-        state.deviceLaserInstalled == false
+internal fun isLaserlessStartProfile(state: UiState): Boolean {
+    return isBaseDeliveryProfile(state)
+}
+
+internal fun isPlusDegradedDeliveryProfile(state: UiState): Boolean {
+    return state.devicePlatformModel == PlatformModel.PLUS &&
+        state.deviceLaserInstalled == true &&
+        (
+            state.deviceDegradedStartAvailable == true ||
+                state.deviceDegradedStartEnabled == true
+            )
+}
+
+internal fun isBaseOrPlusDegradedDeliveryProfile(state: UiState): Boolean {
+    return isBaseDeliveryProfile(state) || isPlusDegradedDeliveryProfile(state)
+}
+
+internal fun formalMeasurementPlaneIsOptionalForCurrentDeliverySubset(state: UiState): Boolean {
+    return isBaseOrPlusDegradedDeliveryProfile(state)
+}
+
+internal fun shouldTrackTestSessionAutomation(state: UiState): Boolean {
+    return !formalMeasurementPlaneIsOptionalForCurrentDeliverySubset(state)
 }

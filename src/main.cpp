@@ -17,6 +17,31 @@ static BleTransport g_ble;
 static String g_bleDeviceName;
 static String buildBleDeviceName(PlatformModel model);
 
+static void appendKeyValue(String& out, const char* key, const char* value) {
+  out += key;
+  out += value ? value : "";
+}
+
+static void appendKeyIntValue(String& out, const char* key, int value) {
+  out += key;
+  out += value;
+}
+
+static void appendKeyUnsignedLongValue(String& out, const char* key, unsigned long value) {
+  out += key;
+  out += value;
+}
+
+static void appendKeyFloatValue(String& out, const char* key, float value, unsigned char decimals) {
+  out += key;
+  out += String(value, static_cast<unsigned int>(decimals));
+}
+
+static void buildSimpleNack(String& out, const String& reason) {
+  out = "NACK:";
+  out += reason;
+}
+
 static const char* calibrationModelTypeName(uint8_t type) {
   switch (type) {
     case static_cast<uint8_t>(CalibrationModelType::LINEAR):
@@ -48,12 +73,12 @@ public:
             snapshot.startReady ? 1 : 0,
             snapshot.baselineReady ? 1 : 0,
             topStateName(snapshot.topState));
-        outAck = String("ACK:CAP fw=") + FW_VER +
-            " proto=" + String(PROTO_VER) +
-            " platform_model=" + String(platformModelName(l->platformModel())) +
-            " laser_installed=" + String(l->laserInstalled() ? 1 : 0) +
-            " fall_stop_enabled=" + String(sm->fallStopEnabled() ? 1 : 0) +
-            " fall_stop_mode=" + String(sm->fallStopModeName());
+        outAck = "";
+        outAck.reserve(96);
+        appendKeyValue(outAck, "ACK:CAP fw=", FW_VER);
+        appendKeyIntValue(outAck, " proto=", PROTO_VER);
+        appendKeyValue(outAck, " platform_model=", platformModelName(l->platformModel()));
+        appendKeyIntValue(outAck, " laser_installed=", l->laserInstalled() ? 1 : 0);
         ProtocolCodec::logTruthPayloadBudgetWarningIfNeeded(
             "bootstrap_truth",
             outAck.length() + 1,
@@ -72,13 +97,14 @@ public:
                 c.deviceConfig.platformModel,
                 c.deviceConfig.laserInstalled,
                 reason)) {
-          outAck = String("NACK:") + reason;
+          buildSimpleNack(outAck, reason);
           return false;
         }
 
-        outAck = String("ACK:DEVICE_CONFIG platform_model=") +
-            platformModelName(l->platformModel()) +
-            " laser_installed=" + String(l->laserInstalled() ? 1 : 0);
+        outAck = "";
+        outAck.reserve(80);
+        appendKeyValue(outAck, "ACK:DEVICE_CONFIG platform_model=", platformModelName(l->platformModel()));
+        appendKeyIntValue(outAck, " laser_installed=", l->laserInstalled() ? 1 : 0);
         g_bleDeviceName = buildBleDeviceName(l->platformModel());
         g_ble.updateAdvertisingIdentity(
             g_bleDeviceName.c_str(),
@@ -102,9 +128,10 @@ public:
       case CmdType::DEGRADED_START_SET: {
         sm->setDegradedStartAuthorized(c.degradedStart.enabled);
         const PlatformSnapshot snapshot = sm->snapshot();
-        outAck = String("ACK:DEGRADED_START enabled=") +
-            String(snapshot.degradedStartEnabled ? 1 : 0) +
-            " available=" + String(snapshot.degradedStartAvailable ? 1 : 0);
+        outAck = "";
+        outAck.reserve(56);
+        appendKeyIntValue(outAck, "ACK:DEGRADED_START enabled=", snapshot.degradedStartEnabled ? 1 : 0);
+        appendKeyIntValue(outAck, " available=", snapshot.degradedStartAvailable ? 1 : 0);
         return true;
       }
 
@@ -171,28 +198,31 @@ public:
         CalibrationCapture capture{};
         String reason;
         if (!l->captureCalibrationPoint(c.capture.referenceWeightKg, capture, reason)) {
-          outAck = String("NACK:") + reason;
+          buildSimpleNack(outAck, reason);
           return false;
         }
-        outAck = String("ACK:CAL_POINT idx=") + String(capture.index) +
-            " ts=" + String(capture.ts_ms) +
-            " d_mm=" + String(capture.distanceMm, 2) +
-            " ref_kg=" + String(capture.referenceWeightKg, 2) +
-            " pred_kg=" + String(capture.predictedWeightKg, 2) +
-            " stable=" + String(capture.stableFlag ? 1 : 0) +
-            " valid=" + String(capture.validFlag ? 1 : 0);
+        outAck = "";
+        outAck.reserve(128);
+        appendKeyUnsignedLongValue(outAck, "ACK:CAL_POINT idx=", static_cast<unsigned long>(capture.index));
+        appendKeyUnsignedLongValue(outAck, " ts=", static_cast<unsigned long>(capture.ts_ms));
+        appendKeyFloatValue(outAck, " d_mm=", capture.distanceMm, 2);
+        appendKeyFloatValue(outAck, " ref_kg=", capture.referenceWeightKg, 2);
+        appendKeyFloatValue(outAck, " pred_kg=", capture.predictedWeightKg, 2);
+        appendKeyIntValue(outAck, " stable=", capture.stableFlag ? 1 : 0);
+        appendKeyIntValue(outAck, " valid=", capture.validFlag ? 1 : 0);
         return true;
       }
 
       case CmdType::CAL_GET_MODEL: {
         CalibrationModel model{};
         l->getCalibrationModel(model);
-        outAck = String("ACK:CAL_MODEL type=") +
-            calibrationModelTypeName(static_cast<uint8_t>(model.type)) +
-            " ref=" + String(model.referenceDistance, 4) +
-            " c0=" + String(model.coefficients[0], 6) +
-            " c1=" + String(model.coefficients[1], 6) +
-            " c2=" + String(model.coefficients[2], 6);
+        outAck = "";
+        outAck.reserve(104);
+        appendKeyValue(outAck, "ACK:CAL_MODEL type=", calibrationModelTypeName(static_cast<uint8_t>(model.type)));
+        appendKeyFloatValue(outAck, " ref=", model.referenceDistance, 4);
+        appendKeyFloatValue(outAck, " c0=", model.coefficients[0], 6);
+        appendKeyFloatValue(outAck, " c1=", model.coefficients[1], 6);
+        appendKeyFloatValue(outAck, " c2=", model.coefficients[2], 6);
         return true;
       }
 
@@ -209,9 +239,10 @@ public:
           Serial.printf("[CAL] SET_MODEL result=failure type=%s reason=%s\n",
               calibrationModelTypeName(static_cast<uint8_t>(model.type)),
               reason.c_str());
-          outAck = String("NACK:CAL_SET_MODEL type=") +
-              calibrationModelTypeName(static_cast<uint8_t>(model.type)) +
-              " reason=" + reason;
+          outAck = "";
+          outAck.reserve(96);
+          appendKeyValue(outAck, "NACK:CAL_SET_MODEL type=", calibrationModelTypeName(static_cast<uint8_t>(model.type)));
+          appendKeyValue(outAck, " reason=", reason.c_str());
           return false;
         }
 
@@ -221,27 +252,30 @@ public:
             model.coefficients[0],
             model.coefficients[1],
             model.coefficients[2]);
-        outAck = String("ACK:CAL_SET_MODEL type=") +
-            calibrationModelTypeName(static_cast<uint8_t>(model.type)) +
-            " ref=" + String(model.referenceDistance, 4) +
-            " c0=" + String(model.coefficients[0], 6) +
-            " c1=" + String(model.coefficients[1], 6) +
-            " c2=" + String(model.coefficients[2], 6);
+        outAck = "";
+        outAck.reserve(112);
+        appendKeyValue(outAck, "ACK:CAL_SET_MODEL type=", calibrationModelTypeName(static_cast<uint8_t>(model.type)));
+        appendKeyFloatValue(outAck, " ref=", model.referenceDistance, 4);
+        appendKeyFloatValue(outAck, " c0=", model.coefficients[0], 6);
+        appendKeyFloatValue(outAck, " c1=", model.coefficients[1], 6);
+        appendKeyFloatValue(outAck, " c2=", model.coefficients[2], 6);
         return true;
       }
 
       case CmdType::FALL_STOP_SET:
         sm->setFallStopEnabled(c.fallStop.enabled);
-        outAck = String("ACK:FALL_STOP enabled=") +
-            String(c.fallStop.enabled ? 1 : 0) +
-            " mode=" + String(sm->fallStopModeName());
+        outAck = "";
+        outAck.reserve(56);
+        appendKeyIntValue(outAck, "ACK:FALL_STOP enabled=", c.fallStop.enabled ? 1 : 0);
+        appendKeyValue(outAck, " mode=", sm->fallStopModeName());
         return true;
 
       case CmdType::MOTION_SAMPLING_MODE_SET:
         sm->setMotionSamplingMode(c.motionSamplingMode.enabled);
-        outAck = String("ACK:MOTION_SAMPLING enabled=") +
-            String(c.motionSamplingMode.enabled ? 1 : 0) +
-            " fall_action_suppressed=" + String(sm->fallStopEnabled() ? 0 : 1);
+        outAck = "";
+        outAck.reserve(72);
+        appendKeyIntValue(outAck, "ACK:MOTION_SAMPLING enabled=", c.motionSamplingMode.enabled ? 1 : 0);
+        appendKeyIntValue(outAck, " fall_action_suppressed=", sm->fallStopEnabled() ? 0 : 1);
         return true;
 
       case CmdType::LEGACY_FIE: {

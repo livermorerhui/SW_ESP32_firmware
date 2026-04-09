@@ -1,5 +1,115 @@
 # Project Status
 
+## 2026-04-09 Phase 3 Low-Risk Efficiency Pass Completed
+
+The current low-risk Phase 3 efficiency pass is now considered complete for the
+current ESP32-S3-only bench boundary.
+
+This completion claim does **not** mean the full measurement-capable product is
+optimized. It means the currently deliverable subset has finished one bounded
+round of:
+
+- log-volume reduction
+- low-risk string/path cleanup
+- Demo APP background-noise cleanup
+- no-regression verification on `BASE` and `PLUS` degraded-start
+
+What was completed in this Phase 3 pass:
+
+- `LaserModule` read-fail logging was reduced from repeated paired noise to
+  periodic summary-style reporting.
+- `BleTransport` stream suppression logging now reports suppression bursts
+  instead of repetitive single-line spam.
+- `main.cpp` ACK/NACK builders were tightened to reduce chained temporary
+  `String` assembly.
+- Demo APP no longer keeps test-session automation hot for the current delivery
+  subset.
+- `WaveModule` output-driver logging was reduced to key start/stop and ramp
+  transitions.
+- `SystemStateMachine` start-ready logging no longer reprints on tiny weight
+  jitter.
+
+What this completion means:
+
+- the current delivery subset remains functionally stable
+- the main runtime logs are materially quieter and easier to inspect
+- Phase 3 no longer needs more broad low-risk cleanup before moving on
+
+What it does **not** mean:
+
+- real measurement throughput is optimized
+- full measurement-capable product performance is closed
+- Phase 4 power work is done
+
+Current recommended next step:
+
+- keep the current Phase 3 result frozen
+- move to Phase 4 low-risk power optimization
+- continue using `BASE` and `PLUS` degraded-start as the current regression
+  boundary
+
+## 2026-04-08 Current Mainline Status: Phase 2.5 Delivery Closure
+
+Current mainline should now be read as five segments rather than the older
+four-phase view:
+
+1. Phase 1: BLE stability repair
+2. Phase 2: transport/bootstrap truth hardening
+3. Phase 2.5: `BASE` / `PLUS degraded-start` delivery closure
+4. Phase 3: runtime efficiency optimization
+5. Phase 4: power optimization
+
+Current interpretation:
+
+- Phase 1 is complete.
+- Phase 2 core work is complete.
+- active work should remain on Phase 2.5 delivery closure.
+- Phase 3 and Phase 4 are not current priorities.
+
+What is already considered stable on the current ESP32-S3-only bench:
+
+- BLE connect / disconnect / reconnect
+- TX notify + RX write transport path
+- `CAP? -> ACK:CAP`
+- `SNAPSHOT? -> SNAPSHOT`
+- profile write + truth refresh
+- `WAVE:SET / WAVE:START / WAVE:STOP`
+- `BASE` immediate start path
+- `PLUS + laser installed + measurement unavailable` degraded-start path
+
+What is not yet a current completion claim:
+
+- real laser measurement validation
+- MAX485 real communication validation
+- PCM5102A output-path validation
+- sustained valid `EVT:STREAM` under real measurement load
+- full calibration closed loop
+- whole-device long-duration stability under full measurement conditions
+
+Current delivery boundary:
+
+- deliver a stable BLE-controlled subset for `BASE`
+- deliver a stable BLE-controlled subset for `PLUS` degraded-start under the
+  current bench constraint
+- do not present the current repo status as a completed full-measurement product
+
+Current document anchors:
+
+- `docs/system/base_plus_degraded_delivery_plan.md`
+- `docs/system/base_plus_degraded_regression_checklist.md`
+- `docs/system/current_hardware_validation_boundary.md`
+- `docs/ble-init-contract.md`
+- `docs/start-readiness-contract.md`
+
+Immediate next-step guidance:
+
+- keep `ACK:CAP` / `SNAPSHOT` responsibilities frozen
+- keep BLE init sequencing frozen
+- continue removing Demo APP measurement-dependent assumptions from the current
+  delivery subset
+- expand focused regression only for `BASE` and `PLUS` degraded-start
+- do not start broad Phase 3 / Phase 4 optimization work yet
+
 ## 2026-04-02 Freeze Decision: Phase 3 Script Experimental Line
 
 Decision recorded on April 2, 2026:

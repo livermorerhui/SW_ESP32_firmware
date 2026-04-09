@@ -149,6 +149,8 @@ private:
   bool enqueueStreamTxLineRaw(const char* s);
   bool tryHandleDirectQuery(const String& s);
   void noteQueueWatermark(const char* queueName, UBaseType_t depth, UBaseType_t& highWatermark);
+  void noteStreamSuppressedForControl(UBaseType_t controlDepth, uint32_t nowMs);
+  void flushStreamSuppressionSummaryIfNeeded(uint32_t nowMs);
   void logTruthPayloadBudgetWarningIfNeeded(const char* s, size_t framedLen) const;
   bool isStreamFrame(const char* s) const;
   bool shouldDeferStreamForControl() const;
@@ -199,6 +201,9 @@ private:
   uint32_t txControlDropCount = 0;
   uint32_t txStreamReplaceCount = 0;
   uint32_t txStreamSuppressedForControlCount = 0;
+  uint32_t txStreamSuppressionBurstCount = 0;
+  uint32_t txStreamSuppressionBurstStartedAtMs = 0;
+  UBaseType_t txStreamSuppressionBurstMaxControlDepth = 0;
   uint32_t lastControlTxAtMs = 0;
   uint32_t lastRecoveryDisconnectMs = 0;
   std::string advertisedDeviceName;

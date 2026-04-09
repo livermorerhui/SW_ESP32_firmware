@@ -57,19 +57,16 @@ APP rule:
 
 ### `PLUS` with `laser_installed=0`
 
-This is also a laserless profile, even though the platform model is not `BASE`.
+This is not a supported product profile in the current product definition.
 
 Expected behavior:
 
-- after connect, `Start` should be ready
-- APP should show an informational dialog that the device is running without
-  laser measurement
-- this path must not require degraded-start authorization
+- it must not be documented as a normal delivery path
+- the APP must not treat it as an officially supported laserless profile
 
 APP rule:
 
-- `platform_model!=BASE && laser_installed=0` is sufficient to treat the
-  profile as laserless
+- only `BASE` is treated as the formal laserless product profile
 
 ### `PLUS` with `laser_installed=1` and healthy measurement chain
 
@@ -100,7 +97,6 @@ The APP must not:
 
 - require stable-weight UI data before honoring laserless start profiles
 - require `SNAPSHOT.start_ready=true` for `BASE`
-- require `SNAPSHOT.start_ready=true` for `PLUS + laser_installed=0`
 
 ## Review Checklist
 
@@ -108,7 +104,6 @@ Before changing start-button behavior, verify:
 
 - does the APP still trust firmware `start_ready` for laser-equipped profiles
 - does `BASE` still become ready immediately after reconnect
-- does `PLUS + laser_installed=0` still become ready immediately after reconnect
 - does degraded-start still require confirmation only for laser-equipped fault
   paths
 - does connect-time `SNAPSHOT` remain small enough for the common single-notify

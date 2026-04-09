@@ -39,7 +39,9 @@ import com.sonicwave.demo.PermissionState
 import com.sonicwave.demo.R
 import com.sonicwave.demo.ScanState
 import com.sonicwave.demo.UiState
-import com.sonicwave.demo.isPlusModelWithoutLaser
+import com.sonicwave.demo.isBaseDeliveryProfile
+import com.sonicwave.demo.isBaseOrPlusDegradedDeliveryProfile
+import com.sonicwave.demo.isPlusDegradedDeliveryProfile
 import com.sonicwave.demo.ui.components.CalibrationToolsSection
 import com.sonicwave.demo.ui.components.DeviceConnectSection
 import com.sonicwave.demo.ui.components.DeviceProfileSection
@@ -127,34 +129,44 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
                 onToggleEnabled = viewModel::setFallStopProtectionEnabled,
             )
 
-            TelemetryChartSectionHost(
-                viewModel = viewModel,
-                stableWeight = uiState.stableWeight,
-                stableWeightActive = uiState.stableWeightActive,
-            )
-            TestSessionSectionHost(viewModel = viewModel)
+            val deliveryProfile = isBaseOrPlusDegradedDeliveryProfile(uiState)
 
-            CalibrationToolsSection(
-                uiState = uiState,
-                onZeroInputChange = viewModel::updateZeroInput,
-                onFactorInputChange = viewModel::updateFactorInput,
-                onCaptureReferenceChange = viewModel::updateCaptureReferenceInput,
-                onModelReferenceChange = viewModel::updateModelReferenceInput,
-                onModelC0Change = viewModel::updateModelC0Input,
-                onModelC1Change = viewModel::updateModelC1Input,
-                onModelC2Change = viewModel::updateModelC2Input,
-                onModelTypeChange = viewModel::updateModelType,
-                onZero = viewModel::sendZero,
-                onCalibrate = viewModel::sendCalibrate,
-                onCapturePoint = viewModel::sendCalibrationCapture,
-                onStartRecording = viewModel::startRecording,
-                onStopRecording = viewModel::stopRecording,
-                onGetModel = viewModel::sendCalibrationGetModel,
-                onSetModel = viewModel::sendCalibrationSetModel,
-                onCalibrationZero = viewModel::sendCalibrationZero,
-                onToggleEngineeringSection = viewModel::toggleEngineeringSection,
-                onToggleVerboseStreamLogs = viewModel::toggleVerboseStreamLogs,
-            )
+            if (deliveryProfile) {
+                DeliveryBoundarySection(uiState = uiState)
+            } else {
+                TelemetryChartSectionHost(
+                    viewModel = viewModel,
+                    stableWeight = uiState.stableWeight,
+                    stableWeightActive = uiState.stableWeightActive,
+                )
+            }
+            if (!deliveryProfile) {
+                TestSessionSectionHost(viewModel = viewModel)
+            }
+
+            if (!deliveryProfile) {
+                CalibrationToolsSection(
+                    uiState = uiState,
+                    onZeroInputChange = viewModel::updateZeroInput,
+                    onFactorInputChange = viewModel::updateFactorInput,
+                    onCaptureReferenceChange = viewModel::updateCaptureReferenceInput,
+                    onModelReferenceChange = viewModel::updateModelReferenceInput,
+                    onModelC0Change = viewModel::updateModelC0Input,
+                    onModelC1Change = viewModel::updateModelC1Input,
+                    onModelC2Change = viewModel::updateModelC2Input,
+                    onModelTypeChange = viewModel::updateModelType,
+                    onZero = viewModel::sendZero,
+                    onCalibrate = viewModel::sendCalibrate,
+                    onCapturePoint = viewModel::sendCalibrationCapture,
+                    onStartRecording = viewModel::startRecording,
+                    onStopRecording = viewModel::stopRecording,
+                    onGetModel = viewModel::sendCalibrationGetModel,
+                    onSetModel = viewModel::sendCalibrationSetModel,
+                    onCalibrationZero = viewModel::sendCalibrationZero,
+                    onToggleEngineeringSection = viewModel::toggleEngineeringSection,
+                    onToggleVerboseStreamLogs = viewModel::toggleVerboseStreamLogs,
+                )
+            }
 
             RawConsoleSectionHost(viewModel = viewModel)
         }
@@ -170,30 +182,13 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
     }
 
     if (uiState.showDegradedStartDialog) {
-        val plusWithoutLaser = isPlusModelWithoutLaser(uiState)
         AlertDialog(
             onDismissRequest = viewModel::dismissDegradedStartDialog,
             title = {
-                Text(
-                    stringResource(
-                        if (plusWithoutLaser) {
-                            R.string.plus_without_laser_dialog_title
-                        } else {
-                            R.string.degraded_start_dialog_title
-                        },
-                    ),
-                )
+                Text(stringResource(R.string.degraded_start_dialog_title))
             },
             text = {
-                Text(
-                    stringResource(
-                        if (plusWithoutLaser) {
-                            R.string.plus_without_laser_dialog_message
-                        } else {
-                            R.string.degraded_start_dialog_message
-                        },
-                    ),
-                )
+                Text(stringResource(R.string.degraded_start_dialog_message))
             },
             confirmButton = {
                 TextButton(
@@ -218,6 +213,37 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun DeliveryBoundarySection(
+    uiState: UiState,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(stringResource(R.string.section_delivery_boundary), style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = stringResource(
+                    if (isBaseDeliveryProfile(uiState)) {
+                        R.string.delivery_boundary_profile_base
+                    } else if (isPlusDegradedDeliveryProfile(uiState)) {
+                        R.string.delivery_boundary_profile_plus_degraded
+                    } else {
+                        R.string.delivery_boundary_profile_other
+                    },
+                ),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                text = stringResource(R.string.delivery_boundary_measurement_hidden),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

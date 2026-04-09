@@ -90,6 +90,8 @@ private:
   void taskLoop();
   bool isDistanceSentinelRaw(uint16_t rawRegister, int16_t signedRaw, const char*& reason) const;
   bool isDistanceValidRaw(int16_t signedRaw, const char*& reason) const;
+  void noteModbusReadFailure(uint8_t result, uint32_t now);
+  void clearModbusReadFailureBurst(uint32_t now, bool flushSummary = true);
   void noteDistanceValidity(
       bool valid,
       uint16_t rawRegister,
@@ -285,6 +287,10 @@ private:
   bool hasLoggedMeasurementBypassState = false;
   bool lastLoggedMeasurementBypassState = false;
   const char* lastInvalidReason = nullptr;
+  bool hasLoggedModbusReadFailure = false;
+  uint8_t lastModbusReadFailureCode = 0;
+  uint32_t lastModbusReadFailureLogMs = 0;
+  uint32_t suppressedModbusReadFailureCount = 0;
   uint32_t calibrationCaptureCounter = 0;
   float ma12WeightBuffer[MEASUREMENT_MA12_WINDOW]{};
   uint8_t ma12Head = 0;

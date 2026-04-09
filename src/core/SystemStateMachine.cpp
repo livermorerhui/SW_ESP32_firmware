@@ -2,8 +2,11 @@
 #include "core/LogMarkers.h"
 #include "modules/laser/LaserModule.h"
 #include "modules/wave/WaveModule.h"
+#include <math.h>
 
 namespace {
+
+constexpr float kStartReadyLogDeltaKg = 0.25f;
 
 const char* severityName(FaultSeverity severity) {
   switch (severity) {
@@ -762,14 +765,17 @@ void SystemStateMachine::setRuntimeReady(bool ready) {
 
 void SystemStateMachine::setStartReadiness(bool ready, float stableWeightKg) {
   const float nextStableWeightKg = ready ? stableWeightKg : 0.0f;
-  const bool changed =
-      (start_ready != ready) ||
-      (ready && start_ready_stable_weight_kg != nextStableWeightKg);
-
   start_ready = ready;
   start_ready_stable_weight_kg = nextStableWeightKg;
 
-  if (changed) {
+  const bool shouldLog =
+      !has_logged_start_ready ||
+      last_logged_start_ready != start_ready ||
+      (start_ready &&
+          fabsf(last_logged_start_ready_weight_kg - start_ready_stable_weight_kg) >=
+              kStartReadyLogDeltaKg);
+
+  if (shouldLog) {
     Serial.printf(
         "%s [READY] start_ready=%d stable_weight_kg=%.2f runtime_ready=%d leave_enabled=%d note=formal_start_gate\n",
         LogMarker::kBaselineReady,
@@ -777,6 +783,9 @@ void SystemStateMachine::setStartReadiness(bool ready, float stableWeightKg) {
         start_ready_stable_weight_kg,
         runtime_ready ? 1 : 0,
         leaveDetectionEnabled() ? 1 : 0);
+    has_logged_start_ready = true;
+    last_logged_start_ready = start_ready;
+    last_logged_start_ready_weight_kg = start_ready_stable_weight_kg;
   }
 
   if (pause_reason_code == FaultCode::USER_LEFT_PLATFORM && runtime_ready && start_ready) {

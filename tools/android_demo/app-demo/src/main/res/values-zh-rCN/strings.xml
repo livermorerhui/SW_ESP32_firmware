@@ -48,7 +48,7 @@
     <string name="status_protocol_mode">协议模式：%1$s</string>
     <string name="status_capability_info">协议能力：%1$s</string>
     <string name="section_device_profile">设备画像配置</string>
-    <string name="device_profile_hint">这里负责写入设备 truth source。BASE 永远对应无激光；PLUS/PRO/ULTRA 永远对应已安装激光。</string>
+    <string name="device_profile_hint">这里负责写入设备 truth source。当前交付子集只收口 BASE 和 PLUS 降级启动。BASE 是无激光产品；PLUS/PRO/ULTRA 都要求安装激光。</string>
     <string name="device_profile_current_truth">设备配置真值：MODEL=%1$s | LASER=%2$s</string>
     <string name="device_profile_runtime_truth">运行时健康真值：laser_available=%1$s | protection_degraded=%2$s</string>
     <string name="device_profile_select_model">选择 platform_model</string>
@@ -64,27 +64,30 @@
     <string name="device_config_status_send_failed">发送后未完成写入：%1$s</string>
     <string name="device_config_status_ack_fallback">设备返回了通用 ACK：%1$s</string>
     <string name="device_config_status_timeout">等待设备画像确认超时，请重试。</string>
-    <string name="device_config_status_conflict">当前型号与 laser_installed 选择冲突。</string>
+    <string name="device_config_status_conflict">当前型号与 laser_installed 组合不受支持。BASE 不能带激光，PLUS/PRO/ULTRA 需要 laser_installed=1。</string>
     <string name="device_config_status_requires_primary">设备画像写入需要 primary 协议连接。</string>
     <string name="degraded_start_dialog_title">激光链路需要维修</string>
-    <string name="degraded_start_dialog_message">当前 PLUS 机型的激光或 MAX485 链路不可用，建议维修。确认后可按无激光模式继续启动，但不会提供激光测量。</string>
+    <string name="degraded_start_dialog_message">当前 PLUS 机型的激光或 MAX485 链路不可用，建议维修。确认后可按降级启动路径继续运行，但测量仍不可用。</string>
     <string name="degraded_start_confirm_action">确认继续</string>
     <string name="degraded_start_cancel_action">稍后</string>
     <string name="degraded_start_pending_action">确认中…</string>
     <string name="degraded_start_requires_primary">降级启动确认需要 primary 协议连接。</string>
     <string name="degraded_start_unavailable">当前不可进入降级启动。</string>
     <string name="degraded_start_pending">正在发送降级启动确认…</string>
-    <string name="degraded_start_enabled_status">已确认降级启动，可在无激光测量的情况下开始。</string>
+    <string name="degraded_start_enabled_status">已确认降级启动，可在测量不可用时继续开始。</string>
     <string name="degraded_start_send_failed">降级启动确认失败：%1$s</string>
-    <string name="plus_without_laser_dialog_title">PLUS 当前未安装激光</string>
-    <string name="plus_without_laser_dialog_message">当前 PLUS 机型按无激光模式运行，可以直接开始，但不会提供激光测量。</string>
-    <string name="plus_without_laser_start_enabled_status">已确认 PLUS 无激光模式，可在无激光测量的情况下开始。</string>
     <string name="device_truth_refresh_failed">设备真值刷新失败：%1$s</string>
     <string name="notify_status_enabled">已开启</string>
     <string name="notify_status_disabled">未开启</string>
 
     <string name="permission_required_hint">需要蓝牙权限以扫描和连接设备。</string>
     <string name="permission_missing">缺少权限：%1$s</string>
+
+    <string name="section_delivery_boundary">当前交付边界</string>
+    <string name="delivery_boundary_profile_base">当前档位：BASE</string>
+    <string name="delivery_boundary_profile_plus_degraded">当前档位：PLUS 降级启动</string>
+    <string name="delivery_boundary_profile_other">当前档位：测量版路径</string>
+    <string name="delivery_boundary_measurement_hidden">本阶段只交付 BASE 与当前 PLUS 降级启动路径的 BLE 连接、档位刷新和启动/停止。测量曲线与校准工具在这里被隐藏，因为 MAX485、激光测距和 PCM5102A 仍然不在当前验证边界内。</string>
 
     <string name="section_system_status">系统状态</string>
     <string name="section_fall_stop_protection">摔倒停波保护</string>
