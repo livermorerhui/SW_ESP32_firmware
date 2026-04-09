@@ -5,6 +5,8 @@
 #include "modules/wave/WaveModule.h"
 
 namespace {
+constexpr uint32_t kLaserLoopIntervalNoLaserMs = 200UL;
+constexpr uint32_t kLaserUnavailableIdleReadBackoffMs = 3000UL;
 constexpr uint32_t kModbusReadFailureSummaryIntervalMs = 10000UL;
 
 struct WindowStats {
@@ -2021,12 +2023,15 @@ void LaserModule::handleFallStopCandidate(const RhythmStateUpdateResult& rhythmR
 void LaserModule::taskLoop() {
   uint32_t lastRead = 0;
   uint32_t lastStateEval = 0;
+  uint32_t nextReadEligibleAtMs = 0;
 #if DIAG_DISABLE_LASER_SAFETY
   bool diagBannerPrinted = false;
 #endif
 
   while (true) {
-    vTaskDelay(pdMS_TO_TICKS(20));
+    const uint32_t loopDelayMs =
+        deviceConfig.laserInstalled ? 20UL : kLaserLoopIntervalNoLaserMs;
+    vTaskDelay(pdMS_TO_TICKS(loopDelayMs));
 
 #if DIAG_DISABLE_LASER_SAFETY
     if (!diagBannerPrinted) {
@@ -2046,10 +2051,12 @@ void LaserModule::taskLoop() {
     uint32_t now = millis();
     const uint32_t readIntervalMs = LASER_MEASUREMENT_READ_INTERVAL_MS;
     if (now - lastRead < readIntervalMs) continue;
+    if (nextReadEligibleAtMs != 0 && now < nextReadEligibleAtMs) continue;
     lastRead = now;
 
     if (!deviceConfig.laserInstalled) {
       clearModbusReadFailureBurst(now, true);
+      nextReadEligibleAtMs = 0;
       lastMeasurementValid = false;
       lastInvalidReason = "LASER_NOT_INSTALLED";
       resetMeasurementPlane("no_laser_config", false);
@@ -2063,11 +2070,14 @@ void LaserModule::taskLoop() {
       logConfigTruth("measurement_bypass_changed");
     }
 
+    const TopState readAttemptTopState = sm ? sm->state() : TopState::IDLE;
     uint8_t result = node.readInputRegisters(REG_DISTANCE, 1);
     if (result != node.ku8MBSuccess) {
       noteModbusReadFailure(result, now);
       noteDistanceValidity(false, 0, 0, NAN, false, "READ_FAIL", now);
       if (sm) sm->setSensorHealthy(false);
+      nextReadEligibleAtMs =
+          readAttemptTopState == TopState::RUNNING ? 0 : (now + kLaserUnavailableIdleReadBackoffMs);
       resetMeasurementPlane("modbus_read_fail", false);
       handleInvalidMeasurement("modbus_read_fail");
       publishMeasurementSample(now, false, 0.0f, 0.0f, "READ_FAIL");
@@ -2075,6 +2085,7 @@ void LaserModule::taskLoop() {
     }
 
     clearModbusReadFailureBurst(now, true);
+    nextReadEligibleAtMs = 0;
     if (sm) sm->setSensorHealthy(true);
 
     const uint16_t rawRegister = node.getResponseBuffer(0);

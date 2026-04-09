@@ -80,6 +80,11 @@ private:
     RECOVERY_FORCE_DISCONNECT
   };
 
+  enum class AdvertisingProfile : uint8_t {
+    FAST_DISCOVERY = 0,
+    IDLE_LOW_POWER
+  };
+
   static void controlTaskThunk(void* arg);
   static void txTaskThunk(void* arg);
   static const char* disconnectReasonCodeName(DisconnectReasonCode code);
@@ -148,6 +153,8 @@ private:
   bool enqueueStreamTxLine(const String& s);
   bool enqueueStreamTxLineRaw(const char* s);
   bool tryHandleDirectQuery(const String& s);
+  void setAdvertisingProfile(AdvertisingProfile profile, bool restartIfNeeded);
+  void maybeRelaxAdvertisingProfile(uint32_t nowMs);
   void noteQueueWatermark(const char* queueName, UBaseType_t depth, UBaseType_t& highWatermark);
   void noteStreamSuppressedForControl(UBaseType_t controlDepth, uint32_t nowMs);
   void flushStreamSuppressionSummaryIfNeeded(uint32_t nowMs);
@@ -206,6 +213,8 @@ private:
   UBaseType_t txStreamSuppressionBurstMaxControlDepth = 0;
   uint32_t lastControlTxAtMs = 0;
   uint32_t lastRecoveryDisconnectMs = 0;
+  AdvertisingProfile advertisingProfile = AdvertisingProfile::FAST_DISCOVERY;
+  uint32_t advertisingProfileStartedAtMs = 0;
   std::string advertisedDeviceName;
   std::string advertisedModelName;
 };

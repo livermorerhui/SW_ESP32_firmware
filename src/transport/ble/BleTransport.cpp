@@ -19,6 +19,12 @@ static constexpr uint16_t kConnParamMaxInterval = 24;
 static constexpr uint16_t kConnParamLatency = 0;
 static constexpr uint16_t kConnParamTimeout = 400;
 static constexpr uint32_t kStreamControlHoldoffMs = 35;
+static constexpr esp_power_level_t kBleTxPowerLevel = ESP_PWR_LVL_P3;
+static constexpr uint16_t kAdvFastIntervalMinUnits = 0x0100;  // 160 ms
+static constexpr uint16_t kAdvFastIntervalMaxUnits = 0x0180;  // 240 ms
+static constexpr uint16_t kAdvIdleIntervalMinUnits = 0x0280;  // 400 ms
+static constexpr uint16_t kAdvIdleIntervalMaxUnits = 0x0400;  // 640 ms
+static constexpr uint32_t kAdvFastDiscoveryWindowMs = 15000UL;
 
 const char* BleTransport::disconnectReasonCodeName(DisconnectReasonCode code) {
   switch (code) {
@@ -163,6 +169,8 @@ void BleTransport::begin(CommandBus* cb, const char* deviceName, const char* adv
   lastDisconnectReasonCode = DisconnectReasonCode::UNKNOWN;
   lastRecoveryReasonCode = RecoveryAnomalyCode::NONE;
   remoteBdaValid = false;
+  advertisingProfile = AdvertisingProfile::FAST_DISCOVERY;
+  advertisingProfileStartedAtMs = millis();
   memset(remoteBda, 0, sizeof(remoteBda));
   lastDisconnectRawReason = 0;
 
@@ -184,7 +192,7 @@ void BleTransport::begin(CommandBus* cb, const char* deviceName, const char* adv
   advertisedDeviceName = resolvedDeviceName;
   advertisedModelName = resolvedAdvertisedModel ? resolvedAdvertisedModel : "";
   BLEDevice::init(resolvedDeviceName);
-  BLEDevice::setPower(ESP_PWR_LVL_P9);
+  BLEDevice::setPower(kBleTxPowerLevel);
   const esp_err_t mtuErr = BLEDevice::setMTU(kPreferredMtu);
   if (mtuErr == ESP_OK) {
     negotiatedMtu = BLEDevice::getMTU();
@@ -619,8 +627,51 @@ void BleTransport::configureAdvertising(const char* deviceName, const char* adve
   adv->setScanResponseData(scanRespData);
   adv->addServiceUUID(SERVICE_UUID);
   adv->setScanResponse(true);
+  if (advertisingProfile == AdvertisingProfile::IDLE_LOW_POWER) {
+    adv->setMinInterval(kAdvIdleIntervalMinUnits);
+    adv->setMaxInterval(kAdvIdleIntervalMaxUnits);
+  } else {
+    adv->setMinInterval(kAdvFastIntervalMinUnits);
+    adv->setMaxInterval(kAdvFastIntervalMaxUnits);
+  }
   adv->setMinPreferred(0x06);
   adv->setMaxPreferred(0x12);
+}
+
+void BleTransport::setAdvertisingProfile(AdvertisingProfile profile, bool restartIfNeeded) {
+  if (advertisingProfile == profile) {
+    return;
+  }
+  advertisingProfile = profile;
+  advertisingProfileStartedAtMs = millis();
+  Serial.printf(
+      "[BLE ADV] profile=%s restart=%d\n",
+      profile == AdvertisingProfile::IDLE_LOW_POWER ? "IDLE_LOW_POWER" : "FAST_DISCOVERY",
+      restartIfNeeded ? 1 : 0);
+  configureAdvertising(
+      advertisedDeviceName.c_str(),
+      advertisedModelName.empty() ? nullptr : advertisedModelName.c_str());
+  if (!deviceConnected && restartIfNeeded && pServer) {
+    BLEAdvertising* adv = pServer->getAdvertising();
+    if (adv) {
+      adv->stop();
+    }
+    startAdvertisingSafe();
+  }
+}
+
+void BleTransport::maybeRelaxAdvertisingProfile(uint32_t nowMs) {
+  if (deviceConnected || advertisingProfile != AdvertisingProfile::FAST_DISCOVERY) {
+    return;
+  }
+  if (advertisingProfileStartedAtMs == 0) {
+    advertisingProfileStartedAtMs = nowMs;
+    return;
+  }
+  if (nowMs - advertisingProfileStartedAtMs < kAdvFastDiscoveryWindowMs) {
+    return;
+  }
+  setAdvertisingProfile(AdvertisingProfile::IDLE_LOW_POWER, true);
 }
 
 void BleTransport::startAdvertisingSafe() {
@@ -868,6 +919,7 @@ void BleTransport::controlTaskLoop() {
     if (xQueueReceive(controlQueue, &msg, pdMS_TO_TICKS(kAdvRecoveryCheckIntervalMs)) != pdTRUE) {
       const uint32_t nowMs = millis();
       if (!deviceConnected) {
+        maybeRelaxAdvertisingProfile(nowMs);
         startAdvertisingSafe();
       } else {
         recoverStalledConnection(nowMs);
@@ -885,6 +937,7 @@ void BleTransport::controlTaskLoop() {
     }
 
     if (msg.type == ControlMsg::Type::BLE_DISCONNECTED) {
+      setAdvertisingProfile(AdvertisingProfile::FAST_DISCOVERY, false);
       startAdvertisingSafe();
       if (disconnectSink) {
         disconnectSink->onBleDisconnect();

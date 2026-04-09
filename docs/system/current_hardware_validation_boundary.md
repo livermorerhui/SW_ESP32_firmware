@@ -66,6 +66,11 @@ The following items are considered validated with the current hardware:
   - control-priority stream suppression now reports burst summaries
   - current delivery-subset APP flow no longer treats hidden test-session
     automation as an always-hot background path
+- The current low-risk power pass is partially validated on the bench:
+  - BLE transmit power reduction did not break discovery or reconnect
+  - staged advertising profile transitions were observed in runtime logs
+  - reconnect remained possible after idle low-power advertising became active
+  - unavailable-sensor idle polling is less aggressive in non-running states
 
 ## Not Yet Validated In Current Setup
 
@@ -123,12 +128,15 @@ With the current hardware, it is reasonable to state:
   truth, and control commands.
 - one bounded low-risk runtime-efficiency pass is validated for the current
   delivery subset.
+- one partial low-risk power pass is validated for the current delivery
+  subset.
 
 It is not yet reasonable to state:
 
 - the full measurement plane is validated
 - control-vs-stream contention is fully validated
 - real telemetry throughput behavior is validated
+- full-device power optimization is closed
 
 ## Next Validation Priority When Hardware Is Available
 

@@ -1,5 +1,64 @@
 # Project Status
 
+## 2026-04-09 Phase 4 Current Progress: Low-Risk Power Pass Partially Completed
+
+The current Phase 4 pass has moved beyond planning and already completed a
+validated first batch of low-risk power-oriented changes on the current
+ESP32-S3-only bench.
+
+What is now considered completed in the current Phase 4 pass:
+
+- BLE transmit power was reduced from the previous maximum setting to a
+  moderate level.
+- BLE advertising now uses a staged profile:
+  - fast discovery immediately after boot/disconnect
+  - lower-power idle advertising after the fast-discovery window expires
+- idle polling was reduced for `BASE` / no-laser delivery paths.
+- idle repeated Modbus read attempts now use backoff when the sensor path is
+  unavailable and the device is not running.
+
+What was observed on bench after these changes:
+
+- BLE discovery still works.
+- reconnect still works.
+- `PLUS` degraded-start still works.
+- `WAVE:SET / WAVE:START / WAVE:STOP` did not regress.
+- repeated unavailable-sensor logging became materially less frequent in idle
+  scenarios.
+- advertising profile transitions were observed and reconnect remained
+  possible after the low-power advertising profile became active.
+
+What this means:
+
+- Phase 4 has started for real, not just on paper.
+- the current pass already achieved practical low-risk power reductions without
+  reopening protocol or transport risk.
+
+What it does **not** mean:
+
+- Phase 4 is fully complete
+- deep/light sleep strategy is validated
+- full-device current draw characterization is complete
+- measurement-capable hardware power behavior is validated
+
+## 2026-04-09 Phase 4 Low-Risk Power Pass Started
+
+Phase 4 has now started as a low-risk power pass on top of the completed
+Phase 3 efficiency baseline.
+
+Current Phase 4 scope is intentionally narrow:
+
+- reduce BLE transmit power to a moderate validated level
+- relax advertising intervals without changing the BLE protocol contract
+- reduce avoidable idle polling in delivery-subset firmware paths
+
+Current Phase 4 scope does **not** include:
+
+- aggressive sleep-state entry
+- deep/light sleep policy changes that may perturb BLE stability
+- large scheduling refactors
+- full-system power characterization under unavailable hardware
+
 ## 2026-04-09 Phase 3 Low-Risk Efficiency Pass Completed
 
 The current low-risk Phase 3 efficiency pass is now considered complete for the

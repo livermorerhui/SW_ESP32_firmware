@@ -192,3 +192,23 @@ That completion specifically covers:
 
 It does not reopen the full-measurement product track and does not replace the
 need for later Phase 4 power work.
+
+## Phase 4 Current Progress Note
+
+For the current delivery subset, Phase 4 has now completed an initial low-risk
+power pass.
+
+That current Phase 4 progress specifically covers:
+
+- moderate BLE transmit-power reduction
+- staged advertising behavior:
+  - fast discovery after boot/disconnect
+  - lower-power idle advertising after the discovery window
+- reduced idle polling for no-laser / unavailable-measurement paths
+
+Current interpretation:
+
+- these changes are acceptable because they did not regress `BASE` or `PLUS`
+  degraded-start delivery behavior on the current bench
+- these changes are still only a partial Phase 4 result
+- deep/light sleep policy remains outside the current delivery closure
