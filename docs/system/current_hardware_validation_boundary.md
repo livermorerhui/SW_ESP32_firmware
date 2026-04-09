@@ -69,8 +69,12 @@ The following items are considered validated with the current hardware:
 - The current low-risk power pass is partially validated on the bench:
   - BLE transmit power reduction did not break discovery or reconnect
   - staged advertising profile transitions were observed in runtime logs
+  - idle low-power advertising remained reconnect-capable after advertising TX
+    power was lowered further
   - reconnect remained possible after idle low-power advertising became active
   - unavailable-sensor idle polling is less aggressive in non-running states
+  - idle backoff windows now wake firmware tasks less aggressively than the
+    earlier fixed short-period loops
 
 ## Not Yet Validated In Current Setup
 

@@ -153,6 +153,7 @@ private:
   bool enqueueStreamTxLine(const String& s);
   bool enqueueStreamTxLineRaw(const char* s);
   bool tryHandleDirectQuery(const String& s);
+  void applyAdvertisingPowerProfile() const;
   void setAdvertisingProfile(AdvertisingProfile profile, bool restartIfNeeded);
   void maybeRelaxAdvertisingProfile(uint32_t nowMs);
   TickType_t controlTaskIdleWaitTicks() const;

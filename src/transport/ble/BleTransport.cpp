@@ -20,7 +20,9 @@ static constexpr uint16_t kConnParamMaxInterval = 24;
 static constexpr uint16_t kConnParamLatency = 0;
 static constexpr uint16_t kConnParamTimeout = 400;
 static constexpr uint32_t kStreamControlHoldoffMs = 35;
-static constexpr esp_power_level_t kBleTxPowerLevel = ESP_PWR_LVL_P3;
+static constexpr esp_power_level_t kBleDefaultTxPowerLevel = ESP_PWR_LVL_P3;
+static constexpr esp_power_level_t kBleAdvertisingFastPowerLevel = ESP_PWR_LVL_P3;
+static constexpr esp_power_level_t kBleAdvertisingIdlePowerLevel = ESP_PWR_LVL_N0;
 static constexpr uint16_t kAdvFastIntervalMinUnits = 0x0100;  // 160 ms
 static constexpr uint16_t kAdvFastIntervalMaxUnits = 0x0180;  // 240 ms
 static constexpr uint16_t kAdvIdleIntervalMinUnits = 0x0280;  // 400 ms
@@ -193,7 +195,8 @@ void BleTransport::begin(CommandBus* cb, const char* deviceName, const char* adv
   advertisedDeviceName = resolvedDeviceName;
   advertisedModelName = resolvedAdvertisedModel ? resolvedAdvertisedModel : "";
   BLEDevice::init(resolvedDeviceName);
-  BLEDevice::setPower(kBleTxPowerLevel);
+  BLEDevice::setPower(kBleDefaultTxPowerLevel);
+  applyAdvertisingPowerProfile();
   const esp_err_t mtuErr = BLEDevice::setMTU(kPreferredMtu);
   if (mtuErr == ESP_OK) {
     negotiatedMtu = BLEDevice::getMTU();
@@ -639,16 +642,26 @@ void BleTransport::configureAdvertising(const char* deviceName, const char* adve
   adv->setMaxPreferred(0x12);
 }
 
+void BleTransport::applyAdvertisingPowerProfile() const {
+  const esp_power_level_t advPowerLevel =
+      advertisingProfile == AdvertisingProfile::IDLE_LOW_POWER
+          ? kBleAdvertisingIdlePowerLevel
+          : kBleAdvertisingFastPowerLevel;
+  BLEDevice::setPower(advPowerLevel, ESP_BLE_PWR_TYPE_ADV);
+}
+
 void BleTransport::setAdvertisingProfile(AdvertisingProfile profile, bool restartIfNeeded) {
   if (advertisingProfile == profile) {
     return;
   }
   advertisingProfile = profile;
   advertisingProfileStartedAtMs = millis();
+  applyAdvertisingPowerProfile();
   Serial.printf(
-      "[BLE ADV] profile=%s restart=%d\n",
+      "[BLE ADV] profile=%s restart=%d tx_power=%s\n",
       profile == AdvertisingProfile::IDLE_LOW_POWER ? "IDLE_LOW_POWER" : "FAST_DISCOVERY",
-      restartIfNeeded ? 1 : 0);
+      restartIfNeeded ? 1 : 0,
+      profile == AdvertisingProfile::IDLE_LOW_POWER ? "N0" : "P3");
   configureAdvertising(
       advertisedDeviceName.c_str(),
       advertisedModelName.empty() ? nullptr : advertisedModelName.c_str());

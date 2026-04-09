@@ -1,6 +1,6 @@
 # Project Status
 
-## 2026-04-09 Phase 4 Current Progress: Low-Risk Power Pass Partially Completed
+## 2026-04-09 Phase 4 Current Progress: Low-Risk Power Pass Advanced
 
 The current Phase 4 pass has moved beyond planning and already completed a
 validated first batch of low-risk power-oriented changes on the current
@@ -13,9 +13,14 @@ What is now considered completed in the current Phase 4 pass:
 - BLE advertising now uses a staged profile:
   - fast discovery immediately after boot/disconnect
   - lower-power idle advertising after the fast-discovery window expires
+- idle low-power advertising also uses a lower advertising-only TX power tier
+  than the fast-discovery window
 - idle polling was reduced for `BASE` / no-laser delivery paths.
 - idle repeated Modbus read attempts now use backoff when the sensor path is
   unavailable and the device is not running.
+- idle backoff windows now avoid unnecessary short-period task wakeups.
+- BLE control-task idle checks now relax further while disconnected and already
+  in the idle low-power advertising profile.
 
 What was observed on bench after these changes:
 
@@ -27,12 +32,16 @@ What was observed on bench after these changes:
   scenarios.
 - advertising profile transitions were observed and reconnect remained
   possible after the low-power advertising profile became active.
+- reconnect remained possible after idle advertising TX power was lowered to
+  the current `N0` tier on the bench.
 
 What this means:
 
 - Phase 4 has started for real, not just on paper.
 - the current pass already achieved practical low-risk power reductions without
   reopening protocol or transport risk.
+- within the current bench boundary, additional low-risk Phase 4 gains are now
+  entering diminishing-return territory.
 
 What it does **not** mean:
 

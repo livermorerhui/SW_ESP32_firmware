@@ -195,8 +195,8 @@ need for later Phase 4 power work.
 
 ## Phase 4 Current Progress Note
 
-For the current delivery subset, Phase 4 has now completed an initial low-risk
-power pass.
+For the current delivery subset, Phase 4 has now completed a substantial
+low-risk power pass.
 
 That current Phase 4 progress specifically covers:
 
@@ -204,7 +204,9 @@ That current Phase 4 progress specifically covers:
 - staged advertising behavior:
   - fast discovery after boot/disconnect
   - lower-power idle advertising after the discovery window
+- lower advertising-only TX power in the idle advertising profile
 - reduced idle polling for no-laser / unavailable-measurement paths
+- reduced idle wake frequency during unavailable-measurement backoff windows
 
 Current interpretation:
 
