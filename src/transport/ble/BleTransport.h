@@ -92,9 +92,12 @@ private:
   static const char* recoveryAnomalyCodeName(RecoveryAnomalyCode code);
   static const char* recoverySkipReasonCodeName(RecoverySkipReasonCode code);
   static bool recoveryAnomalyAllowedInPhase1(RecoveryAnomalyCode code);
+  static void gapEventThunk(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* param);
 
   void controlTaskLoop();
   void txTaskLoop();
+  void logAdvertisingAction(const char* action, const char* reason) const;
+  void handleGapEvent(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* param);
   void logSessionEvent(const char* eventName,
                        uint32_t sessionIdValue,
                        uint16_t connIdValue,
@@ -143,7 +146,8 @@ private:
                                     uint32_t expectedSessionId,
                                     uint32_t nowMs);
   void sendLineNow(const char* s);
-  void startAdvertisingSafe();
+  void startAdvertisingSafe(const char* reason = "unspecified");
+  void stopAdvertisingSafe(const char* reason = "unspecified");
   void configureAdvertising(const char* deviceName, const char* advertisedModel);
   bool enqueueCommand(const std::string& raw);
   bool enqueueConnectEvent();
@@ -219,4 +223,7 @@ private:
   uint32_t advertisingProfileStartedAtMs = 0;
   std::string advertisedDeviceName;
   std::string advertisedModelName;
+  bool advertisingActive = false;
+  uint32_t advertisingStartRequests = 0;
+  uint32_t advertisingStopRequests = 0;
 };

@@ -196,19 +196,33 @@
 
 ## 5. formal SW APP 当前正式依赖哪些语义
 
-正式 SW APP 当前实际消费的是：
+正式 SW APP 当前实际消费分成四层：
 
-- `STATE`
-- `FAULT`
-- `STABLE`
-- `PARAM`
-- `STREAM`
+1. bootstrap / connect-time truth
 
-而不是：
+- `CAP? -> ACK:CAP`
+- `fw`
+- `proto`
+- `platform_model`
+- `laser_installed`
 
-- `SAFETY`
-- `STOP`
-- `BASELINE`
+2. runtime readiness truth
+
+- `SNAPSHOT.start_ready`
+- `SNAPSHOT.baseline_ready`
+- `SNAPSHOT.degraded_start_available`
+- `SNAPSHOT.degraded_start_enabled`
+- reconnect 后重新拉取 `SNAPSHOT`
+
+3. control confirmation truth
+
+- `EVT:WAVE_OUTPUT`
+- authoritative `SNAPSHOT.wave_output_active`
+
+4. stop / safety / compatibility truth
+
+- 已正式接入：`SAFETY`、`STOP`、`BASELINE`
+- 仍保留兼容链：`STATE`、`FAULT`、`STABLE`、`PARAM`、`STREAM`
 
 相关代码：
 
@@ -217,57 +231,63 @@
 
 ### pause recoverable 当前真正依赖
 
-formal SW APP 当前不是直接依赖 firmware `SAFETY.effect=RECOVERABLE_PAUSE`。
+formal SW APP 当前不再是“完全不看 `SAFETY/STOP/BASELINE`”。
 
-它实际依赖的是：
+当前 pause / stop 语义由以下链路共同承担：
 
-- `Event.Fault.reason` 能否被映射成 `USER_LEFT_PLATFORM`
-
-之后才会通过：
-
-- `Repository`
+- `SAFETY`
+- `STOP`
+- `BASELINE`
 - `ProductController`
 - `SessionSafetyInterventionBridge`
 - `SessionCoordinator`
 
-落到 `PAUSED_RECOVERABLE`。
+同时为了兼容旧链，以下语义仍然保留：
+
+- `FAULT.reason`
+- `STATE`
+
+因此当前真实状态不是“formal 仍只靠 `FAULT.reason`”，而是：
+
+- 新 owner 已接入
+- 旧兼容桥仍未完全删除
 
 ### danger stop 当前真正依赖
 
-formal SW APP 当前不是直接依赖 firmware `STOP_SOURCE` 或 `STATE=FAULT_STOP`。
+formal SW APP 当前 danger stop 也不是单独依赖 `FAULT`。
 
-它实际依赖的是：
+它当前会同时消费：
 
-- `Event.Fault.reason` 能否被映射成 `FALL_SUSPECTED`
+- `STOP`
+- `SAFETY`
+- `FAULT` 兼容 reason
 
-之后才会落到 `STOPPED_BY_DANGER`。
+再由产品层汇总成 `STOPPED_BY_DANGER` 等会话语义。
 
 ### readiness / continue 当前真正依赖
 
-- `STATE` 的 `ARMED/RUNNING`
-- `STABLE`
-- `PARAM` extras
-- connection state
+- `BASE`：连接即允许 start
+- laser-equipped non-BASE：信 firmware `start_ready`
+- measurement unavailable：信 `degraded_start_available / degraded_start_enabled`
+- continue / resume：仍要求 device connected + `start_ready`
 
-`continue` 还必须满足：
-
-- `PAUSED_RECOVERABLE`
-- device connected
-- `baseline_ready=true`
+`baseline_ready` 不再是 ESP32 start / continue 的正式 owner。
 
 ## 6. 当前契约缺口
 
-当前最大契约缺口不是 firmware 没导出语义，而是：
+当前最大契约缺口已经不是“formal SW APP 尚未接入 `STOP/SAFETY/BASELINE`”。
 
-- firmware 把正式 stop/safety 语义放在 `SAFETY` / `STOP`
-- formal SW APP 仍把 `FAULT` 当 stop meaning 主入口
-- 因而在 formal 正式迁移完成前，需要为关键 reason 保留 `FAULT` 桥接文本
+当前更真实的缺口是：
 
-因此：
+- 旧兼容链仍未完全退休
+- 仍需要避免误删 `STATE/FAULT/STABLE/PARAM/STREAM`
+- 文档与测试如果继续描述成“formal 只消费旧链”，会反向诱导错误实现
 
-- 设备可以已经停波
-- `USER_LEFT_PLATFORM` 可以已经对外导出
-- 若缺少 `FAULT` 桥接文本，formal SW APP 仍可能看不见 `PAUSED_RECOVERABLE` / `STOPPED_BY_DANGER` 所需的命名 reason
+因此当前建议是：
+
+- 承认 formal 已接入新的 owner 语义
+- 同时明确旧链还在兼容期
+- 在兼容期结束前，不要依据旧文档删除旧输出
 
 ## 7. 后续开发者建议阅读顺序
 

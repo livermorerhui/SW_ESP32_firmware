@@ -323,8 +323,13 @@ bool LaserModule::setDeviceConfig(
     return false;
   }
 
-  if (nextLaserInstalled != platformModelImpliesLaserInstalled(nextPlatformModel)) {
-    reason = "CONFIG_CONFLICT";
+  if (!isLaserInstallAllowedForPlatformModel(nextPlatformModel, nextLaserInstalled)) {
+    reason = "LASER_INSTALL_CONSTRAINT_VIOLATION";
+    Serial.printf(
+        "[DEVICE] CONFIG REJECT source=device_set_config platform_model=%s laser_installed=%d constraint=%s\n",
+        platformModelName(nextPlatformModel),
+        nextLaserInstalled ? 1 : 0,
+        laserInstallConstraintName(platformModelLaserInstallConstraint(nextPlatformModel)));
     return false;
   }
 
@@ -610,12 +615,18 @@ void LaserModule::loadDeviceConfig() {
   }
 
   const uint8_t storedLaserInstalled = preferences.getUChar("cfg_laser", 1);
-  const bool normalizedLaserInstalled = platformModelImpliesLaserInstalled(parsedModel);
+  const bool normalizedLaserInstalled = normalizedLaserInstalledForPlatformModel(parsedModel);
 
   deviceConfig.platformModel = parsedModel;
   deviceConfig.laserInstalled = normalizedLaserInstalled;
 
   if (storedLaserInstalled != static_cast<uint8_t>(normalizedLaserInstalled)) {
+    Serial.printf(
+        "[DEVICE] CONFIG NORMALIZE source=boot platform_model=%s stored_laser_installed=%d normalized_laser_installed=%d constraint=%s\n",
+        platformModelName(parsedModel),
+        storedLaserInstalled ? 1 : 0,
+        normalizedLaserInstalled ? 1 : 0,
+        laserInstallConstraintName(platformModelLaserInstallConstraint(parsedModel)));
     saveDeviceConfig();
   }
 }

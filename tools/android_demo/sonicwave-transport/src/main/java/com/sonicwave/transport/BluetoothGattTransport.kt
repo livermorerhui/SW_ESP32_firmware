@@ -216,14 +216,23 @@ class BluetoothGattTransport(
             @SuppressLint("MissingPermission")
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 val device = result.device ?: return
+                val name = result.device.name ?: result.scanRecord?.deviceName
+                val advertisesUart = result.scanRecord?.serviceUuids
+                    ?.any { it.uuid == UART_SERVICE_UUID }
+                    ?: false
+                val matchesName = name?.startsWith("SonicWave", ignoreCase = true) == true
+                val scanAddr = device.address
+                val scanLabel = listOfNotNull(name, scanAddr).joinToString("/")
+                val scanFlags = "uart=${if (advertisesUart) 1 else 0} name_match=${if (matchesName) 1 else 0}"
+                emitSystemLog("SCAN_RESULT $scanLabel $scanFlags rssi=${result.rssi}")
+                // Require SonicWave name prefix to avoid listing unrelated UART devices.
+                if (!matchesName) return
                 val item = BleScanResult(
                     id = device.address,
                     address = device.address,
-                    name = result.device.name ?: result.scanRecord?.deviceName,
+                    name = name,
                     rssi = result.rssi,
-                    advertisesUartService = result.scanRecord?.serviceUuids
-                        ?.any { it.uuid == UART_SERVICE_UUID }
-                        ?: false,
+                    advertisesUartService = advertisesUart,
                 )
                 scanCache[item.address] = item
                 _scanResults.value = sortScanResults(scanCache.values.toList(), preferredNamePrefixes)

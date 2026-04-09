@@ -4,7 +4,25 @@
 
 ### formal SW APP 当前正式依赖
 
-formal 当前分支真正消费的是：
+formal 当前分支已经正式消费：
+
+- BLE 初始化链路 `connect -> notify -> CAP? -> ACK:CAP -> SNAPSHOT? -> SNAPSHOT`
+- `ACK:CAP` 的 bootstrap truth：
+  - `fw`
+  - `proto`
+  - `platform_model`
+  - `laser_installed`
+- `SNAPSHOT` / `EVT:WAVE_OUTPUT` 的 runtime truth：
+  - `start_ready`
+  - `baseline_ready`
+  - `degraded_start_available`
+  - `degraded_start_enabled`
+  - `wave_output_active`
+- `STOP`
+- `SAFETY`
+- `BASELINE`
+
+同时它仍保留兼容链：
 
 - `STATE`
 - `FAULT`
@@ -12,13 +30,11 @@ formal 当前分支真正消费的是：
 - `PARAM`
 - `STREAM`
 
-它当前还没有把 `STOP/SAFETY/BASELINE` 接成正式产品 owner。`PAUSED_RECOVERABLE` / `STOPPED_BY_DANGER` 目前仍是：
+当前结论不是“formal 还没接 `STOP/SAFETY/BASELINE`”，而是：
 
-- `FAULT.reason`
-- `ProductController`
-- `SessionCoordinator`
-
-这条链落出来的。
+- `STOP/SAFETY/BASELINE` 已接入正式产品路径
+- 旧 `STATE/FAULT/STABLE/PARAM/STREAM` 兼容链尚未删除
+- 因此在迁移完全结束前，不能误删旧输出
 
 ### Demo APP 当前正式依赖
 
@@ -33,6 +49,11 @@ Demo 当前同时依赖两层：
 
 这轮绝对不要删：
 
+- `ACK:CAP` bootstrap 字段：
+  - `fw`
+  - `proto`
+  - `platform_model`
+  - `laser_installed`
 - `EVT:STATE`
 - `EVT:FAULT`
 - `EVT:STABLE`
@@ -47,34 +68,39 @@ Demo 当前同时依赖两层：
 
 - `baseline_ready`
 - `stable_weight`
-- `main_state`
 - `stop_reason`
 - `stop_source`
+- `start_ready`
+- `degraded_start_available`
+- `degraded_start_enabled`
+- `wave_output_active`
 
 ## 当前最推荐的最小兼容策略
 
-如果当前目标只是先跑通 formal SW APP 的“律动离开”交互，最推荐的策略是：
+如果当前目标是保持当前 formal SW APP 与 current delivery boundary 对齐，最推荐的策略是：
 
-- 保持 Demo 旧依赖不变
-- 保持 current stop / state owner 不变
-- 保持 user-left 当前落 `STATE IDLE` 的行为不变
-- 仅让 `FAULT` 对 formal current branch 变得可读懂
+- 保持 `ACK:CAP` 只承载 bootstrap truth
+- 保持 runtime truth 落在 `SNAPSHOT`
+- 保持 control confirmation 落在 `EVT:WAVE_OUTPUT` / authoritative `SNAPSHOT`
+- 保留旧 `STATE/FAULT/STABLE/PARAM/STREAM` 兼容链，直到 formal 产品 owner 明确下线它们
 
 换句话说，本阶段更像：
 
-- 保留旧输出
-- 增加兼容语义
+- 冻结新旧 owner 分工
+- 避免把 bootstrap/runtime/control plane 再次混写
 
 而不是：
 
-- 调整某条现有 owner 输出去替代其它旧链路
+- 回退到 `ACK:CAP` feature dump
+- 让 `STATE/STOP/SAFETY` supporting truth 再次充当 wave-output confirmation owner
+- 在未完成迁移前删除旧兼容输出
 
 ## 后续协议治理前，必须先完成什么
 
 在做语义清洁化之前，至少要先完成：
 
-1. formal SW APP 协议层接入 `STOP/SAFETY/BASELINE`
-2. formal 侧 stop/pause owner 从 `FAULT.reason` 迁移到更稳定的 `STOP/SAFETY`
+1. 明确 formal SW APP 何时下线 `STATE/FAULT/STABLE/PARAM/STREAM` 兼容链
+2. 明确 `STOP/SAFETY/BASELINE` 与 `SNAPSHOT/WAVE_OUTPUT` 的最终 owner 范围
 3. Demo / analyzer / export 的字段迁移方案明确下来
 
 在这之前，不建议：

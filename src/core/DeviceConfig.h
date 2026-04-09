@@ -9,6 +9,11 @@ enum class PlatformModel : uint8_t {
   ULTRA = 3
 };
 
+enum class LaserInstallConstraint : uint8_t {
+  FORBIDDEN = 0,
+  REQUIRED = 1,
+};
+
 inline const char* platformModelName(PlatformModel model) {
   switch (model) {
     case PlatformModel::BASE: return "BASE";
@@ -50,8 +55,50 @@ inline bool parsePlatformModel(const String& raw, PlatformModel& out) {
   return false;
 }
 
+inline LaserInstallConstraint platformModelLaserInstallConstraint(PlatformModel model) {
+  switch (model) {
+    case PlatformModel::BASE:
+      return LaserInstallConstraint::FORBIDDEN;
+    case PlatformModel::PLUS:
+    case PlatformModel::PRO:
+    case PlatformModel::ULTRA:
+      return LaserInstallConstraint::REQUIRED;
+  }
+  return LaserInstallConstraint::REQUIRED;
+}
+
+inline const char* laserInstallConstraintName(LaserInstallConstraint constraint) {
+  switch (constraint) {
+    case LaserInstallConstraint::FORBIDDEN:
+      return "FORBIDDEN";
+    case LaserInstallConstraint::REQUIRED:
+      return "REQUIRED";
+  }
+  return "UNKNOWN";
+}
+
+inline bool isLaserInstallAllowedForPlatformModel(PlatformModel model, bool laserInstalled) {
+  switch (platformModelLaserInstallConstraint(model)) {
+    case LaserInstallConstraint::FORBIDDEN:
+      return !laserInstalled;
+    case LaserInstallConstraint::REQUIRED:
+      return laserInstalled;
+  }
+  return false;
+}
+
+inline bool normalizedLaserInstalledForPlatformModel(PlatformModel model) {
+  switch (platformModelLaserInstallConstraint(model)) {
+    case LaserInstallConstraint::FORBIDDEN:
+      return false;
+    case LaserInstallConstraint::REQUIRED:
+      return true;
+  }
+  return true;
+}
+
 inline bool platformModelImpliesLaserInstalled(PlatformModel model) {
-  return model != PlatformModel::BASE;
+  return normalizedLaserInstalledForPlatformModel(model);
 }
 
 struct DeviceConfigSnapshot {

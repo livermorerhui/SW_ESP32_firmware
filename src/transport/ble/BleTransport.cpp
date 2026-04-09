@@ -1,6 +1,7 @@
 #include "BleTransport.h"
 #include "core/LogMarkers.h"
 #include "core/SystemStateMachine.h"
+#include <esp_gap_ble_api.h>
 #include <string.h>
 
 static BleTransport* g_self = nullptr;
@@ -28,6 +29,35 @@ static constexpr uint16_t kAdvFastIntervalMaxUnits = 0x0180;  // 240 ms
 static constexpr uint16_t kAdvIdleIntervalMinUnits = 0x0280;  // 400 ms
 static constexpr uint16_t kAdvIdleIntervalMaxUnits = 0x0400;  // 640 ms
 static constexpr uint32_t kAdvFastDiscoveryWindowMs = 15000UL;
+
+static const char* addrTypeName(uint8_t addrType) {
+  switch (addrType) {
+    case BLE_ADDR_TYPE_PUBLIC:
+      return "PUBLIC";
+    case BLE_ADDR_TYPE_RANDOM:
+      return "RANDOM";
+    case BLE_ADDR_TYPE_RPA_PUBLIC:
+      return "RPA_PUBLIC";
+    case BLE_ADDR_TYPE_RPA_RANDOM:
+      return "RPA_RANDOM";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+static bool readUsedBleAddress(char* out, size_t outLen, uint8_t& outAddrType) {
+  if (!out || outLen < 18) return false;
+  esp_bd_addr_t usedAddr{};
+  outAddrType = 0xFF;
+  const esp_err_t err = esp_ble_gap_get_local_used_addr(usedAddr, &outAddrType);
+  if (err != ESP_OK) {
+    snprintf(out, outLen, "ERR:%d", static_cast<int>(err));
+    return false;
+  }
+  snprintf(out, outLen, "%02x:%02x:%02x:%02x:%02x:%02x",
+           usedAddr[0], usedAddr[1], usedAddr[2], usedAddr[3], usedAddr[4], usedAddr[5]);
+  return true;
+}
 
 const char* BleTransport::disconnectReasonCodeName(DisconnectReasonCode code) {
   switch (code) {
@@ -91,6 +121,12 @@ const char* BleTransport::recoverySkipReasonCodeName(RecoverySkipReasonCode code
 
 bool BleTransport::recoveryAnomalyAllowedInPhase1(RecoveryAnomalyCode code) {
   return code == RecoveryAnomalyCode::LOCAL_CONNECTED_BUT_SERVER_COUNT_ZERO;
+}
+
+void BleTransport::gapEventThunk(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* param) {
+  if (g_self) {
+    g_self->handleGapEvent(event, param);
+  }
 }
 
 class MyServerCallbacks : public BLEServerCallbacks {
@@ -174,6 +210,7 @@ void BleTransport::begin(CommandBus* cb, const char* deviceName, const char* adv
   remoteBdaValid = false;
   advertisingProfile = AdvertisingProfile::FAST_DISCOVERY;
   advertisingProfileStartedAtMs = millis();
+  advertisingActive = false;
   memset(remoteBda, 0, sizeof(remoteBda));
   lastDisconnectRawReason = 0;
 
@@ -195,6 +232,7 @@ void BleTransport::begin(CommandBus* cb, const char* deviceName, const char* adv
   advertisedDeviceName = resolvedDeviceName;
   advertisedModelName = resolvedAdvertisedModel ? resolvedAdvertisedModel : "";
   BLEDevice::init(resolvedDeviceName);
+  BLEDevice::setCustomGapHandler(BleTransport::gapEventThunk);
   BLEDevice::setPower(kBleDefaultTxPowerLevel);
   applyAdvertisingPowerProfile();
   const esp_err_t mtuErr = BLEDevice::setMTU(kPreferredMtu);
@@ -225,7 +263,7 @@ void BleTransport::begin(CommandBus* cb, const char* deviceName, const char* adv
   configureAdvertising(
       advertisedDeviceName.c_str(),
       advertisedModelName.empty() ? nullptr : advertisedModelName.c_str());
-  startAdvertisingSafe();
+  startAdvertisingSafe("begin");
   Serial.printf("[OK] BLE advertising name=%s model=%s\n",
       advertisedDeviceName.c_str(),
       advertisedModelName.empty() ? "UNKNOWN" : advertisedModelName.c_str());
@@ -242,7 +280,10 @@ void BleTransport::updateAdvertisingIdentity(const char* deviceName, const char*
       advertisedDeviceName.c_str(),
       advertisedModelName.empty() ? nullptr : advertisedModelName.c_str());
   if (!deviceConnected) {
-    startAdvertisingSafe();
+    if (advertisingActive) {
+      stopAdvertisingSafe("update_identity");
+    }
+    startAdvertisingSafe("update_identity");
   }
 }
 
@@ -292,6 +333,73 @@ void BleTransport::logRecoveryEvent(const char* action,
       static_cast<unsigned>(checks));
 }
 
+void BleTransport::logAdvertisingAction(const char* action, const char* reason) const {
+  BLEAddress localAddress = BLEDevice::getAddress();
+  char usedAddr[24]{};
+  uint8_t usedAddrType = 0xFF;
+  const bool usedAddrOk = readUsedBleAddress(usedAddr, sizeof(usedAddr), usedAddrType);
+  Serial.printf(
+      "[BLE ADV TRACE] action=%s reason=%s active=%d connected=%d starts=%lu stops=%lu identity_addr=%s used_addr=%s used_addr_type=%s name=%s model=%s session_id=%lu\n",
+      action ? action : "unknown",
+      reason ? reason : "unknown",
+      advertisingActive ? 1 : 0,
+      deviceConnected ? 1 : 0,
+      static_cast<unsigned long>(advertisingStartRequests),
+      static_cast<unsigned long>(advertisingStopRequests),
+      localAddress.toString().c_str(),
+      usedAddrOk ? usedAddr : "unavailable",
+      usedAddrOk ? addrTypeName(usedAddrType) : "unknown",
+      advertisedDeviceName.c_str(),
+      advertisedModelName.empty() ? "UNKNOWN" : advertisedModelName.c_str(),
+      static_cast<unsigned long>(sessionId));
+}
+
+void BleTransport::handleGapEvent(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* param) {
+  switch (event) {
+    case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
+      {
+        char usedAddr[24]{};
+        uint8_t usedAddrType = 0xFF;
+        const bool usedAddrOk = readUsedBleAddress(usedAddr, sizeof(usedAddr), usedAddrType);
+        Serial.printf(
+            "[BLE GAP TRACE] event=ADV_START_COMPLETE status=%d identity_addr=%s used_addr=%s used_addr_type=%s\n",
+            param ? static_cast<int>(param->adv_start_cmpl.status) : -1,
+            BLEDevice::getAddress().toString().c_str(),
+            usedAddrOk ? usedAddr : "unavailable",
+            usedAddrOk ? addrTypeName(usedAddrType) : "unknown");
+      }
+      break;
+    case ESP_GAP_BLE_ADV_STOP_COMPLETE_EVT:
+      {
+        char usedAddr[24]{};
+        uint8_t usedAddrType = 0xFF;
+        const bool usedAddrOk = readUsedBleAddress(usedAddr, sizeof(usedAddr), usedAddrType);
+        Serial.printf(
+            "[BLE GAP TRACE] event=ADV_STOP_COMPLETE status=%d identity_addr=%s used_addr=%s used_addr_type=%s\n",
+            param ? static_cast<int>(param->adv_stop_cmpl.status) : -1,
+            BLEDevice::getAddress().toString().c_str(),
+            usedAddrOk ? usedAddr : "unavailable",
+            usedAddrOk ? addrTypeName(usedAddrType) : "unknown");
+      }
+      break;
+    case ESP_GAP_BLE_SET_LOCAL_PRIVACY_COMPLETE_EVT:
+      {
+        char usedAddr[24]{};
+        uint8_t usedAddrType = 0xFF;
+        const bool usedAddrOk = readUsedBleAddress(usedAddr, sizeof(usedAddr), usedAddrType);
+        Serial.printf(
+            "[BLE GAP TRACE] event=SET_LOCAL_PRIVACY_COMPLETE status=%d identity_addr=%s used_addr=%s used_addr_type=%s\n",
+            param ? static_cast<int>(param->local_privacy_cmpl.status) : -1,
+            BLEDevice::getAddress().toString().c_str(),
+            usedAddrOk ? usedAddr : "unavailable",
+            usedAddrOk ? addrTypeName(usedAddrType) : "unknown");
+      }
+      break;
+    default:
+      break;
+  }
+}
+
 void BleTransport::resetSessionOnConnect(BLEServer* server,
                                          uint16_t connId,
                                          bool connIdKnown,
@@ -299,6 +407,7 @@ void BleTransport::resetSessionOnConnect(BLEServer* server,
                                          uint32_t nowMs) {
   flushStreamSuppressionSummaryIfNeeded(nowMs);
   deviceConnected = true;
+  advertisingActive = false;
   protocolActivityObserved = false;
   currentConnIdValid = connIdKnown;
   currentConnId = connId;
@@ -333,6 +442,7 @@ void BleTransport::resetSessionOnDisconnect(uint16_t connId,
                                             uint32_t nowMs) {
   flushStreamSuppressionSummaryIfNeeded(nowMs);
   deviceConnected = false;
+  advertisingActive = false;
   protocolActivityObserved = false;
   currentConnIdValid = false;
   currentConnId = 0;
@@ -666,11 +776,8 @@ void BleTransport::setAdvertisingProfile(AdvertisingProfile profile, bool restar
       advertisedDeviceName.c_str(),
       advertisedModelName.empty() ? nullptr : advertisedModelName.c_str());
   if (!deviceConnected && restartIfNeeded && pServer) {
-    BLEAdvertising* adv = pServer->getAdvertising();
-    if (adv) {
-      adv->stop();
-    }
-    startAdvertisingSafe();
+    stopAdvertisingSafe("set_profile_restart");
+    startAdvertisingSafe("set_profile_restart");
   }
 }
 
@@ -696,14 +803,28 @@ TickType_t BleTransport::controlTaskIdleWaitTicks() const {
   return pdMS_TO_TICKS(waitMs);
 }
 
-void BleTransport::startAdvertisingSafe() {
+void BleTransport::startAdvertisingSafe(const char* reason) {
   if (!pServer) return;
+  if (deviceConnected || advertisingActive) return;
   BLEAdvertising* adv = pServer->getAdvertising();
   if (!adv) return;
   uint32_t now = millis();
   if (now - lastAdvRestartMs < kAdvRestartMinIntervalMs) return;
+  advertisingStartRequests += 1;
+  logAdvertisingAction("start_request", reason);
   adv->start();
   lastAdvRestartMs = now;
+  advertisingActive = true;
+}
+
+void BleTransport::stopAdvertisingSafe(const char* reason) {
+  if (!pServer || !advertisingActive) return;
+  BLEAdvertising* adv = pServer->getAdvertising();
+  if (!adv) return;
+  advertisingStopRequests += 1;
+  logAdvertisingAction("stop_request", reason);
+  adv->stop();
+  advertisingActive = false;
 }
 
 bool BleTransport::enqueueCommand(const std::string& raw) {
@@ -942,7 +1063,6 @@ void BleTransport::controlTaskLoop() {
       const uint32_t nowMs = millis();
       if (!deviceConnected) {
         maybeRelaxAdvertisingProfile(nowMs);
-        startAdvertisingSafe();
       } else {
         recoverStalledConnection(nowMs);
       }
@@ -960,7 +1080,7 @@ void BleTransport::controlTaskLoop() {
 
     if (msg.type == ControlMsg::Type::BLE_DISCONNECTED) {
       setAdvertisingProfile(AdvertisingProfile::FAST_DISCOVERY, false);
-      startAdvertisingSafe();
+      startAdvertisingSafe("disconnect_event");
       if (disconnectSink) {
         disconnectSink->onBleDisconnect();
       }
