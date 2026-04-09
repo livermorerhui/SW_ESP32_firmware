@@ -9,6 +9,7 @@ static constexpr uint8_t kTxControlQueueLen = 64;
 static constexpr uint8_t kTxStreamQueueLen = 1;
 static constexpr uint32_t kAdvRestartMinIntervalMs = 300;
 static constexpr uint32_t kAdvRecoveryCheckIntervalMs = 400;
+static constexpr uint32_t kAdvRecoveryCheckIntervalIdleLowPowerMs = 1500;
 static constexpr uint32_t kControlLatencyWarnMs = 80;
 static constexpr uint32_t kRecoveryObservationWindowMs = 5000;
 static constexpr uint8_t kRecoveryObservationMinChecks = 3;
@@ -674,6 +675,14 @@ void BleTransport::maybeRelaxAdvertisingProfile(uint32_t nowMs) {
   setAdvertisingProfile(AdvertisingProfile::IDLE_LOW_POWER, true);
 }
 
+TickType_t BleTransport::controlTaskIdleWaitTicks() const {
+  const uint32_t waitMs =
+      (!deviceConnected && advertisingProfile == AdvertisingProfile::IDLE_LOW_POWER)
+          ? kAdvRecoveryCheckIntervalIdleLowPowerMs
+          : kAdvRecoveryCheckIntervalMs;
+  return pdMS_TO_TICKS(waitMs);
+}
+
 void BleTransport::startAdvertisingSafe() {
   if (!pServer) return;
   BLEAdvertising* adv = pServer->getAdvertising();
@@ -916,7 +925,7 @@ void BleTransport::controlTaskLoop() {
   ControlMsg msg{};
 
   while (true) {
-    if (xQueueReceive(controlQueue, &msg, pdMS_TO_TICKS(kAdvRecoveryCheckIntervalMs)) != pdTRUE) {
+    if (xQueueReceive(controlQueue, &msg, controlTaskIdleWaitTicks()) != pdTRUE) {
       const uint32_t nowMs = millis();
       if (!deviceConnected) {
         maybeRelaxAdvertisingProfile(nowMs);

@@ -155,6 +155,7 @@ private:
   bool tryHandleDirectQuery(const String& s);
   void setAdvertisingProfile(AdvertisingProfile profile, bool restartIfNeeded);
   void maybeRelaxAdvertisingProfile(uint32_t nowMs);
+  TickType_t controlTaskIdleWaitTicks() const;
   void noteQueueWatermark(const char* queueName, UBaseType_t depth, UBaseType_t& highWatermark);
   void noteStreamSuppressedForControl(UBaseType_t controlDepth, uint32_t nowMs);
   void flushStreamSuppressionSummaryIfNeeded(uint32_t nowMs);

@@ -6,6 +6,7 @@
 
 namespace {
 constexpr uint32_t kLaserLoopIntervalNoLaserMs = 200UL;
+constexpr uint32_t kLaserLoopIntervalUnavailableIdleMs = 250UL;
 constexpr uint32_t kLaserUnavailableIdleReadBackoffMs = 3000UL;
 constexpr uint32_t kModbusReadFailureSummaryIntervalMs = 10000UL;
 
@@ -2029,8 +2030,16 @@ void LaserModule::taskLoop() {
 #endif
 
   while (true) {
+    const bool noLaserConfigured = !deviceConfig.laserInstalled;
+    const TopState loopTopState = sm ? sm->state() : TopState::IDLE;
+    const bool unavailableIdleBackoffActive =
+        deviceConfig.laserInstalled &&
+        nextReadEligibleAtMs != 0 &&
+        loopTopState != TopState::RUNNING;
     const uint32_t loopDelayMs =
-        deviceConfig.laserInstalled ? 20UL : kLaserLoopIntervalNoLaserMs;
+        noLaserConfigured
+            ? kLaserLoopIntervalNoLaserMs
+            : (unavailableIdleBackoffActive ? kLaserLoopIntervalUnavailableIdleMs : 20UL);
     vTaskDelay(pdMS_TO_TICKS(loopDelayMs));
 
 #if DIAG_DISABLE_LASER_SAFETY
