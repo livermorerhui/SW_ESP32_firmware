@@ -131,6 +131,7 @@
 
 - `USER_LEFT_PLATFORM` -> `effect=RECOVERABLE_PAUSE`
 - `FALL_SUSPECTED` -> `effect=ABNORMAL_STOP`
+- `BLE_DISCONNECTED` -> effect 取决于 disconnect policy；当前 APP-driven 默认构建为 `RECOVERABLE_PAUSE`
 
 ### `STOP`
 
