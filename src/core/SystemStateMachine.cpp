@@ -627,6 +627,7 @@ void SystemStateMachine::onUserOff() {
 
 void SystemStateMachine::onBleConnected() {
   clearWarningFault(FaultCode::BLE_DISCONNECTED, "ble_connected");
+  clearRecoverablePause(FaultCode::BLE_DISCONNECTED, "ble_connected");
   if (sensor_state_known && !sensor_healthy) {
     setWarningFault(FaultCode::MEASUREMENT_UNAVAILABLE, "sensor_still_unhealthy");
   }
@@ -634,9 +635,16 @@ void SystemStateMachine::onBleConnected() {
 
 void SystemStateMachine::onBleDisconnected() {
   degraded_start_authorized = false;
-  if (SAFETY_POLICY_DISCONNECT_STOPS_WAVE) {
+  switch (SAFETY_POLICY_BLE_DISCONNECT_WAVE_POLICY) {
+    case BleDisconnectWavePolicy::BLOCKING_FAULT:
     enterBlockingFault(FaultCode::BLE_DISCONNECTED, "ble_disconnected");
-    return;
+      return;
+    case BleDisconnectWavePolicy::RECOVERABLE_PAUSE:
+      enterRecoverablePause(FaultCode::BLE_DISCONNECTED, "ble_disconnected");
+      return;
+    case BleDisconnectWavePolicy::WARNING_ONLY:
+    default:
+      break;
   }
 
   setWarningFault(FaultCode::BLE_DISCONNECTED, "ble_disconnected");

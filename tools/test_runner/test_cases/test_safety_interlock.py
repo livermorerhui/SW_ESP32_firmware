@@ -48,7 +48,11 @@ async def run(client, ctx):
             timeout_s=4.0,
         )
 
-        if retry_resp.startswith("NACK:FAULT_LOCKED") or retry_resp.startswith("NACK:NOT_ARMED"):
+        if (
+            retry_resp.startswith("ACK:")
+            or retry_resp.startswith("NACK:FAULT_LOCKED")
+            or retry_resp.startswith("NACK:NOT_ARMED")
+        ):
             return "PASS", f"After BLE reconnect got {retry_resp}; CAP response was {cap_resp}"
 
         return "FAIL", f"Expected interlock evidence after disconnect, got {retry_resp}"

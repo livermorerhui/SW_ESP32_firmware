@@ -111,8 +111,17 @@ static constexpr bool FALL_STOP_ENABLED_DEFAULT = true;
 static constexpr bool SAFETY_POLICY_USER_LEFT_RECOVERABLE_PAUSE = true;
 // 跌倒疑似默认走“异常停机”风格：停波并进入 FAULT_STOP。
 static constexpr bool SAFETY_POLICY_FALL_ABNORMAL_STOP = true;
-// BLE 断连默认仅提醒，不强制停波；产品策略可按需改为 true。
-static constexpr bool SAFETY_POLICY_DISCONNECT_STOPS_WAVE = false;
+// BLE 断连策略需要显式区分：
+// - WARNING_ONLY：仅提醒，不主动停波（更接近未来 device-owned session 方向）
+// - RECOVERABLE_PAUSE：断连即停波，但不进入 fault cooldown（当前 APP-driven 默认）
+// - BLOCKING_FAULT：断连即停波，并进入 fault cooldown
+enum class BleDisconnectWavePolicy : uint8_t {
+  WARNING_ONLY = 0,
+  RECOVERABLE_PAUSE = 1,
+  BLOCKING_FAULT = 2,
+};
+static constexpr BleDisconnectWavePolicy SAFETY_POLICY_BLE_DISCONNECT_WAVE_POLICY =
+    BleDisconnectWavePolicy::RECOVERABLE_PAUSE;
 // 测量不可用默认仅告警，不强制停波；产品策略可按需改为 true。
 static constexpr bool SAFETY_POLICY_MEASUREMENT_UNAVAILABLE_STOPS_WAVE = false;
 
