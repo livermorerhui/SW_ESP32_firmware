@@ -1,4 +1,7 @@
 #pragma once
+#include <errno.h>
+#include <math.h>
+#include <stdlib.h>
 #include "CommandBus.h"
 #include "EventBus.h"
 #include "PlatformSnapshot.h"
@@ -78,6 +81,37 @@ public:
       default:
         return nullptr;
     }
+  }
+
+  static bool parseStrictFloat(const String& raw, float& out) {
+    if (raw.length() == 0) return false;
+
+    char* end = nullptr;
+    errno = 0;
+    const float value = strtof(raw.c_str(), &end);
+    if (end == raw.c_str() || *end != '\0' || errno == ERANGE || !isfinite(value)) {
+      return false;
+    }
+
+    out = value;
+    return true;
+  }
+
+  static bool parseStrictInt(const String& raw, int& out) {
+    if (raw.length() == 0) return false;
+
+    char* end = nullptr;
+    errno = 0;
+    const long value = strtol(raw.c_str(), &end, 10);
+    if (end == raw.c_str() || *end != '\0' || errno == ERANGE) {
+      return false;
+    }
+    if (value < INT_MIN || value > INT_MAX) {
+      return false;
+    }
+
+    out = static_cast<int>(value);
+    return true;
   }
 
   // 返回 true = 成功解析
@@ -179,8 +213,12 @@ public:
       bool hasI = readParam("i=", iStr) || readParam("amp=", iStr);
       if (!hasF || !hasI) { err = "INVALID_PARAM"; return false; }
 
-      float f = fStr.toFloat();
-      int a = iStr.toInt();
+      float f = 0.0f;
+      int a = 0;
+      if (!parseStrictFloat(fStr, f) || !parseStrictInt(iStr, a)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
       if (f < 0 || f > 50.0f || a < 0 || a > 120) { err = "INVALID_PARAM"; return false; }
       out.wave.freqHz = f; out.wave.intensity = a;
       return true;
@@ -195,8 +233,10 @@ public:
       bool hasZ = readParam("z=", zStr);
       bool hasK = readParam("k=", kStr);
       if (!hasZ || !hasK) { err = "INVALID_PARAM"; return false; }
-      out.p1 = zStr.toFloat();
-      out.p2 = kStr.toFloat();
+      if (!parseStrictFloat(zStr, out.p1) || !parseStrictFloat(kStr, out.p2)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
       return true;
     }
     if (s.startsWith("CAL:CAPTURE")) {
@@ -204,7 +244,10 @@ public:
       String wStr;
       bool hasW = readParam("w=", wStr) || readParam("ref=", wStr);
       if (!hasW) { err = "INVALID_PARAM"; return false; }
-      out.capture.referenceWeightKg = wStr.toFloat();
+      if (!parseStrictFloat(wStr, out.capture.referenceWeightKg)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
       return true;
     }
     if (s.equalsIgnoreCase("CAL:GET_MODEL")) {
@@ -234,10 +277,13 @@ public:
         return false;
       }
 
-      out.model.referenceDistance = refStr.toFloat();
-      out.model.coefficients[0] = c0Str.toFloat();
-      out.model.coefficients[1] = c1Str.toFloat();
-      out.model.coefficients[2] = c2Str.toFloat();
+      if (!parseStrictFloat(refStr, out.model.referenceDistance) ||
+          !parseStrictFloat(c0Str, out.model.coefficients[0]) ||
+          !parseStrictFloat(c1Str, out.model.coefficients[1]) ||
+          !parseStrictFloat(c2Str, out.model.coefficients[2])) {
+        err = "INVALID_PARAM";
+        return false;
+      }
       return true;
     }
     if (s.startsWith("DEBUG:FALL_STOP")) {
@@ -278,8 +324,11 @@ public:
       String p = s.substring(7);
       int idx = p.indexOf(',');
       if (idx <= 0) { err = "INVALID_PARAM"; return false; }
-      out.p1 = p.substring(0, idx).toFloat();
-      out.p2 = p.substring(idx + 1).toFloat();
+      if (!parseStrictFloat(p.substring(0, idx), out.p1) ||
+          !parseStrictFloat(p.substring(idx + 1), out.p2)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
       return true;
     }
 
@@ -292,21 +341,32 @@ public:
       if (fIndex != -1) {
         int comma = s.indexOf(",", fIndex);
         String sub = (comma == -1) ? s.substring(fIndex + 2) : s.substring(fIndex + 2, comma);
-        out.wave.freqHz = sub.toFloat();
+        if (!parseStrictFloat(sub, out.wave.freqHz)) {
+          err = "INVALID_PARAM";
+          return false;
+        }
       } else out.wave.freqHz = -1; // 表示“未触碰”
       // intensity
       int iIndex = s.indexOf("I:");
       if (iIndex != -1) {
         int comma = s.indexOf(",", iIndex);
         String sub = (comma == -1) ? s.substring(iIndex + 2) : s.substring(iIndex + 2, comma);
-        out.wave.intensity = sub.toInt();
+        if (!parseStrictInt(sub, out.wave.intensity)) {
+          err = "INVALID_PARAM";
+          return false;
+        }
       } else out.wave.intensity = -1;
       // enable
       int eIndex = s.indexOf("E:");
       if (eIndex != -1) {
         int comma = s.indexOf(",", eIndex);
         String sub = (comma == -1) ? s.substring(eIndex + 2) : s.substring(eIndex + 2, comma);
-        out.wave.enable = (sub.toInt() != 0);
+        int enableInt = 0;
+        if (!parseStrictInt(sub, enableInt)) {
+          err = "INVALID_PARAM";
+          return false;
+        }
+        out.wave.enable = (enableInt != 0);
         out.wave.hasEnable = true;
       } else {
         out.wave.hasEnable = false;
