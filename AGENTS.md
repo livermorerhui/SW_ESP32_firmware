@@ -71,6 +71,12 @@
   - 执行结果
   - 状态变化
   - 原因码 / 来源码
+- 如果当前正式交付模型仍是 `APP_DRIVEN_SESSION`，则固件重构默认先冻结 BLE 外部合同，不得顺手改变：
+  - execution model 语义
+  - disconnect / reconnect 语义
+  - `CAP? / SNAPSHOT / WAVE:* / EVT:*` 的正式字段、字段名和消费含义
+  - Demo APP / SW APP 已正式依赖的兼容桥接输出
+- 涉及 BLE 重构时，必须先对照 `docs/system/esp32_ble_safe_refactor_freeze_checklist.md` 审计，再决定哪些只允许做内部抽取、哪些属于正式协议变更
 
 ## 验证
 
