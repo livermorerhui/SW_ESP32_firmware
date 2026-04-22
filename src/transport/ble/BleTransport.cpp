@@ -21,6 +21,7 @@ static constexpr uint16_t kConnParamMaxInterval = 24;
 static constexpr uint16_t kConnParamLatency = 0;
 static constexpr uint16_t kConnParamTimeout = 400;
 static constexpr uint32_t kStreamControlHoldoffMs = 35;
+static constexpr uint32_t kStreamSendSkipLogEvery = 50;
 static constexpr esp_power_level_t kBleDefaultTxPowerLevel = ESP_PWR_LVL_P3;
 static constexpr esp_power_level_t kBleAdvertisingFastPowerLevel = ESP_PWR_LVL_P3;
 static constexpr esp_power_level_t kBleAdvertisingIdlePowerLevel = ESP_PWR_LVL_N0;
@@ -123,6 +124,69 @@ bool BleTransport::recoveryAnomalyAllowedInPhase1(RecoveryAnomalyCode code) {
   return code == RecoveryAnomalyCode::LOCAL_CONNECTED_BUT_SERVER_COUNT_ZERO;
 }
 
+const char* BleTransport::txFrameClassName(TxFrameClass frameClass) {
+  switch (frameClass) {
+    case TxFrameClass::CRITICAL_EVENT:
+      return "CRITICAL_EVENT";
+    case TxFrameClass::STATUS_EVENT:
+      return "STATUS_EVENT";
+    case TxFrameClass::STREAM_EVENT:
+      return "STREAM_EVENT";
+    case TxFrameClass::SNAPSHOT:
+      return "SNAPSHOT";
+    case TxFrameClass::CAPABILITY:
+      return "CAPABILITY";
+    case TxFrameClass::ACK:
+      return "ACK";
+    case TxFrameClass::NACK:
+      return "NACK";
+    case TxFrameClass::OTHER_CONTROL:
+      return "OTHER_CONTROL";
+  }
+  return "OTHER_CONTROL";
+}
+
+const char* BleTransport::eventTypeName(EventType type) {
+  switch (type) {
+    case EventType::STATE:
+      return "STATE";
+    case EventType::WAVE_OUTPUT:
+      return "WAVE_OUTPUT";
+    case EventType::FAULT:
+      return "FAULT";
+    case EventType::SAFETY:
+      return "SAFETY";
+    case EventType::STABLE_WEIGHT:
+      return "STABLE_WEIGHT";
+    case EventType::PARAMS:
+      return "PARAMS";
+    case EventType::STREAM:
+      return "STREAM";
+    case EventType::BASELINE_MAIN:
+      return "BASELINE_MAIN";
+    case EventType::STOP:
+      return "STOP";
+  }
+  return "UNKNOWN";
+}
+
+bool BleTransport::isCriticalEvent(EventType type) {
+  switch (type) {
+    case EventType::STATE:
+    case EventType::WAVE_OUTPUT:
+    case EventType::FAULT:
+    case EventType::SAFETY:
+    case EventType::STOP:
+      return true;
+    case EventType::BASELINE_MAIN:
+    case EventType::STABLE_WEIGHT:
+    case EventType::PARAMS:
+    case EventType::STREAM:
+      return false;
+  }
+  return false;
+}
+
 void BleTransport::gapEventThunk(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* param) {
   if (g_self) {
     g_self->handleGapEvent(event, param);
@@ -137,7 +201,9 @@ class MyServerCallbacks : public BLEServerCallbacks {
       const uint16_t connId = param ? param->connect.conn_id : (server ? server->getConnId() : 0);
       const esp_bd_addr_t* remoteBda = param ? &param->connect.remote_bda : nullptr;
       g_self->resetSessionOnConnect(server, connId, true, remoteBda, millis());
-      g_self->enqueueConnectEvent();
+      if (!g_self->enqueueConnectEvent()) {
+        g_self->noteLifecycleControlEnqueueFailure("BLE_CONNECTED");
+      }
     }
   }
 
@@ -164,7 +230,9 @@ class MyServerCallbacks : public BLEServerCallbacks {
           reasonCode,
           rawReason,
           millis());
-      g_self->enqueueDisconnectEvent();
+      if (!g_self->enqueueDisconnectEvent()) {
+        g_self->noteLifecycleControlEnqueueFailure("BLE_DISCONNECTED");
+      }
     }
   }
 };
@@ -178,7 +246,12 @@ class MyRxCallbacks : public BLECharacteristicCallbacks {
     g_self->noteRxActivity(millis(), v.size());
 
     if (!g_self->enqueueCommand(v)) {
-      g_self->enqueueTxLineRaw("NACK:BUSY");
+      if (!g_self->enqueueTxLineRaw("NACK:BUSY")) {
+        g_self->noteTxEnqueueFailure(
+            BleTransport::TxFrameClass::NACK,
+            "rx_busy_nack",
+            "NACK:BUSY");
+      }
     }
   }
 };
@@ -983,6 +1056,126 @@ bool BleTransport::isStreamFrame(const char* s) const {
   return s && strncmp(s, "EVT:STREAM ", 11) == 0;
 }
 
+BleTransport::TxFrameClass BleTransport::classifyTxLine(const char* s) const {
+  if (!s) return TxFrameClass::OTHER_CONTROL;
+  if (strncmp(s, "EVT:STATE ", 10) == 0 ||
+      strncmp(s, "EVT:WAVE_OUTPUT ", 16) == 0 ||
+      strncmp(s, "EVT:FAULT ", 10) == 0 ||
+      strncmp(s, "EVT:SAFETY ", 11) == 0 ||
+      strncmp(s, "EVT:STOP ", 9) == 0) {
+    return TxFrameClass::CRITICAL_EVENT;
+  }
+  if (strncmp(s, "EVT:STREAM ", 11) == 0) {
+    return TxFrameClass::STREAM_EVENT;
+  }
+  if (strncmp(s, "EVT:", 4) == 0) {
+    return TxFrameClass::STATUS_EVENT;
+  }
+  if (strncmp(s, "SNAPSHOT:", 9) == 0) {
+    return TxFrameClass::SNAPSHOT;
+  }
+  if (strncmp(s, "ACK:CAP ", 8) == 0) {
+    return TxFrameClass::CAPABILITY;
+  }
+  if (strncmp(s, "ACK:", 4) == 0) {
+    return TxFrameClass::ACK;
+  }
+  if (strncmp(s, "NACK:", 5) == 0) {
+    return TxFrameClass::NACK;
+  }
+  return TxFrameClass::OTHER_CONTROL;
+}
+
+void BleTransport::noteTxEnqueueFailure(TxFrameClass frameClass, const char* origin, const char* line) {
+  txClassifiedDropCount += 1;
+  if (frameClass == TxFrameClass::CRITICAL_EVENT) {
+    txCriticalEventDropCount += 1;
+    markReconnectSnapshotDirty(frameClass, origin, line);
+  }
+  Serial.printf(
+      "[BLE TX] event=enqueue_failed class=%s origin=%s classified_drops=%lu critical_drops=%lu control_drops=%lu depth=%u line=%s\n",
+      txFrameClassName(frameClass),
+      origin ? origin : "unknown",
+      static_cast<unsigned long>(txClassifiedDropCount),
+      static_cast<unsigned long>(txCriticalEventDropCount),
+      static_cast<unsigned long>(txControlDropCount),
+      static_cast<unsigned>(txControlQueue ? uxQueueMessagesWaiting(txControlQueue) : 0U),
+      line ? line : "");
+}
+
+void BleTransport::noteEventEnqueueFailure(EventType type, const char* line) {
+  noteTxEnqueueFailure(
+      isCriticalEvent(type) ? TxFrameClass::CRITICAL_EVENT : classifyTxLine(line),
+      eventTypeName(type),
+      line);
+}
+
+void BleTransport::noteLifecycleControlEnqueueFailure(const char* lifecycleEvent) {
+  lifecycleControlDropCount += 1;
+  Serial.printf(
+      "[BLE CTRL] event=lifecycle_enqueue_failed lifecycle=%s drops=%lu depth=%u\n",
+      lifecycleEvent ? lifecycleEvent : "UNKNOWN",
+      static_cast<unsigned long>(lifecycleControlDropCount),
+      static_cast<unsigned>(controlQueue ? uxQueueMessagesWaiting(controlQueue) : 0U));
+}
+
+void BleTransport::noteTxSendSkipped(TxFrameClass frameClass, const char* reason, const char* line) {
+  txSendSkipCount += 1;
+  if (frameClass == TxFrameClass::CRITICAL_EVENT) {
+    markReconnectSnapshotDirty(frameClass, reason, line);
+  }
+  if (frameClass == TxFrameClass::STREAM_EVENT && (txSendSkipCount % kStreamSendSkipLogEvery) != 1) {
+    return;
+  }
+  Serial.printf(
+      "[BLE TX] event=send_skipped class=%s reason=%s skips=%lu connected=%d pTx=%p line=%s\n",
+      txFrameClassName(frameClass),
+      reason ? reason : "unknown",
+      static_cast<unsigned long>(txSendSkipCount),
+      deviceConnected ? 1 : 0,
+      static_cast<void*>(pTx),
+      line ? line : "");
+}
+
+void BleTransport::markReconnectSnapshotDirty(TxFrameClass frameClass, const char* origin, const char* line) {
+  reconnectSnapshotDirtyCount += 1;
+  if (!reconnectSnapshotDirty) {
+    reconnectSnapshotDirty = true;
+    reconnectSnapshotDirtySinceMs = millis();
+  }
+  Serial.printf(
+      "[BLE TX] event=reconnect_snapshot_dirty class=%s origin=%s dirty_count=%lu dirty_for_ms=%lu line=%s\n",
+      txFrameClassName(frameClass),
+      origin ? origin : "unknown",
+      static_cast<unsigned long>(reconnectSnapshotDirtyCount),
+      static_cast<unsigned long>(millis() - reconnectSnapshotDirtySinceMs),
+      line ? line : "");
+}
+
+void BleTransport::noteReconnectSnapshotPending(const char* origin) const {
+  if (!reconnectSnapshotDirty) return;
+  Serial.printf(
+      "[BLE TX] event=reconnect_snapshot_pending origin=%s dirty_count=%lu dirty_for_ms=%lu\n",
+      origin ? origin : "unknown",
+      static_cast<unsigned long>(reconnectSnapshotDirtyCount),
+      static_cast<unsigned long>(millis() - reconnectSnapshotDirtySinceMs));
+}
+
+void BleTransport::noteReconnectSnapshotDelivered(const char* origin, const char* line) {
+  if (!reconnectSnapshotDirty) return;
+  reconnectSnapshotCompensationCount += 1;
+  Serial.printf(
+      "[BLE TX] event=reconnect_snapshot_compensated origin=%s compensations=%lu dirty_count=%lu dirty_for_ms=%lu line=%s\n",
+      origin ? origin : "unknown",
+      static_cast<unsigned long>(reconnectSnapshotCompensationCount),
+      static_cast<unsigned long>(reconnectSnapshotDirtyCount),
+      static_cast<unsigned long>(millis() - reconnectSnapshotDirtySinceMs),
+      line ? line : "");
+  reconnectSnapshotDirty = false;
+  reconnectSnapshotDirtySinceMs = 0;
+  reconnectSnapshotDirtyCount = 0;
+}
+
 bool BleTransport::tryHandleDirectQuery(const String& s) {
   if (!ProtocolCodec::isSnapshotQuery(s)) {
     return false;
@@ -990,12 +1183,18 @@ bool BleTransport::tryHandleDirectQuery(const String& s) {
 
   const SystemStateMachine* snapshotOwner = SystemStateMachine::activeInstance();
   if (!snapshotOwner) {
-    enqueueTxLineRaw("NACK:BUSY");
+    if (!enqueueTxLineRaw("NACK:BUSY")) {
+      noteTxEnqueueFailure(TxFrameClass::NACK, "snapshot_busy_nack", "NACK:BUSY");
+    }
     return true;
   }
 
-  if (!enqueueTxLine(ProtocolCodec::encodeSnapshot(snapshotOwner->snapshot()))) {
-    enqueueTxLineRaw("NACK:BUSY");
+  const String snapshot = ProtocolCodec::encodeSnapshot(snapshotOwner->snapshot());
+  if (!enqueueTxLine(snapshot)) {
+    noteTxEnqueueFailure(TxFrameClass::SNAPSHOT, "snapshot_query", "SNAPSHOT");
+    if (!enqueueTxLineRaw("NACK:BUSY")) {
+      noteTxEnqueueFailure(TxFrameClass::NACK, "snapshot_fallback_nack", "NACK:BUSY");
+    }
   }
   return true;
 }
@@ -1023,6 +1222,7 @@ void BleTransport::sendLineNow(const char* s) {
 #endif
 
   if (!deviceConnected || !pTx) {
+    noteTxSendSkipped(classifyTxLine(s), !deviceConnected ? "not_connected" : "missing_tx_characteristic", s);
 #if DEBUG_BLE_TX_VERBOSE
     Serial.println("[BLE TX] skipped");
 #endif
@@ -1043,13 +1243,17 @@ void BleTransport::sendLineNow(const char* s) {
     }
   }
 
+  const TxFrameClass frameClass = classifyTxLine(s);
   pTx->setValue((uint8_t*)framed.c_str(), framed.length());
   pTx->notify();
-  const bool streamFrame = isStreamFrame(s);
+  const bool streamFrame = frameClass == TxFrameClass::STREAM_EVENT;
   if (!streamFrame) {
     lastControlTxAtMs = millis();
   }
   noteTxNotifyIssued(millis(), framed.length(), streamFrame);
+  if (frameClass == TxFrameClass::SNAPSHOT) {
+    noteReconnectSnapshotDelivered("snapshot_notify", s);
+  }
 #if DEBUG_BLE_TX_VERBOSE
   Serial.println("[BLE TX] notify() called");
 #endif
@@ -1075,6 +1279,7 @@ void BleTransport::controlTaskLoop() {
       }
       requestMtuNegotiation(sessionId);
       requestConnectionParamUpdate(sessionId);
+      noteReconnectSnapshotPending("ble_connected");
       continue;
     }
 
@@ -1095,18 +1300,25 @@ void BleTransport::controlTaskLoop() {
     Command cmd{};
     String err;
     if (!ProtocolCodec::parseCommand(in, cmd, err)) {
-      enqueueTxLine("NACK:" + err);
+      const String nack = "NACK:" + err;
+      if (!enqueueTxLine(nack)) {
+        noteTxEnqueueFailure(TxFrameClass::NACK, "parse_nack", nack.c_str());
+      }
       continue;
     }
 
     String ack;
     if (!bus) {
-      enqueueTxLineRaw("NACK:BUSY");
+      if (!enqueueTxLineRaw("NACK:BUSY")) {
+        noteTxEnqueueFailure(TxFrameClass::NACK, "bus_busy_nack", "NACK:BUSY");
+      }
       continue;
     }
 
     bus->dispatch(cmd, ack);
-    enqueueTxLine(ack);
+    if (!enqueueTxLine(ack)) {
+      noteTxEnqueueFailure(classifyTxLine(ack.c_str()), "command_ack", ack.c_str());
+    }
   }
 }
 
@@ -1147,8 +1359,12 @@ void BleTransport::txTaskLoop() {
 void BleTransport::onEvent(const Event& e) {
   const String encoded = ProtocolCodec::encodeEvent(e);
   if (e.type == EventType::STREAM) {
-    enqueueStreamTxLine(encoded);
+    if (!enqueueStreamTxLine(encoded)) {
+      noteEventEnqueueFailure(e.type, encoded.c_str());
+    }
     return;
   }
-  enqueueTxLine(encoded);
+  if (!enqueueTxLine(encoded)) {
+    noteEventEnqueueFailure(e.type, encoded.c_str());
+  }
 }

@@ -85,6 +85,17 @@ private:
     IDLE_LOW_POWER
   };
 
+  enum class TxFrameClass : uint8_t {
+    CRITICAL_EVENT = 0,
+    STATUS_EVENT,
+    STREAM_EVENT,
+    SNAPSHOT,
+    CAPABILITY,
+    ACK,
+    NACK,
+    OTHER_CONTROL
+  };
+
   static void controlTaskThunk(void* arg);
   static void txTaskThunk(void* arg);
   static const char* disconnectReasonCodeName(DisconnectReasonCode code);
@@ -93,6 +104,9 @@ private:
   static const char* recoverySkipReasonCodeName(RecoverySkipReasonCode code);
   static bool recoveryAnomalyAllowedInPhase1(RecoveryAnomalyCode code);
   static void gapEventThunk(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* param);
+  static const char* txFrameClassName(TxFrameClass frameClass);
+  static const char* eventTypeName(EventType type);
+  static bool isCriticalEvent(EventType type);
 
   void controlTaskLoop();
   void txTaskLoop();
@@ -167,6 +181,14 @@ private:
   void logTruthPayloadBudgetWarningIfNeeded(const char* s, size_t framedLen) const;
   bool isStreamFrame(const char* s) const;
   bool shouldDeferStreamForControl() const;
+  TxFrameClass classifyTxLine(const char* s) const;
+  void noteTxEnqueueFailure(TxFrameClass frameClass, const char* origin, const char* line);
+  void noteEventEnqueueFailure(EventType type, const char* line);
+  void noteLifecycleControlEnqueueFailure(const char* lifecycleEvent);
+  void noteTxSendSkipped(TxFrameClass frameClass, const char* reason, const char* line);
+  void markReconnectSnapshotDirty(TxFrameClass frameClass, const char* origin, const char* line);
+  void noteReconnectSnapshotPending(const char* origin) const;
+  void noteReconnectSnapshotDelivered(const char* origin, const char* line);
 
   friend class MyServerCallbacks;
   friend class MyRxCallbacks;
@@ -212,6 +234,14 @@ private:
   UBaseType_t txControlHighWatermark = 0;
   UBaseType_t txStreamHighWatermark = 0;
   uint32_t txControlDropCount = 0;
+  uint32_t txCriticalEventDropCount = 0;
+  uint32_t txClassifiedDropCount = 0;
+  uint32_t lifecycleControlDropCount = 0;
+  uint32_t txSendSkipCount = 0;
+  bool reconnectSnapshotDirty = false;
+  uint32_t reconnectSnapshotDirtySinceMs = 0;
+  uint32_t reconnectSnapshotDirtyCount = 0;
+  uint32_t reconnectSnapshotCompensationCount = 0;
   uint32_t txStreamReplaceCount = 0;
   uint32_t txStreamSuppressedForControlCount = 0;
   uint32_t txStreamSuppressionBurstCount = 0;

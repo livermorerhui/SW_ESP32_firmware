@@ -225,6 +225,23 @@
 - 已正式接入：`SAFETY`、`STOP`、`BASELINE`
 - 仍保留兼容链：`STATE`、`FAULT`、`STABLE`、`PARAM`、`STREAM`
 
+### 5.1 关键帧交付与 reconnect truth
+
+当前 BLE TX 使用 notify 文本行输出。它不是应用层确认交付机制，因此以下规则必须固定：
+
+- `EVT:STREAM` 是 measurement plane，可丢最新样本外的历史样本。
+- `EVT:STATE`、`EVT:WAVE_OUTPUT`、`EVT:FAULT`、`EVT:SAFETY`、`EVT:STOP` 属于关键 truth frame，内部重构必须可观察其入队失败或断链跳过。
+- BLE 已断开时，固件不能假装 `EVT:*` 已经交付给 APP；此时 notify 路径只能记录串口诊断。
+- reconnect 后恢复真实状态的正式通道仍是 `SNAPSHOT`，不能新增临时 BLE 线格式表达同一件事。
+- APP / Demo APP 不应把断链窗口里缺失的 `EVT:*` 当成固件状态未变化；应以 reconnect 后 `SNAPSHOT` 为 authoritative runtime truth。
+- 如果断链窗口跳过关键 truth frame，`BleTransport` 会设置内部 reconnect snapshot dirty 标记；下一次 `SNAPSHOT` notify 成功发出后清除此标记并记录串口补偿日志。
+
+2026-04-22 的 `BleTransport critical delivery observability` 真机验证确认：
+
+- 正常 `WAVE:START -> RUNNING -> WAVE:STOP -> ARMED` 链路通过。
+- 未出现 `enqueue_failed`、`lifecycle_enqueue_failed` 或 control queue overflow。
+- 断链窗口出现过 `EVT:STATE IDLE`、`EVT:FAULT 102`、`EVT:SAFETY reason=BLE_DISCONNECTED ...` 的 `send_skipped reason=not_connected` 串口诊断；这是预期可观察事实，不是 BLE wire contract 变更。
+
 相关代码：
 
 - `/Users/wurh/Desktop/SW/sonicwave-protocol/src/main/kotlin/com/sonicwave/protocol/Model.kt:48-82`
