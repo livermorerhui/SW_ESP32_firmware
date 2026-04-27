@@ -9,3 +9,12 @@ in the development cycle.
 
 More information about PlatformIO Unit Testing:
 - https://docs.platformio.org/en/latest/advanced/unit-testing/index.html
+
+Host-side evaluator tests:
+
+- `python3 tools/run_evaluator_unit_tests.py`
+
+This command compiles the pure baseline/presence evaluator sources with a tiny
+local Arduino stub and runs assertion-based tests on the host machine. It does
+not require ESP32 hardware and does not exercise BLE, LaserModule action timing,
+or PlatformIO device tests.

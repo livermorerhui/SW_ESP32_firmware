@@ -204,3 +204,10 @@ Implementation note:
   candidate entry/reset, stable latch execution, occupied-cycle lock/release,
   `SystemStateMachine::onUserOff`, `SystemStateMachine::setRuntimeReady`, and
   all downstream action timing.
+
+Validation note:
+
+- `python3 tools/run_evaluator_unit_tests.py` covers the host-side pure
+  evaluator contract without hardware.
+- `python3 -m platformio run -e esp32s3` must still pass after evaluator
+  changes.
