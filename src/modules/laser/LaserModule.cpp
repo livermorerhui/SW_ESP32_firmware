@@ -943,7 +943,6 @@ void LaserModule::syncStartReadyContract(
     uint32_t now,
     TopState currentTopState,
     const RhythmStateUpdateResult& result) {
-  (void)now;
   (void)result;
 
   // baselineReadyLatched is the durable owner-side evidence that a valid
@@ -964,6 +963,94 @@ void LaserModule::syncStartReadyContract(
   stableContract.startReady = evaluation.startReady;
   stableContract.startReadyWeightKg = evaluation.startReadyWeightKg;
   stableContract.startReadyBridge = evaluation.reason;
+  observeStartGateDiagnostics(now, input, evaluation);
+}
+
+void LaserModule::resetStartGateDiagnosticsWindow(uint32_t now) {
+  startGateDiagWindowStartedAtMs = now;
+  startGateDiagEvaluations = 0;
+  startGateDiagReady = 0;
+  startGateDiagMeasurementInvalid = 0;
+  startGateDiagUserNotPresent = 0;
+  startGateDiagBaselineNotReady = 0;
+  startGateDiagLiveStableNotReady = 0;
+  startGateDiagRunningHold = 0;
+  startGateDiagIdleReady = 0;
+}
+
+void LaserModule::observeStartGateDiagnostics(
+    uint32_t now,
+    const StartGateContractInput& input,
+    const StartGateContractResult& evaluation) {
+  if (!START_GATE_DIAG_ENABLED) {
+    return;
+  }
+
+  if (startGateDiagWindowStartedAtMs == 0) {
+    resetStartGateDiagnosticsWindow(now);
+  }
+
+  ++startGateDiagEvaluations;
+  if (evaluation.startReady) {
+    ++startGateDiagReady;
+  }
+
+  const char* reason = evaluation.reason ? evaluation.reason : "unknown";
+  if (strcmp(reason, "measurement_invalid") == 0) {
+    ++startGateDiagMeasurementInvalid;
+  } else if (strcmp(reason, "user_not_present") == 0) {
+    ++startGateDiagUserNotPresent;
+  } else if (strcmp(reason, "baseline_not_ready") == 0) {
+    ++startGateDiagBaselineNotReady;
+  } else if (strcmp(reason, "live_stable_not_ready") == 0) {
+    ++startGateDiagLiveStableNotReady;
+  } else if (strcmp(reason, "running_contract_hold") == 0) {
+    ++startGateDiagRunningHold;
+  } else if (strcmp(reason, "idle_contract_ready") == 0) {
+    ++startGateDiagIdleReady;
+  }
+
+  if (startGateDiagLastLogMs == 0 ||
+      now - startGateDiagLastLogMs >= START_GATE_DIAG_LOG_INTERVAL_MS) {
+    logStartGateDiagnostics(now, "periodic", input, evaluation);
+    startGateDiagLastLogMs = now;
+    resetStartGateDiagnosticsWindow(now);
+  }
+}
+
+void LaserModule::logStartGateDiagnostics(
+    uint32_t now,
+    const char* trigger,
+    const StartGateContractInput& input,
+    const StartGateContractResult& evaluation) {
+  const uint32_t windowMs =
+      startGateDiagWindowStartedAtMs == 0 ? 0 : (now - startGateDiagWindowStartedAtMs);
+  Serial.printf(
+      "[START_GATE_DIAG] trigger=%s window_ms=%lu evals=%lu ready=%lu "
+      "reason=%s start_ready=%d start_weight=%.2f "
+      "measurement_valid=%d user_present=%d baseline_latched=%d stable_live=%d "
+      "baseline_weight=%.2f top_state=%s "
+      "measurement_invalid=%lu user_not_present=%lu baseline_not_ready=%lu "
+      "live_stable_not_ready=%lu running_hold=%lu idle_ready=%lu\n",
+      trigger ? trigger : "unknown",
+      static_cast<unsigned long>(windowMs),
+      static_cast<unsigned long>(startGateDiagEvaluations),
+      static_cast<unsigned long>(startGateDiagReady),
+      evaluation.reason ? evaluation.reason : "unknown",
+      evaluation.startReady ? 1 : 0,
+      evaluation.startReadyWeightKg,
+      input.measurementValid ? 1 : 0,
+      input.userPresent ? 1 : 0,
+      input.baselineReadyLatched ? 1 : 0,
+      input.stableReadyLive ? 1 : 0,
+      input.baselineReadyWeightKg,
+      topStateName(input.topState),
+      static_cast<unsigned long>(startGateDiagMeasurementInvalid),
+      static_cast<unsigned long>(startGateDiagUserNotPresent),
+      static_cast<unsigned long>(startGateDiagBaselineNotReady),
+      static_cast<unsigned long>(startGateDiagLiveStableNotReady),
+      static_cast<unsigned long>(startGateDiagRunningHold),
+      static_cast<unsigned long>(startGateDiagIdleReady));
 }
 
 void LaserModule::syncStableContractBridge(

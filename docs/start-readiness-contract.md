@@ -142,3 +142,13 @@ Implementation note:
   `SystemStateMachine::setStartReadiness`.
 - This extraction does not change `SNAPSHOT`, `EVT:BASELINE`, or `WAVE:START`
   behavior.
+
+Diagnostics note:
+
+- `START_GATE_DIAG` is a serial-only observability line.
+- It reports the current evaluator reason and a low-frequency reason-count
+  window for `measurement_invalid`, `user_not_present`, `baseline_not_ready`,
+  `live_stable_not_ready`, `running_contract_hold`, and `idle_contract_ready`.
+- It must not become an APP / Demo APP protocol dependency.
+- It does not change `start_ready`, `baseline_ready`, BLE wire format, or
+  `WAVE:START` ACK/NACK behavior.

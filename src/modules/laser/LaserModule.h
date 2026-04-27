@@ -124,6 +124,16 @@ private:
   void syncStableLiveContract(uint32_t now);
   void latchBaselineReadyFromStable(uint32_t now, float distance, float weight);
   void syncStartReadyContract(uint32_t now, TopState currentTopState, const RhythmStateUpdateResult& result);
+  void observeStartGateDiagnostics(
+      uint32_t now,
+      const StartGateContractInput& input,
+      const StartGateContractResult& evaluation);
+  void logStartGateDiagnostics(
+      uint32_t now,
+      const char* trigger,
+      const StartGateContractInput& input,
+      const StartGateContractResult& evaluation);
+  void resetStartGateDiagnosticsWindow(uint32_t now);
   void syncStableContractBridge(uint32_t now, const RhythmStateUpdateResult& result);
   void clearStableContractBridge();
   void handleInvalidMeasurement(const char* reason);
@@ -235,4 +245,14 @@ private:
   RuntimeZeroObserver runtimeZeroObserver{};
   RunSummaryCollector runSummaryCollector{};
   TopState lastObservedTopState = TopState::IDLE;
+  uint32_t startGateDiagWindowStartedAtMs = 0;
+  uint32_t startGateDiagLastLogMs = 0;
+  uint32_t startGateDiagEvaluations = 0;
+  uint32_t startGateDiagReady = 0;
+  uint32_t startGateDiagMeasurementInvalid = 0;
+  uint32_t startGateDiagUserNotPresent = 0;
+  uint32_t startGateDiagBaselineNotReady = 0;
+  uint32_t startGateDiagLiveStableNotReady = 0;
+  uint32_t startGateDiagRunningHold = 0;
+  uint32_t startGateDiagIdleReady = 0;
 };
