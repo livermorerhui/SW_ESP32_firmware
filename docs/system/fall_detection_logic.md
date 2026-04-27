@@ -7,7 +7,13 @@ Current `FALL_SUSPECTED` ownership is split as follows:
 - `LaserModule` decides when a fall-suspected condition exists
 - `SystemStateMachine` decides how that condition maps to runtime effect
 
-Current trigger path:
+2026-04-26 review note:
+
+- recent PLUS normal testing showed `FALL_SUSPECTED` can be reached through the baseline-main abnormal-hold path
+- this was observed with double-feet-only contact causing a large relative derived-weight deviation while BLE remained connected
+- therefore the latest symptom should not be treated as an APP connection failure first; the primary suspect is motion-safety classification / action policy
+
+Legacy / direct trigger path:
 
 1. `LaserModule::taskLoop()` reads distance roughly every 200 ms
 2. firmware evaluates runtime weight from current distance
@@ -26,6 +32,21 @@ Key points:
 - current logic does not require `USER_LEFT_PLATFORM`-like load-drop semantics
 - current logic is based on model-derived weight rate, not a dedicated fall feature
 
+Current baseline-main path:
+
+1. firmware latches a stable baseline weight
+2. runtime uses a moving-average derived weight
+3. relative deviation is computed as `abs(ma_weight - stable_weight) / stable_weight`
+4. if deviation leaves the safe band and does not recover within the recovery window, it can enter danger candidate
+5. if the danger condition holds long enough, firmware emits a danger stop candidate such as `ABNORMAL_UNRECOVERED_HOLD_TIMEOUT`
+6. `SystemStateMachine::decideFallSuspectedAction()` maps that candidate to `FALL_SUSPECTED` action semantics
+
+This path explains why double-feet-only tests can trigger fall protection without any BLE disconnect:
+
+- the user may still be present
+- weight may not drop below leave threshold
+- but the relative moving-average deviation can exceed the baseline-main abnormal window
+
 ## Distinction From USER_LEFT_PLATFORM
 
 `USER_LEFT_PLATFORM` is driven by a different path:
@@ -40,6 +61,13 @@ Meaning:
 - `FALL_SUSPECTED` is instantaneous rate based
 
 This means normal vibration can keep weight above leave threshold, avoid `USER_LEFT_PLATFORM`, and still trip `FALL_SUSPECTED` if the derived weight changes fast enough between samples.
+
+Protection switch boundary:
+
+- `fall_stop_enabled=false` suppresses `FALL_SUSPECTED` stop action only
+- it still allows fall-suspected detection and `WARNING_ONLY` visibility
+- it does not suppress `USER_LEFT_PLATFORM`
+- leave-platform auto-stop / recoverable pause must remain active even when fall-stop protection is disabled
 
 ## Why False Positives Are Plausible
 
@@ -160,3 +188,19 @@ That fix was intentionally kept separate from fall logic:
 
 - sampling mode still suppresses fall-triggered stop only
 - leave-platform action closure still remains active
+
+## Review Lesson
+
+Do not infer safety behavior from the UI label alone.
+
+For future audits, inspect all three layers before proposing changes:
+
+1. firmware detector and `SystemStateMachine` action mapping
+2. SW APP `SAFETY / STOP / FAULT` consumption
+3. Demo APP debug control and export wording
+
+The product phrase “关闭律动保护” must be expanded in engineering documents as:
+
+- suppress `FALL_SUSPECTED` auto-stop
+- keep detection and warning
+- keep `USER_LEFT_PLATFORM` auto-stop

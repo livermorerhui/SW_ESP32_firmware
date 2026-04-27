@@ -28,7 +28,7 @@ Current baseline behavior:
 - laser directly measures distance / displacement
 - firmware derives weight through the calibration model
 - `USER_LEFT_PLATFORM` currently comes from derived-weight hysteresis and a falling-edge user-off trigger
-- `FALL_SUSPECTED` currently comes from a single-frame derived-weight rate threshold during `RUNNING`
+- `FALL_SUSPECTED` can be raised from motion-safety abnormal evidence during `RUNNING`; recent PLUS normal testing observed the baseline-main abnormal-hold path rather than a BLE failure
 - `SystemStateMachine` maps runtime safety reasons into the existing public contract:
   - `EVT:STATE`
   - `EVT:FAULT`
@@ -165,6 +165,26 @@ The detector layer should still map back into the existing firmware-facing contr
 
 - `LEFT_PLATFORM` -> `USER_LEFT_PLATFORM` -> usually `RECOVERABLE_PAUSE`
 - `FALL_CONFIRMED` -> `FALL_SUSPECTED` -> usually `ABNORMAL_STOP`
+
+### Protection switch boundary
+
+The runtime protection switch currently exposed as `DEBUG:FALL_STOP enabled=0/1` only controls whether a `FALL_SUSPECTED` candidate executes the stop action.
+
+It must not be interpreted as a global safety bypass:
+
+- `enabled=1`: `FALL_SUSPECTED` can execute the configured stop policy, currently abnormal stop
+- `enabled=0`: `FALL_SUSPECTED` remains detectable and observable, but the action is suppressed to `WARNING_ONLY`
+- `USER_LEFT_PLATFORM` remains independent and must still stop / pause the wave through the leave-platform path
+
+Product meaning:
+
+- disabling fall-stop protection is intended for lower-risk lower-limb-only use cases where a large rhythmic load shift can be acceptable
+- leaving the platform is different: the runtime condition is no longer valid, so leave-platform auto-stop remains active
+
+Audit rule:
+
+- do not describe `DEBUG:FALL_STOP enabled=0` as “turning off rhythm safety”
+- describe it as “suppressing fall-suspected auto-stop while keeping detection, warning, logs, and leave-platform stop”
 
 ## Demo APP Debug Sampling
 
