@@ -103,6 +103,9 @@ static constexpr bool DEBUG_MEASUREMENT_PLANE_VERBOSE = false;
 #define FAULT_COOLDOWN_MS     3000
 #define CLEAR_CONFIRM_MS      1000
 static constexpr uint32_t MOTION_SAMPLING_SUPPRESSED_FALL_NOTICE_INTERVAL_MS = 1000UL;
+static constexpr bool MOTION_SAFETY_SHADOW_RUNTIME_ENABLED = true;
+static constexpr uint32_t MOTION_SAFETY_SHADOW_LOG_INTERVAL_MS = 2000UL;
+static constexpr bool MOTION_SAFETY_SHADOW_VERBOSE_RESET_LOG = false;
 // 摔倒停波保护默认开启：达到跌倒危险停波候选时执行真实停波动作。
 static constexpr bool FALL_STOP_ENABLED_DEFAULT = true;
 

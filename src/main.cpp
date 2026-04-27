@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <esp_heap_caps.h>
+#include <esp_system.h>
 #include "config/GlobalConfig.h"
 #include "core/EventBus.h"
 #include "core/CommandBus.h"
@@ -16,6 +18,24 @@ static LaserModule g_laser;
 static BleTransport g_ble;
 static String g_bleDeviceName;
 static String buildBleDeviceName(PlatformModel model);
+
+static const char* resetReasonName(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON: return "POWERON";
+    case ESP_RST_EXT: return "EXT";
+    case ESP_RST_SW: return "SW";
+    case ESP_RST_PANIC: return "PANIC";
+    case ESP_RST_INT_WDT: return "INT_WDT";
+    case ESP_RST_TASK_WDT: return "TASK_WDT";
+    case ESP_RST_WDT: return "WDT";
+    case ESP_RST_DEEPSLEEP: return "DEEPSLEEP";
+    case ESP_RST_BROWNOUT: return "BROWNOUT";
+    case ESP_RST_SDIO: return "SDIO";
+    case ESP_RST_UNKNOWN:
+    default:
+      return "UNKNOWN";
+  }
+}
 
 static void appendKeyValue(String& out, const char* key, const char* value) {
   out += key;
@@ -340,6 +360,22 @@ void setup() {
   Serial.begin(115200);
   delay(1500);
   Serial.println("\n=== SonicWave Hub FW (Integrated) ===");
+  const esp_reset_reason_t resetReason = esp_reset_reason();
+  Serial.printf(
+      "[BOOT_DIAG] fw=%s proto=%d reset_reason=%s(%d) heap_free=%u heap_min_free=%u psram_free=%u board=sonicwave_esp32s3_n16r8 psram_enabled=%d\n",
+      FW_VER,
+      PROTO_VER,
+      resetReasonName(resetReason),
+      static_cast<int>(resetReason),
+      static_cast<unsigned>(ESP.getFreeHeap()),
+      static_cast<unsigned>(esp_get_minimum_free_heap_size()),
+      static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
+#ifdef BOARD_HAS_PSRAM
+      1
+#else
+      0
+#endif
+  );
 
   // Init order: bus -> state machine -> modules -> BLE transport.
   g_eventBus.setSink(&g_ble);

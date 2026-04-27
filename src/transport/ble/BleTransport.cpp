@@ -22,6 +22,7 @@ static constexpr uint16_t kConnParamLatency = 0;
 static constexpr uint16_t kConnParamTimeout = 400;
 static constexpr uint32_t kStreamControlHoldoffMs = 35;
 static constexpr uint32_t kStreamSendSkipLogEvery = 50;
+static constexpr uint32_t kTxPressureLogIntervalMs = 2000;
 static constexpr esp_power_level_t kBleDefaultTxPowerLevel = ESP_PWR_LVL_P3;
 static constexpr esp_power_level_t kBleAdvertisingFastPowerLevel = ESP_PWR_LVL_P3;
 static constexpr esp_power_level_t kBleAdvertisingIdlePowerLevel = ESP_PWR_LVL_N0;
@@ -507,6 +508,13 @@ void BleTransport::resetSessionOnConnect(BLEServer* server,
   lastDisconnectRawReason = 0;
   (void)server;
   logSessionEvent("connect", sessionId, connId, DisconnectReasonCode::UNKNOWN);
+  Serial.printf(
+      "[BLE_LIFECYCLE] event=connect session_id=%lu conn_id=%u connected_count=%u mtu=%u remote_bda_valid=%d\n",
+      static_cast<unsigned long>(sessionId),
+      static_cast<unsigned>(connId),
+      static_cast<unsigned>(pServer ? pServer->getConnectedCount() : 0),
+      static_cast<unsigned>(negotiatedMtu),
+      remoteBdaValid ? 1 : 0);
 }
 
 void BleTransport::resetSessionOnDisconnect(uint16_t connId,
@@ -536,6 +544,17 @@ void BleTransport::resetSessionOnDisconnect(uint16_t connId,
   lastDisconnectReasonCode = reasonCode;
   lastDisconnectRawReason = rawReason;
   logSessionEvent("disconnect", sessionId, connId, reasonCode, rawReason);
+  Serial.printf(
+      "[BLE_LIFECYCLE] event=disconnect session_id=%lu conn_id=%u reason_code=%s raw_reason=%u connected_count=%u tx_skips=%lu control_drops=%lu critical_drops=%lu stream_replaced=%lu\n",
+      static_cast<unsigned long>(sessionId),
+      static_cast<unsigned>(connId),
+      disconnectReasonCodeName(reasonCode),
+      static_cast<unsigned>(rawReason),
+      static_cast<unsigned>(pServer ? pServer->getConnectedCount() : 0),
+      static_cast<unsigned long>(txSendSkipCount),
+      static_cast<unsigned long>(txControlDropCount),
+      static_cast<unsigned long>(txCriticalEventDropCount),
+      static_cast<unsigned long>(txStreamReplaceCount));
 }
 
 void BleTransport::noteRxActivity(uint32_t nowMs, size_t rxBytes) {
@@ -877,14 +896,48 @@ TickType_t BleTransport::controlTaskIdleWaitTicks() const {
 }
 
 void BleTransport::startAdvertisingSafe(const char* reason) {
-  if (!pServer) return;
-  if (deviceConnected || advertisingActive) return;
+  if (!pServer) {
+    Serial.printf("[BLE_ADV] action=skip reason=%s skip_reason=no_server\n", reason ? reason : "unspecified");
+    return;
+  }
+  if (deviceConnected || advertisingActive) {
+    Serial.printf(
+        "[BLE_ADV] action=skip reason=%s skip_reason=%s active=%d connected=%d session_id=%lu\n",
+        reason ? reason : "unspecified",
+        deviceConnected ? "device_connected" : "already_active",
+        advertisingActive ? 1 : 0,
+        deviceConnected ? 1 : 0,
+        static_cast<unsigned long>(sessionId));
+    return;
+  }
   BLEAdvertising* adv = pServer->getAdvertising();
-  if (!adv) return;
+  if (!adv) {
+    Serial.printf("[BLE_ADV] action=skip reason=%s skip_reason=no_advertising\n", reason ? reason : "unspecified");
+    return;
+  }
   uint32_t now = millis();
-  if (now - lastAdvRestartMs < kAdvRestartMinIntervalMs) return;
+  const uint32_t sinceRestartMs = now - lastAdvRestartMs;
+  if (sinceRestartMs < kAdvRestartMinIntervalMs) {
+    Serial.printf(
+        "[BLE_ADV] action=skip reason=%s skip_reason=restart_rate_limited since_last_restart_ms=%lu min_ms=%lu active=%d connected=%d session_id=%lu\n",
+        reason ? reason : "unspecified",
+        static_cast<unsigned long>(sinceRestartMs),
+        static_cast<unsigned long>(kAdvRestartMinIntervalMs),
+        advertisingActive ? 1 : 0,
+        deviceConnected ? 1 : 0,
+        static_cast<unsigned long>(sessionId));
+    return;
+  }
   advertisingStartRequests += 1;
   logAdvertisingAction("start_request", reason);
+  Serial.printf(
+      "[BLE_ADV] action=start reason=%s since_last_restart_ms=%lu active=%d connected=%d starts=%lu session_id=%lu\n",
+      reason ? reason : "unspecified",
+      static_cast<unsigned long>(sinceRestartMs),
+      advertisingActive ? 1 : 0,
+      deviceConnected ? 1 : 0,
+      static_cast<unsigned long>(advertisingStartRequests),
+      static_cast<unsigned long>(sessionId));
   adv->start();
   lastAdvRestartMs = now;
   advertisingActive = true;
@@ -896,6 +949,12 @@ void BleTransport::stopAdvertisingSafe(const char* reason) {
   if (!adv) return;
   advertisingStopRequests += 1;
   logAdvertisingAction("stop_request", reason);
+  Serial.printf(
+      "[BLE_ADV] action=stop reason=%s starts=%lu stops=%lu session_id=%lu\n",
+      reason ? reason : "unspecified",
+      static_cast<unsigned long>(advertisingStartRequests),
+      static_cast<unsigned long>(advertisingStopRequests),
+      static_cast<unsigned long>(sessionId));
   adv->stop();
   advertisingActive = false;
 }
@@ -1101,6 +1160,7 @@ void BleTransport::noteTxEnqueueFailure(TxFrameClass frameClass, const char* ori
       static_cast<unsigned long>(txControlDropCount),
       static_cast<unsigned>(txControlQueue ? uxQueueMessagesWaiting(txControlQueue) : 0U),
       line ? line : "");
+  logTxPressureSnapshot("enqueue_failed", millis(), true);
 }
 
 void BleTransport::noteEventEnqueueFailure(EventType type, const char* line) {
@@ -1135,6 +1195,7 @@ void BleTransport::noteTxSendSkipped(TxFrameClass frameClass, const char* reason
       deviceConnected ? 1 : 0,
       static_cast<void*>(pTx),
       line ? line : "");
+  logTxPressureSnapshot("send_skipped", millis(), true);
 }
 
 void BleTransport::markReconnectSnapshotDirty(TxFrameClass frameClass, const char* origin, const char* line) {
@@ -1174,6 +1235,29 @@ void BleTransport::noteReconnectSnapshotDelivered(const char* origin, const char
   reconnectSnapshotDirty = false;
   reconnectSnapshotDirtySinceMs = 0;
   reconnectSnapshotDirtyCount = 0;
+}
+
+void BleTransport::logTxPressureSnapshot(const char* reason, uint32_t nowMs, bool force) {
+  if (!force && lastTxPressureLogMs != 0 && nowMs - lastTxPressureLogMs < kTxPressureLogIntervalMs) {
+    return;
+  }
+  lastTxPressureLogMs = nowMs;
+  Serial.printf(
+      "[BLE_TX_PRESSURE] reason=%s session_id=%lu connected=%d control_depth=%u stream_depth=%u control_high=%u stream_high=%u control_drops=%lu critical_drops=%lu classified_drops=%lu send_skips=%lu stream_replaced=%lu stream_suppressed=%lu lifecycle_drops=%lu\n",
+      reason ? reason : "periodic",
+      static_cast<unsigned long>(sessionId),
+      deviceConnected ? 1 : 0,
+      static_cast<unsigned>(txControlQueue ? uxQueueMessagesWaiting(txControlQueue) : 0U),
+      static_cast<unsigned>(txStreamQueue ? uxQueueMessagesWaiting(txStreamQueue) : 0U),
+      static_cast<unsigned>(txControlHighWatermark),
+      static_cast<unsigned>(txStreamHighWatermark),
+      static_cast<unsigned long>(txControlDropCount),
+      static_cast<unsigned long>(txCriticalEventDropCount),
+      static_cast<unsigned long>(txClassifiedDropCount),
+      static_cast<unsigned long>(txSendSkipCount),
+      static_cast<unsigned long>(txStreamReplaceCount),
+      static_cast<unsigned long>(txStreamSuppressedForControlCount),
+      static_cast<unsigned long>(lifecycleControlDropCount));
 }
 
 bool BleTransport::tryHandleDirectQuery(const String& s) {
@@ -1231,29 +1315,55 @@ void BleTransport::sendLineNow(const char* s) {
 
   logTruthPayloadBudgetWarningIfNeeded(s, framed.length());
 
-  if (negotiatedMtu >= 23) {
-    const uint16_t notifyPayloadLimit = negotiatedMtu - 3;
-    if (framed.length() > notifyPayloadLimit) {
+  const TxFrameClass frameClass = classifyTxLine(s);
+  const bool streamFrame = frameClass == TxFrameClass::STREAM_EVENT;
+  const uint16_t notifyPayloadLimit = (negotiatedMtu >= 23) ? (negotiatedMtu - 3) : 20;
+  const size_t framedLen = framed.length();
+  const bool fragmented = framedLen > notifyPayloadLimit;
+
+  if (fragmented) {
+    txFragmentedFrameCount += 1;
+    const size_t chunkCount = (framedLen + notifyPayloadLimit - 1) / notifyPayloadLimit;
+    if (txFragmentedFrameCount <= 5 || (txFragmentedFrameCount % 50) == 0) {
       Serial.printf(
-          "[BLE TX] warn=payload_exceeds_mtu framed_len=%u mtu=%u payload_limit=%u prefix=%s\n",
-          static_cast<unsigned>(framed.length()),
+          "[BLE TX] event=notify_fragmented class=%s framed_len=%u mtu=%u payload_limit=%u chunks=%u fragmented_frames=%lu prefix=%s\n",
+          txFrameClassName(frameClass),
+          static_cast<unsigned>(framedLen),
           static_cast<unsigned>(negotiatedMtu),
           static_cast<unsigned>(notifyPayloadLimit),
+          static_cast<unsigned>(chunkCount),
+          static_cast<unsigned long>(txFragmentedFrameCount),
           s);
     }
   }
 
-  const TxFrameClass frameClass = classifyTxLine(s);
-  pTx->setValue((uint8_t*)framed.c_str(), framed.length());
-  pTx->notify();
-  const bool streamFrame = frameClass == TxFrameClass::STREAM_EVENT;
+  size_t offset = 0;
+  while (offset < framedLen) {
+    if (!deviceConnected || !pTx) {
+      noteTxSendSkipped(frameClass, "notify_fragment_interrupted", s);
+      return;
+    }
+
+    const size_t remaining = framedLen - offset;
+    const size_t chunkLen = remaining > notifyPayloadLimit ? notifyPayloadLimit : remaining;
+    String chunk = framed.substring(offset, offset + chunkLen);
+    pTx->setValue((uint8_t*)chunk.c_str(), chunk.length());
+    pTx->notify();
+    offset += chunkLen;
+
+    if (fragmented && offset < framedLen) {
+      vTaskDelay(1);
+    }
+  }
+
   if (!streamFrame) {
     lastControlTxAtMs = millis();
   }
-  noteTxNotifyIssued(millis(), framed.length(), streamFrame);
+  noteTxNotifyIssued(millis(), framedLen, streamFrame);
   if (frameClass == TxFrameClass::SNAPSHOT) {
     noteReconnectSnapshotDelivered("snapshot_notify", s);
   }
+  logTxPressureSnapshot(streamFrame ? "stream_notify" : "control_notify", millis(), false);
 #if DEBUG_BLE_TX_VERBOSE
   Serial.println("[BLE TX] notify() called");
 #endif

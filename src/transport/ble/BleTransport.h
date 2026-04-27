@@ -189,6 +189,7 @@ private:
   void markReconnectSnapshotDirty(TxFrameClass frameClass, const char* origin, const char* line);
   void noteReconnectSnapshotPending(const char* origin) const;
   void noteReconnectSnapshotDelivered(const char* origin, const char* line);
+  void logTxPressureSnapshot(const char* reason, uint32_t nowMs, bool force);
 
   friend class MyServerCallbacks;
   friend class MyRxCallbacks;
@@ -245,6 +246,7 @@ private:
   uint32_t txStreamReplaceCount = 0;
   uint32_t txStreamSuppressedForControlCount = 0;
   uint32_t txStreamSuppressionBurstCount = 0;
+  uint32_t txFragmentedFrameCount = 0;
   uint32_t txStreamSuppressionBurstStartedAtMs = 0;
   UBaseType_t txStreamSuppressionBurstMaxControlDepth = 0;
   uint32_t lastControlTxAtMs = 0;
@@ -256,4 +258,5 @@ private:
   bool advertisingActive = false;
   uint32_t advertisingStartRequests = 0;
   uint32_t advertisingStopRequests = 0;
+  uint32_t lastTxPressureLogMs = 0;
 };
