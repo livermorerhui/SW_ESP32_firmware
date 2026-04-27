@@ -860,32 +860,35 @@ void LaserModule::pushStableSample(float distance, float weight) {
 
 bool LaserModule::updatePresenceState(float weight) {
   const LaserPresenceThresholdConfig& presence = phase2Thresholds.presence;
-  const uint8_t confirmSamples = presence.confirmSamples == 0 ? 1 : presence.confirmSamples;
-  const bool previousUserPresent = stableContract.userPresent;
 
   if (weight >= presence.enterThresholdKg) {
     if (presenceEnterConfirmCount < 0xFF) {
       presenceEnterConfirmCount++;
     }
     presenceExitConfirmCount = 0;
-    if (!stableContract.userPresent && presenceEnterConfirmCount >= confirmSamples) {
-      stableContract.userPresent = true;
-      invalidPresenceSamples = 0;
-    }
   } else if (weight <= presence.exitThresholdKg) {
     if (presenceExitConfirmCount < 0xFF) {
       presenceExitConfirmCount++;
     }
     presenceEnterConfirmCount = 0;
-    if (stableContract.userPresent && presenceExitConfirmCount >= confirmSamples) {
-      stableContract.userPresent = false;
-    }
   } else {
     presenceEnterConfirmCount = 0;
     presenceExitConfirmCount = 0;
   }
 
-  return previousUserPresent != stableContract.userPresent;
+  PresenceContractInput input{};
+  input.weightKg = weight;
+  input.currentUserPresent = stableContract.userPresent;
+  input.enterConfirmCount = presenceEnterConfirmCount;
+  input.exitConfirmCount = presenceExitConfirmCount;
+  const PresenceContractResult result =
+      PresenceContractEvaluator::evaluate(presence, input);
+
+  stableContract.userPresent = result.nextUserPresent;
+  if (result.changed && stableContract.userPresent) {
+    invalidPresenceSamples = 0;
+  }
+  return result.changed;
 }
 
 void LaserModule::noteInvalidPresenceSample(uint32_t now, const char* reason) {
@@ -1431,12 +1434,16 @@ void LaserModule::updateStableState(float distance, float weight, uint32_t now) 
     return;
   }
 
-  const bool stableEligible =
-      metrics.stddev < phase2Thresholds.stable.enterStdDevKg &&
-      metrics.range < phase2Thresholds.stable.enterRangeKg &&
-      metrics.drift < phase2Thresholds.stable.enterDriftKg;
-  if (!stableEligible) {
-    stableConfirmCount = 0;
+  BaselineEvidenceInput baselineInput{};
+  baselineInput.metrics.valid = metrics.valid;
+  baselineInput.metrics.stddev = metrics.stddev;
+  baselineInput.metrics.range = metrics.range;
+  baselineInput.metrics.drift = metrics.drift;
+  baselineInput.currentStableConfirmCount = stableConfirmCount;
+  const BaselineEvidenceResult baselineResult =
+      BaselineEvidenceEvaluator::evaluate(phase2Thresholds.stable, baselineInput);
+  if (!baselineResult.stableEligible) {
+    stableConfirmCount = baselineResult.nextStableConfirmCount;
     if (!stableEarlyCheckpointLogged) {
       stableEarlyCheckpointLogged = true;
       Serial.printf(
@@ -1445,18 +1452,16 @@ void LaserModule::updateStableState(float distance, float weight, uint32_t now) 
           metrics.stddev,
           metrics.range,
           metrics.drift,
-          metrics.stddev < phase2Thresholds.stable.enterStdDevKg ? 1 : 0,
-          metrics.range < phase2Thresholds.stable.enterRangeKg ? 1 : 0,
-          metrics.drift < phase2Thresholds.stable.enterDriftKg ? 1 : 0);
+          baselineResult.stddevOk ? 1 : 0,
+          baselineResult.rangeOk ? 1 : 0,
+          baselineResult.driftOk ? 1 : 0);
     }
     return;
   }
 
   stableEarlyCheckpointLogged = false;
-  if (stableConfirmCount < 0xFF) {
-    stableConfirmCount++;
-  }
-  if (stableConfirmCount < phase2Thresholds.stable.enterConfirmWindows) {
+  stableConfirmCount = baselineResult.nextStableConfirmCount;
+  if (!baselineResult.baselineEligible) {
     return;
   }
 

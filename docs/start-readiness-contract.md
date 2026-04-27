@@ -152,3 +152,55 @@ Diagnostics note:
 - It must not become an APP / Demo APP protocol dependency.
 - It does not change `start_ready`, `baseline_ready`, BLE wire format, or
   `WAVE:START` ACK/NACK behavior.
+
+## Baseline / Presence Owner Freeze
+
+2026-04-27 audit result:
+
+- `LaserModule` still owns the timing relationship between presence, stable
+  latch, baseline latch, occupied-cycle cleanup, and start-readiness write-back.
+- `SystemStateMachine` still owns `runtime_ready`, `start_ready`, leave action,
+  and final `WAVE:START` allow/reject.
+- `RhythmStateJudge` mirrors accepted baseline evidence for motion safety
+  evaluation only; it must not become a waveform stop/start action owner.
+
+Frozen internal meanings:
+
+- `userPresent` is occupied/user-on-platform evidence.
+- `runtime_ready` mirrors presence only and must not be used as the formal
+  laser-equipped start gate by APPs.
+- `stableReadyLive` is live stable-window evidence.
+- `baselineReadyLatched` is durable baseline truth for the current occupied
+  cycle.
+- `start_ready` is derived from measurement health, presence, and durable
+  baseline truth.
+
+Do not move these actions in the first baseline/presence extraction:
+
+- `SystemStateMachine::onUserOff`
+- `SystemStateMachine::setRuntimeReady`
+- `SystemStateMachine::setStartReadiness`
+- occupied-cycle `lock/release`
+- effective-zero lock/unlock
+- `RhythmStateJudge::refreshBaselineFromStable`
+- `RhythmStateJudge::reset`
+- baseline clear ordering after confirmed leave
+
+Safe next refactor cut:
+
+- Extract presence/baseline pure decision helpers only.
+- Return next state, changed flag, and reason.
+- Keep action timing and all BLE protocol output in the current owners until a
+  separate action-owner audit approves moving them.
+
+Implementation note:
+
+- `PresenceContractEvaluator` owns only the pure presence decision:
+  `nextUserPresent`, `changed`, and `reason`.
+- `BaselineEvidenceEvaluator` owns only the pure stable-window and baseline
+  eligibility decision: window readiness, threshold pass/fail, next confirm
+  count, and baseline eligibility.
+- `LaserModule` still owns enter/exit counters, `invalidPresenceSamples`,
+  candidate entry/reset, stable latch execution, occupied-cycle lock/release,
+  `SystemStateMachine::onUserOff`, `SystemStateMachine::setRuntimeReady`, and
+  all downstream action timing.
