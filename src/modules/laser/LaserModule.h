@@ -1,25 +1,21 @@
 #pragma once
 #include <Arduino.h>
-#include <ModbusMaster.h>
 #include <Preferences.h>
 #include "config/LaserPhase2Config.h"
 #include "core/DeviceConfig.h"
 #include "core/EventBus.h"
 #include "core/SystemStateMachine.h"
+#include "modules/laser/CalibrationModelStore.h"
+#include "modules/laser/DeviceConfigStore.h"
+#include "modules/laser/LaserMeasurementReader.h"
+#include "modules/laser/MeasurementPlane.h"
+#include "modules/laser/MotionSafetyShadowEvaluator.h"
 #include "modules/laser/RhythmStateJudge.h"
+#include "modules/laser/RuntimeZeroObserver.h"
+#include "modules/laser/RunSummaryCollector.h"
+#include "modules/laser/StartGateContractEvaluator.h"
 
 class WaveModule;
-
-enum class CalibrationModelType : uint8_t {
-  LINEAR = 1,
-  QUADRATIC = 2
-};
-
-struct CalibrationModel {
-  CalibrationModelType type = CalibrationModelType::LINEAR;
-  float referenceDistance = 0.0f;
-  float coefficients[3] = {0.0f, 1.0f, 0.0f};
-};
 
 struct CalibrationCapture {
   uint32_t index = 0;
@@ -88,10 +84,6 @@ public:
 private:
   static void taskThunk(void* arg);
   void taskLoop();
-  bool isDistanceSentinelRaw(uint16_t rawRegister, int16_t signedRaw, const char*& reason) const;
-  bool isDistanceValidRaw(int16_t signedRaw, const char*& reason) const;
-  void noteModbusReadFailure(uint8_t result, uint32_t now);
-  void clearModbusReadFailureBurst(uint32_t now, bool flushSummary = true);
   void noteDistanceValidity(
       bool valid,
       uint16_t rawRegister,
@@ -109,8 +101,6 @@ private:
   void saveCalibrationModel();
   void syncLegacyParamsFromModel();
   bool applyCalibrationModel(const CalibrationModel& model, bool persist, const char* source, String& reason);
-  bool isCalibrationModelFinite(const CalibrationModel& model) const;
-  bool isCalibrationModelMonotonic(const CalibrationModel& model) const;
   float evaluateCalibrationWeight(float distance) const;
   float evaluateCalibrationWeight(const CalibrationModel& model, float distance) const;
   float evaluateCalibrationWeight(
@@ -118,7 +108,6 @@ private:
       float distance,
       float zeroReferenceDistance) const;
   float computeUnlockedEffectiveZeroDistance() const;
-  bool runtimeZeroRefreshFrozen(TopState currentTopState) const;
   void lockEffectiveZeroForOccupiedCycle(uint32_t now, const char* reason);
   void releaseOccupiedCycle(const char* reason, uint32_t now);
   void resetRuntimeZero(const char* reason);
@@ -161,25 +150,13 @@ private:
   void finishRunSummary(uint32_t now,
                         FaultCode stopReason,
                         const RhythmStateUpdateResult& rhythmResult);
-  bool computeRunAverage(uint8_t window, float& avgWeight, float& avgDistance) const;
   void resetMeasurementPlane(const char* reason, bool logReset);
-  void pushMeasurementWeightSample(float weight);
-  bool currentMa12(float& out) const;
   void publishMeasurementSample(
       uint32_t now,
       bool valid,
       float distance,
       float weight,
       const char* reason);
-  void logMeasurementPlaneSummary(
-      uint32_t now,
-      bool valid,
-      float distance,
-      float weight,
-      bool ma12Ready,
-      float ma12,
-      const char* reason,
-      const char* trigger);
   void logLatestMeasurementPlaneSummary(const char* trigger);
 
   float getMean(const float* values) const;
@@ -192,51 +169,14 @@ private:
     STABLE_LATCHED
   };
 
-  struct RangeTracker {
-    bool valid = false;
-    float min = 0.0f;
-    float max = 0.0f;
-  };
-
-  // Per-run evidence stays local so stop/abort summaries can stay concise.
-  struct RunSummaryState {
-    bool active = false;
-    uint32_t nextTestId = 1;
-    uint32_t testId = 0;
-    uint32_t startedAtMs = 0;
-    uint32_t samples = 0;
-    bool baselineReady = false;
-    float freqHz = 0.0f;
-    int intensity = 0;
-    float intensityNormalized = 0.0f;
-    float baselineWeightKg = 0.0f;
-    float baselineDistance = 0.0f;
-    bool fallStopEnabled = FALL_STOP_ENABLED_DEFAULT;
-    RhythmStateStatus lastRhythmStatus = RhythmStateStatus::BASELINE_PENDING;
-    const char* lastRhythmReason = "baseline_pending";
-    RangeTracker weightKgRange{};
-    RangeTracker distanceRange{};
-    RangeTracker ma3WeightKgRange{};
-    RangeTracker ma3DistanceRange{};
-    RangeTracker ma5WeightKgRange{};
-    RangeTracker ma5DistanceRange{};
-    RangeTracker ma12WeightKgRange{};
-    RangeTracker ma12DistanceRange{};
-    uint16_t advisoryCount = 0;
-    RiskAdvisoryType lastAdvisoryType = RiskAdvisoryType::NONE;
-    RiskAdvisoryLevel lastAdvisoryLevel = RiskAdvisoryLevel::NONE;
-    const char* lastAdvisoryReason = "none";
-    float recentWeightKg[12]{};
-    float recentDistance[12]{};
-    uint8_t recentHead = 0;
-    uint8_t recentCount = 0;
-  };
-
   EventBus* bus = nullptr;
   SystemStateMachine* sm = nullptr;
   WaveModule* wave = nullptr;
 
-  ModbusMaster node;
+  LaserMeasurementReader measurementReader;
+  MeasurementPlane measurementPlane;
+  DeviceConfigStore deviceConfigStore;
+  CalibrationModelStore calibrationModelStore;
   Preferences preferences;
   DeviceConfigSnapshot deviceConfig{};
   LaserPhase2ThresholdConfig phase2Thresholds{};
@@ -287,32 +227,12 @@ private:
   bool hasLoggedMeasurementBypassState = false;
   bool lastLoggedMeasurementBypassState = false;
   const char* lastInvalidReason = nullptr;
-  bool hasLoggedModbusReadFailure = false;
-  uint8_t lastModbusReadFailureCode = 0;
-  uint32_t lastModbusReadFailureLogMs = 0;
-  uint32_t suppressedModbusReadFailureCount = 0;
   uint32_t calibrationCaptureCounter = 0;
-  float ma12WeightBuffer[MEASUREMENT_MA12_WINDOW]{};
-  uint8_t ma12Head = 0;
-  uint8_t ma12Count = 0;
-  uint32_t measurementSequence = 0;
-  uint32_t measurementPlaneLogStartedAtMs = 0;
-  uint32_t measurementPlaneLogSamples = 0;
-  uint32_t lastInvalidMeasurementEventMs = 0;
-  const char* lastInvalidMeasurementEventReason = nullptr;
-  bool hasLatestMeasurementSample = false;
-  bool latestMeasurementSampleValid = false;
-  float latestMeasurementSampleDistance = 0.0f;
-  float latestMeasurementSampleWeight = 0.0f;
-  bool latestMeasurementSampleMa12Ready = false;
-  float latestMeasurementSampleMa12 = 0.0f;
-  const char* latestMeasurementSampleReason = nullptr;
-  bool hasLoggedMeasurementSummary = false;
-  bool lastLoggedMeasurementSummaryValid = false;
-  const char* lastLoggedMeasurementSummaryReason = nullptr;
   // Primary Judgment Owner：
   // MA12 / deviation / ratio / main_state / duration 统一由 RhythmStateJudge 维护。
   RhythmStateJudge rhythmStateJudge{};
-  RunSummaryState runSummary{};
+  MotionSafetyShadowEvaluator motionSafetyShadow{};
+  RuntimeZeroObserver runtimeZeroObserver{};
+  RunSummaryCollector runSummaryCollector{};
   TopState lastObservedTopState = TopState::IDLE;
 };

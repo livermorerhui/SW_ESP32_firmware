@@ -108,3 +108,37 @@ Before changing start-button behavior, verify:
   paths
 - does connect-time `SNAPSHOT` remain small enough for the common single-notify
   MTU path
+
+## StableContract / StartGate Owner Freeze
+
+2026-04-27 audit result:
+
+- `LaserModule` owns `StableContractState`.
+- `SystemStateMachine` owns final `requestStart` allow/reject.
+- APP / Demo APP consume firmware truth through `SNAPSHOT.start_ready`,
+  `SNAPSHOT.baseline_ready`, and `EVT:BASELINE`; they must not re-derive
+  ESP32 start readiness from local UI state.
+
+Frozen internal meanings:
+
+- `runtime_ready` means presence / user-present evidence.
+- `start_ready` is the formal start gate for laser-equipped non-BASE profiles.
+- `baseline_ready` is baseline evidence, not the only start/continue owner.
+- `WAVE:START` must keep returning `NACK:NOT_ARMED` for unmet readiness and
+  `NACK:FAULT_LOCKED` for blocking faults.
+
+Safe next refactor cut:
+
+- Extract only the pure start-gate decision from `syncStartReadyContract`.
+- Keep `StableContractState`, baseline latch/clear, `setStartReadiness` timing,
+  leave clear, rhythm reset, and effective-zero lock/unlock in `LaserModule`
+  until a separate contract audit approves moving them.
+
+Implementation note:
+
+- `StartGateContractEvaluator` now owns only the pure decision and reason
+  calculation.
+- `LaserModule` still owns state write-back and when to call
+  `SystemStateMachine::setStartReadiness`.
+- This extraction does not change `SNAPSHOT`, `EVT:BASELINE`, or `WAVE:START`
+  behavior.
