@@ -81,6 +81,19 @@ Frozen rule:
 - ESP32 evidence: `START ALLOW=1`, `STOP_SUMMARY=1`, `reconnect_snapshot_compensated=2`, no reset/panic/Brownout/Guru, no `MEASUREMENT_TRANSIENT`, no Modbus read fail.
 - Disconnected `send_skipped` logs were reduced to the `FirmwareLogPolicy` cadence; `BLE_TX_PRESSURE` remains a periodic diagnostic summary.
 
+2026-04-28 StopOutcome summary boundary:
+
+- `EVT:STOP` remains the final stop-context truth source for BLE consumers.
+- `STOP_SUMMARY / ABORT_SUMMARY` remains serial evidence only.
+- `StopOutcomeSummaryEvaluator` owns only summary classification from already-published stop context; it does not stop the wave and does not publish BLE events.
+- Summary field names are unchanged.
+- Recoverable stops must not be reported as abnormal summary only because `FaultCode != NONE`.
+- Current classification:
+  - `NONE` -> `STOP_SUMMARY result=NORMAL`
+  - `RECOVERABLE_PAUSE` -> `STOP_SUMMARY result=RECOVERABLE_PAUSE`
+  - `WARNING_ONLY` -> `STOP_SUMMARY result=WARNING_ONLY`
+  - `ABNORMAL_STOP` -> `ABORT_SUMMARY result=ABNORMAL_STOP`
+
 Recommended APP mapping:
 
 - `RECOVERABLE_PAUSE` -> paused

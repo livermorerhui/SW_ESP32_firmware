@@ -69,11 +69,28 @@
 - 对齐 `EVT:STOP`、`STOP_SUMMARY`、`SNAPSHOT.current_reason_code`、Android session stop reason 的语义边界。
 - 确认哪些是正式合同，哪些只是串口 evidence。
 
+当前状态：
+
+- 2026-04-28 审计完成，结论见 `reports/task_20260428_stop_reason_run_summary_evt_stop_consistency_audit.md`。
+- 2026-04-28 已完成 `StopOutcomeSummaryEvaluator` 最小纯函数抽取。
+- `RunSummaryCollector` 仍只输出串口 evidence，不成为正式 stop owner。
+- `STOP_SUMMARY / ABORT_SUMMARY` 的字段名不变；分类由 `FaultCode != NONE` 改为基于已发布 stop context 的 `SafetySignalKind`：
+  - `NONE` -> `STOP_SUMMARY result=NORMAL`
+  - `RECOVERABLE_PAUSE` -> `STOP_SUMMARY result=RECOVERABLE_PAUSE`
+  - `WARNING_ONLY` -> `STOP_SUMMARY result=WARNING_ONLY`
+  - `ABNORMAL_STOP` -> `ABORT_SUMMARY result=ABNORMAL_STOP`
+- `git diff --check`、`python3 tools/run_evaluator_unit_tests.py`、`python3 -m platformio run -e esp32s3` 通过。
+
 不应直接做：
 
 - 不改 BLE 线格式。
 - 不改 Android session owner。
 - 不把串口 summary 升级成 APP 正式 truth source。
+
+后续验证要求：
+
+- 因为本包只影响串口 summary 分类，不改 BLE 线格式和 action timing，自动化验证已覆盖构建与纯函数分支。
+- 如果进入正式收口，建议做一次最小真机 smoke，重点看手动停止仍为 `STOP_SUMMARY result=NORMAL`，离台可恢复暂停不再被归到 `ABORT_SUMMARY result=ABNORMAL_STOP`。
 
 ### P2: motion safety shadow 到 runtime action 决策
 

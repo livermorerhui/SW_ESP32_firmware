@@ -76,6 +76,7 @@ void SystemStateMachine::begin(EventBus* eb, WaveModule* waveModule) {
   pending_stop_source = VerificationStopSource::NONE;
   last_stop_reason_text = "NONE";
   last_stop_source = VerificationStopSource::NONE;
+  last_stop_safety_effect = SafetySignalKind::NONE;
   syncSnapshotDecisionContext();
   emitState();
 }
@@ -210,11 +211,17 @@ const char* SystemStateMachine::lastStopSourceText() const {
   return verificationStopSourceName(last_stop_source);
 }
 
+SafetySignalKind SystemStateMachine::lastStopSafetyEffect() const {
+  return last_stop_safety_effect;
+}
+
 void SystemStateMachine::rememberStopContext(
     const char* stopReasonText,
-    VerificationStopSource stopSource) {
+    VerificationStopSource stopSource,
+    SafetySignalKind stopEffect) {
   last_stop_reason_text = stopReasonText ? stopReasonText : "NONE";
   last_stop_source = stopSource;
+  last_stop_safety_effect = stopEffect;
 }
 
 void SystemStateMachine::clearPendingStopContext() {
@@ -436,7 +443,7 @@ void SystemStateMachine::enterBlockingFault(FaultCode code, const char* detail) 
     const char* stopReasonText = resolvedStopReasonText(code, faultCodeName(code));
     const VerificationStopSource stopSource =
         resolvedStopSource(VerificationStopSource::FORMAL_SAFETY_OTHER);
-    rememberStopContext(stopReasonText, stopSource);
+    rememberStopContext(stopReasonText, stopSource, SafetySignalKind::ABNORMAL_STOP);
     emitStopEvent(code, SafetySignalKind::ABNORMAL_STOP, TopState::FAULT_STOP, stopReasonText, stopSource);
   }
   clearPendingStopContext();
@@ -927,7 +934,7 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
                 startSnapshot.userPresent ? 1 : 0,
                 leaveDetectionEnabled() ? 1 : 0,
                 faultCodeName(warning_fault_code));
-  rememberStopContext("NONE", VerificationStopSource::NONE);
+  rememberStopContext("NONE", VerificationStopSource::NONE, SafetySignalKind::NONE);
   setState(TopState::RUNNING);
   reason = FaultCode::NONE;
   return true;
@@ -967,7 +974,7 @@ void SystemStateMachine::requestStop() {
             : VerificationStopSource::USER_MANUAL_OTHER);
     const SafetySignalKind stopEffect =
         (pause_reason_code != FaultCode::NONE) ? SafetySignalKind::RECOVERABLE_PAUSE : SafetySignalKind::NONE;
-    rememberStopContext(stopReasonText, stopSource);
+    rememberStopContext(stopReasonText, stopSource, stopEffect);
     emitStopEvent(stopCode, stopEffect, target, stopReasonText, stopSource);
   }
   clearPendingStopContext();

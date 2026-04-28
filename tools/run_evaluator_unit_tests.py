@@ -41,6 +41,7 @@ TEST_MAIN = r"""
 
 #include "modules/laser/BaselineEvidenceEvaluator.h"
 #include "modules/laser/PresenceContractEvaluator.h"
+#include "modules/laser/StopOutcomeSummaryEvaluator.h"
 #include "core/SafetyActionContractEvaluator.h"
 
 namespace {
@@ -263,6 +264,48 @@ void test_stop_reason_and_source_fallbacks() {
       VerificationStopSource::USER_MANUAL_OTHER);
 }
 
+void test_stop_outcome_summary_evaluator() {
+  StopOutcomeSummaryDecision result = StopOutcomeSummaryEvaluator::evaluate(
+      FaultCode::NONE,
+      SafetySignalKind::NONE,
+      "MANUAL_STOP",
+      "USER_MANUAL_OTHER");
+  assert(result.kind == StopOutcomeSummaryKind::STOP_SUMMARY);
+  expect_reason(result.result, "NORMAL");
+  expect_reason(result.stopReasonText, "MANUAL_STOP");
+  expect_reason(result.stopSourceText, "USER_MANUAL_OTHER");
+
+  result = StopOutcomeSummaryEvaluator::evaluate(
+      FaultCode::USER_LEFT_PLATFORM,
+      SafetySignalKind::RECOVERABLE_PAUSE,
+      "USER_LEFT_PLATFORM",
+      "FORMAL_SAFETY_OTHER");
+  assert(result.kind == StopOutcomeSummaryKind::STOP_SUMMARY);
+  expect_reason(result.result, "RECOVERABLE_PAUSE");
+  expect_reason(result.stopReasonText, "USER_LEFT_PLATFORM");
+  expect_reason(result.stopSourceText, "FORMAL_SAFETY_OTHER");
+
+  result = StopOutcomeSummaryEvaluator::evaluate(
+      FaultCode::FALL_SUSPECTED,
+      SafetySignalKind::ABNORMAL_STOP,
+      "FALL_SUSPECTED",
+      "BASELINE_MAIN_LOGIC");
+  assert(result.kind == StopOutcomeSummaryKind::ABORT_SUMMARY);
+  expect_reason(result.result, "ABNORMAL_STOP");
+  expect_reason(result.stopReasonText, "FALL_SUSPECTED");
+  expect_reason(result.stopSourceText, "BASELINE_MAIN_LOGIC");
+
+  result = StopOutcomeSummaryEvaluator::evaluate(
+      FaultCode::FALL_SUSPECTED,
+      SafetySignalKind::WARNING_ONLY,
+      nullptr,
+      nullptr);
+  assert(result.kind == StopOutcomeSummaryKind::STOP_SUMMARY);
+  expect_reason(result.result, "WARNING_ONLY");
+  expect_reason(result.stopReasonText, "FALL_SUSPECTED");
+  expect_reason(result.stopSourceText, "NONE");
+}
+
 }  // namespace
 
 int main() {
@@ -273,6 +316,7 @@ int main() {
   test_baseline_invalid_and_saturation();
   test_fall_stop_action_decision();
   test_stop_reason_and_source_fallbacks();
+  test_stop_outcome_summary_evaluator();
   std::cout << "evaluator unit tests passed\n";
   return 0;
 }
@@ -300,6 +344,7 @@ def run() -> None:
       str(main_cpp),
       str(ROOT / "src/modules/laser/PresenceContractEvaluator.cpp"),
       str(ROOT / "src/modules/laser/BaselineEvidenceEvaluator.cpp"),
+      str(ROOT / "src/modules/laser/StopOutcomeSummaryEvaluator.cpp"),
       str(ROOT / "src/core/SafetyActionContractEvaluator.cpp"),
       "-o",
       str(binary),

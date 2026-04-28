@@ -1478,6 +1478,7 @@ void LaserModule::finishRunSummary(uint32_t now,
   RunSummaryStopSnapshot snapshot{};
   snapshot.now = now;
   snapshot.stopReason = stopReason;
+  snapshot.stopEffect = sm ? sm->lastStopSafetyEffect() : SafetySignalKind::NONE;
   snapshot.stopReasonText = sm ? sm->lastStopReasonText() : (abnormalStop ? faultCodeName(stopReason) : "NONE");
   snapshot.stopSourceText = sm ? sm->lastStopSourceText() : "NONE";
   snapshot.fallStopEnabled = sm ? sm->fallStopEnabled() : FALL_STOP_ENABLED_DEFAULT;

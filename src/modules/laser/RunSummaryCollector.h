@@ -4,6 +4,7 @@
 #include "config/GlobalConfig.h"
 #include "core/Types.h"
 #include "modules/laser/RhythmStateJudge.h"
+#include "modules/laser/StopOutcomeSummaryEvaluator.h"
 
 struct RunSummaryStartSnapshot {
   uint32_t now = 0;
@@ -19,6 +20,7 @@ struct RunSummaryStartSnapshot {
 struct RunSummaryStopSnapshot {
   uint32_t now = 0;
   FaultCode stopReason = FaultCode::NONE;
+  SafetySignalKind stopEffect = SafetySignalKind::NONE;
   const char* stopReasonText = "NONE";
   const char* stopSourceText = "NONE";
   bool fallStopEnabled = FALL_STOP_ENABLED_DEFAULT;

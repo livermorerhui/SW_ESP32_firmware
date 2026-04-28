@@ -123,14 +123,15 @@ void RunSummaryCollector::finish(
   formatRange(state.ma12WeightKgRange, ma12WeightRange, sizeof(ma12WeightRange));
   formatRange(state.ma12DistanceRange, ma12DistanceRange, sizeof(ma12DistanceRange));
 
-  const bool abnormalStop = (snapshot.stopReason != FaultCode::NONE);
   const uint32_t durationMs =
       (snapshot.now >= state.startedAtMs) ? (snapshot.now - state.startedAtMs) : 0;
+  const StopOutcomeSummaryDecision outcome = StopOutcomeSummaryEvaluator::evaluate(
+      snapshot.stopReason,
+      snapshot.stopEffect,
+      snapshot.stopReasonText,
+      snapshot.stopSourceText);
+  const bool abnormalStop = (outcome.kind == StopOutcomeSummaryKind::ABORT_SUMMARY);
   const char* summaryMarker = abnormalStop ? LogMarker::kTestAbort : LogMarker::kTestStop;
-  const char* stopReasonText = snapshot.stopReasonText
-      ? snapshot.stopReasonText
-      : (abnormalStop ? faultCodeName(snapshot.stopReason) : "NONE");
-  const char* stopSourceText = snapshot.stopSourceText ? snapshot.stopSourceText : "NONE";
 
   Serial.printf(
       "%s [%s] test_id=%lu result=%s stop_reason=%s stop_source=%s freq_hz=%.2f intensity=%d intensity_norm=%.3f "
@@ -146,9 +147,9 @@ void RunSummaryCollector::finish(
       summaryMarker,
       abnormalStop ? "ABORT_SUMMARY" : "STOP_SUMMARY",
       static_cast<unsigned long>(state.testId),
-      abnormalStop ? "ABNORMAL_STOP" : "NORMAL",
-      stopReasonText,
-      stopSourceText,
+      outcome.result,
+      outcome.stopReasonText,
+      outcome.stopSourceText,
       state.freqHz,
       state.intensity,
       state.intensityNormalized,

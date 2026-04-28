@@ -45,6 +45,7 @@ public:
   void setSensorHealthy(bool healthy);
   const char* lastStopReasonText() const;
   const char* lastStopSourceText() const;
+  SafetySignalKind lastStopSafetyEffect() const;
 
   void onWeightSample(float weightKg);
 
@@ -74,7 +75,9 @@ private:
                      TopState targetState,
                      const char* stopReasonText,
                      VerificationStopSource stopSource);
-  void rememberStopContext(const char* stopReasonText, VerificationStopSource stopSource);
+  void rememberStopContext(const char* stopReasonText,
+                           VerificationStopSource stopSource,
+                           SafetySignalKind stopEffect);
   void clearPendingStopContext();
   const char* resolvedStopReasonText(FaultCode code, const char* fallback) const;
   VerificationStopSource resolvedStopSource(VerificationStopSource fallback) const;
@@ -121,6 +124,7 @@ private:
   VerificationStopSource pending_stop_source = VerificationStopSource::NONE;
   const char* last_stop_reason_text = "NONE";
   VerificationStopSource last_stop_source = VerificationStopSource::NONE;
+  SafetySignalKind last_stop_safety_effect = SafetySignalKind::NONE;
 
   static SystemStateMachine* active_instance;
 };
