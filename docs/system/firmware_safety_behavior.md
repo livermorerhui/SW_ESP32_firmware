@@ -45,6 +45,22 @@
 - `EVT:FAULT`
 - `EVT:SAFETY`
 
+## SafetyAction / StopReason Owner Boundary
+
+Current owner split:
+
+- `LaserModule` owns presence / baseline / rhythm danger evidence and may only raise candidates.
+- `SystemStateMachine` owns final safety action, stop action, `stop_reason`, `stop_source`, visible reason, and `EVT:STOP / EVT:SAFETY / EVT:FAULT` emission.
+- `ProtocolCodec` owns the existing BLE line encoding only.
+- `BleTransport` owns critical-event delivery classification only.
+
+Frozen rule:
+
+- A detector or measurement owner must not directly stop the wave or publish final BLE safety semantics.
+- `USER_LEFT_PLATFORM` and `FALL_SUSPECTED` must remain separate product reasons.
+- Disabling `FALL_STOP` only suppresses the `FALL_SUSPECTED` automatic stop action; it does not suppress `USER_LEFT_PLATFORM`.
+- Any future extraction must first move pure reason/effect/source evaluation only, while leaving action timing in `SystemStateMachine`.
+
 Recommended APP mapping:
 
 - `RECOVERABLE_PAUSE` -> paused
