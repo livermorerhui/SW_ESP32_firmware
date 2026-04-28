@@ -41,6 +41,7 @@ TEST_MAIN = r"""
 
 #include "modules/laser/BaselineEvidenceEvaluator.h"
 #include "modules/laser/PresenceContractEvaluator.h"
+#include "core/SafetyActionContractEvaluator.h"
 
 namespace {
 
@@ -197,6 +198,71 @@ void test_baseline_invalid_and_saturation() {
   expect_reason(result.reason, "baseline_eligible");
 }
 
+void test_fall_stop_action_decision() {
+  FallStopActionDecision result = SafetyActionContractEvaluator::decideFallSuspected(true, true);
+  assert(result.stopCandidateDetected);
+  assert(result.shouldExecuteStop);
+  assert(!result.stopSuppressedBySwitch);
+  assert(result.fallStopEnabled);
+  assert(result.stopReason == FaultCode::FALL_SUSPECTED);
+  assert(result.safetySignal == SafetySignalKind::ABNORMAL_STOP);
+  expect_reason(result.detail, "fall_stop_active");
+
+  result = SafetyActionContractEvaluator::decideFallSuspected(false, true);
+  assert(result.stopCandidateDetected);
+  assert(!result.shouldExecuteStop);
+  assert(result.stopSuppressedBySwitch);
+  assert(!result.fallStopEnabled);
+  assert(result.safetySignal == SafetySignalKind::WARNING_ONLY);
+  expect_reason(result.detail, "fall_stop_disabled");
+
+  result = SafetyActionContractEvaluator::decideFallSuspected(true, false);
+  assert(result.shouldExecuteStop);
+  assert(!result.stopSuppressedBySwitch);
+  assert(result.safetySignal == SafetySignalKind::RECOVERABLE_PAUSE);
+  expect_reason(result.detail, "fall_pause_override");
+}
+
+void test_stop_reason_and_source_fallbacks() {
+  expect_reason(
+      SafetyActionContractEvaluator::resolveStopReasonText(
+          "UPSTREAM_REASON",
+          FaultCode::FALL_SUSPECTED,
+          "FALLBACK_REASON"),
+      "UPSTREAM_REASON");
+  expect_reason(
+      SafetyActionContractEvaluator::resolveStopReasonText(
+          nullptr,
+          FaultCode::FALL_SUSPECTED,
+          "FALLBACK_REASON"),
+      "FALLBACK_REASON");
+  expect_reason(
+      SafetyActionContractEvaluator::resolveStopReasonText(
+          "",
+          FaultCode::FALL_SUSPECTED,
+          nullptr),
+      "FALL_SUSPECTED");
+  expect_reason(
+      SafetyActionContractEvaluator::resolveStopReasonText(
+          nullptr,
+          FaultCode::NONE,
+          nullptr),
+      "MANUAL_STOP");
+
+  assert(SafetyActionContractEvaluator::resolveStopSource(
+      VerificationStopSource::BASELINE_MAIN_LOGIC,
+      VerificationStopSource::FORMAL_SAFETY_OTHER) ==
+      VerificationStopSource::BASELINE_MAIN_LOGIC);
+  assert(SafetyActionContractEvaluator::resolveStopSource(
+      VerificationStopSource::NONE,
+      VerificationStopSource::FORMAL_SAFETY_OTHER) ==
+      VerificationStopSource::FORMAL_SAFETY_OTHER);
+  assert(SafetyActionContractEvaluator::resolveStopSource(
+      VerificationStopSource::NONE,
+      VerificationStopSource::NONE) ==
+      VerificationStopSource::USER_MANUAL_OTHER);
+}
+
 }  // namespace
 
 int main() {
@@ -205,6 +271,8 @@ int main() {
   test_baseline_window_hold();
   test_baseline_confirm_and_latch();
   test_baseline_invalid_and_saturation();
+  test_fall_stop_action_decision();
+  test_stop_reason_and_source_fallbacks();
   std::cout << "evaluator unit tests passed\n";
   return 0;
 }
@@ -232,6 +300,7 @@ def run() -> None:
       str(main_cpp),
       str(ROOT / "src/modules/laser/PresenceContractEvaluator.cpp"),
       str(ROOT / "src/modules/laser/BaselineEvidenceEvaluator.cpp"),
+      str(ROOT / "src/core/SafetyActionContractEvaluator.cpp"),
       "-o",
       str(binary),
     ]

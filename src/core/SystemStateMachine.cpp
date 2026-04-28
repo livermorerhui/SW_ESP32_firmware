@@ -225,27 +225,17 @@ void SystemStateMachine::clearPendingStopContext() {
 const char* SystemStateMachine::resolvedStopReasonText(
     FaultCode code,
     const char* fallback) const {
-  if (pending_stop_reason_text && pending_stop_reason_text[0] != '\0') {
-    return pending_stop_reason_text;
-  }
-  if (fallback && fallback[0] != '\0') {
-    return fallback;
-  }
-  if (code != FaultCode::NONE) {
-    return faultCodeName(code);
-  }
-  return "MANUAL_STOP";
+  return SafetyActionContractEvaluator::resolveStopReasonText(
+      pending_stop_reason_text,
+      code,
+      fallback);
 }
 
 VerificationStopSource SystemStateMachine::resolvedStopSource(
     VerificationStopSource fallback) const {
-  if (pending_stop_source != VerificationStopSource::NONE) {
-    return pending_stop_source;
-  }
-  if (fallback != VerificationStopSource::NONE) {
-    return fallback;
-  }
-  return VerificationStopSource::USER_MANUAL_OTHER;
+  return SafetyActionContractEvaluator::resolveStopSource(
+      pending_stop_source,
+      fallback);
 }
 
 bool SystemStateMachine::canEnterArmedState() const {
@@ -666,29 +656,9 @@ void SystemStateMachine::setFallStopEnabled(bool enabled) {
 }
 
 FallStopActionDecision SystemStateMachine::decideFallSuspectedAction() const {
-  FallStopActionDecision decision{};
-  decision.stopCandidateDetected = true;
-  decision.fallStopEnabled = fall_stop_enabled;
-  decision.stopReason = FaultCode::FALL_SUSPECTED;
-
-  if (!fall_stop_enabled) {
-    decision.shouldExecuteStop = false;
-    decision.stopSuppressedBySwitch = true;
-    decision.safetySignal = SafetySignalKind::WARNING_ONLY;
-    decision.detail = "fall_stop_disabled";
-    return decision;
-  }
-
-  decision.shouldExecuteStop = true;
-  if (SAFETY_POLICY_FALL_ABNORMAL_STOP) {
-    decision.safetySignal = SafetySignalKind::ABNORMAL_STOP;
-    decision.detail = "fall_stop_active";
-    return decision;
-  }
-
-  decision.safetySignal = SafetySignalKind::RECOVERABLE_PAUSE;
-  decision.detail = "fall_pause_override";
-  return decision;
+  return SafetyActionContractEvaluator::decideFallSuspected(
+      fall_stop_enabled,
+      SAFETY_POLICY_FALL_ABNORMAL_STOP);
 }
 
 void SystemStateMachine::applyFallSuspectedAction(const FallStopActionDecision& decision) {

@@ -258,5 +258,6 @@ private:
   bool advertisingActive = false;
   uint32_t advertisingStartRequests = 0;
   uint32_t advertisingStopRequests = 0;
+  uint32_t lastTxSendSkipLogMs = 0;
   uint32_t lastTxPressureLogMs = 0;
 };

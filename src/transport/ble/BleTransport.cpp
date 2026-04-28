@@ -1,4 +1,5 @@
 #include "BleTransport.h"
+#include "core/FirmwareLogPolicy.h"
 #include "core/LogMarkers.h"
 #include "core/SystemStateMachine.h"
 #include <esp_gap_ble_api.h>
@@ -21,8 +22,6 @@ static constexpr uint16_t kConnParamMaxInterval = 24;
 static constexpr uint16_t kConnParamLatency = 0;
 static constexpr uint16_t kConnParamTimeout = 400;
 static constexpr uint32_t kStreamControlHoldoffMs = 35;
-static constexpr uint32_t kStreamSendSkipLogEvery = 50;
-static constexpr uint32_t kTxPressureLogIntervalMs = 2000;
 static constexpr esp_power_level_t kBleDefaultTxPowerLevel = ESP_PWR_LVL_P3;
 static constexpr esp_power_level_t kBleAdvertisingFastPowerLevel = ESP_PWR_LVL_P3;
 static constexpr esp_power_level_t kBleAdvertisingIdlePowerLevel = ESP_PWR_LVL_N0;
@@ -1181,10 +1180,17 @@ void BleTransport::noteLifecycleControlEnqueueFailure(const char* lifecycleEvent
 
 void BleTransport::noteTxSendSkipped(TxFrameClass frameClass, const char* reason, const char* line) {
   txSendSkipCount += 1;
+  const uint32_t nowMs = millis();
   if (frameClass == TxFrameClass::CRITICAL_EVENT) {
     markReconnectSnapshotDirty(frameClass, reason, line);
   }
-  if (frameClass == TxFrameClass::STREAM_EVENT && (txSendSkipCount % kStreamSendSkipLogEvery) != 1) {
+
+  const bool criticalFrame = frameClass == TxFrameClass::CRITICAL_EVENT;
+  if (!FirmwareLogPolicy::shouldLogNow(
+          nowMs,
+          lastTxSendSkipLogMs,
+          FirmwareLogPolicy::kBleTxSendSkipLogIntervalMs,
+          criticalFrame)) {
     return;
   }
   Serial.printf(
@@ -1195,7 +1201,7 @@ void BleTransport::noteTxSendSkipped(TxFrameClass frameClass, const char* reason
       deviceConnected ? 1 : 0,
       static_cast<void*>(pTx),
       line ? line : "");
-  logTxPressureSnapshot("send_skipped", millis(), true);
+  logTxPressureSnapshot("send_skipped", nowMs, criticalFrame);
 }
 
 void BleTransport::markReconnectSnapshotDirty(TxFrameClass frameClass, const char* origin, const char* line) {
@@ -1238,10 +1244,13 @@ void BleTransport::noteReconnectSnapshotDelivered(const char* origin, const char
 }
 
 void BleTransport::logTxPressureSnapshot(const char* reason, uint32_t nowMs, bool force) {
-  if (!force && lastTxPressureLogMs != 0 && nowMs - lastTxPressureLogMs < kTxPressureLogIntervalMs) {
+  if (!FirmwareLogPolicy::shouldLogNow(
+          nowMs,
+          lastTxPressureLogMs,
+          FirmwareLogPolicy::kBleTxPressureSnapshotIntervalMs,
+          force)) {
     return;
   }
-  lastTxPressureLogMs = nowMs;
   Serial.printf(
       "[BLE_TX_PRESSURE] reason=%s session_id=%lu connected=%d control_depth=%u stream_depth=%u control_high=%u stream_high=%u control_drops=%lu critical_drops=%lu classified_drops=%lu send_skips=%lu stream_replaced=%lu stream_suppressed=%lu lifecycle_drops=%lu\n",
       reason ? reason : "periodic",
