@@ -1110,6 +1110,77 @@ void LaserModule::clearStableContractBridge(const char* reason) {
   logBaselineContractClear(millis(), reason, before);
 }
 
+BaselineActionStateSnapshot LaserModule::captureBaselineActionSnapshot(
+    const StableContractState& state) const {
+  BaselineActionStateSnapshot snapshot{};
+  snapshot.userPresent = state.userPresent;
+  snapshot.stableCandidate = state.stableCandidate;
+  snapshot.stableReadyLive = state.stableReadyLive;
+  snapshot.baselineReadyLatched = state.baselineReadyLatched;
+  snapshot.startReady = state.startReady;
+  snapshot.baselineReadyWeightKg = state.baselineReadyWeightKg;
+  snapshot.startReadyWeightKg = state.startReadyWeightKg;
+  snapshot.startReadyBridge = state.startReadyBridge ? state.startReadyBridge : "unknown";
+  return snapshot;
+}
+
+bool LaserModule::baselineActionSnapshotHasState(
+    const BaselineActionStateSnapshot& snapshot) const {
+  return snapshot.stableCandidate ||
+      snapshot.stableReadyLive ||
+      snapshot.baselineReadyLatched ||
+      snapshot.startReady ||
+      snapshot.baselineReadyWeightKg > 0.0f ||
+      snapshot.startReadyWeightKg > 0.0f;
+}
+
+BaselineActionWritebackEvidence LaserModule::makeStartReadyWritebackEvidence(
+    uint32_t now,
+    const char* source,
+    TopState topState,
+    bool ready,
+    float stableWeightKg,
+    const char* reason) const {
+  BaselineActionWritebackEvidence evidence{};
+  evidence.now = now;
+  evidence.source = source ? source : "unknown";
+  evidence.topState = topState;
+  evidence.startReady = ready;
+  evidence.startReadyWeightKg = ready ? stableWeightKg : 0.0f;
+  evidence.reason = reason ? reason : "unknown";
+  evidence.state = captureBaselineActionSnapshot(stableContract);
+  return evidence;
+}
+
+bool LaserModule::shouldLogStartReadyWriteback(
+    const BaselineActionWritebackEvidence& evidence) const {
+  const bool sourceChanged =
+      !lastLoggedStartReadyWritebackSource ||
+      strcmp(lastLoggedStartReadyWritebackSource, evidence.source) != 0;
+  const bool reasonChanged =
+      !lastLoggedStartReadyWritebackReason ||
+      strcmp(lastLoggedStartReadyWritebackReason, evidence.reason) != 0;
+  const bool weightChanged =
+      evidence.startReady &&
+      fabsf(lastLoggedStartReadyWritebackWeightKg - evidence.startReadyWeightKg) >= 0.01f;
+  return !hasLoggedStartReadyWriteback ||
+      lastLoggedStartReadyWritebackReady != evidence.startReady ||
+      lastLoggedStartReadyWritebackTopState != evidence.topState ||
+      sourceChanged ||
+      reasonChanged ||
+      weightChanged;
+}
+
+void LaserModule::rememberStartReadyWriteback(
+    const BaselineActionWritebackEvidence& evidence) {
+  hasLoggedStartReadyWriteback = true;
+  lastLoggedStartReadyWritebackReady = evidence.startReady;
+  lastLoggedStartReadyWritebackTopState = evidence.topState;
+  lastLoggedStartReadyWritebackWeightKg = evidence.startReadyWeightKg;
+  lastLoggedStartReadyWritebackSource = evidence.source;
+  lastLoggedStartReadyWritebackReason = evidence.reason;
+}
+
 void LaserModule::logBaselineContractLatch(
     uint32_t now,
     const char* source,
@@ -1119,16 +1190,17 @@ void LaserModule::logBaselineContractLatch(
     return;
   }
 
+  const BaselineActionStateSnapshot snapshot = captureBaselineActionSnapshot(stableContract);
   Serial.printf(
       "[BASELINE_CONTRACT] event=latch source=%s baseline_latched=1 weight=%.2f distance=%.2f captured_ms=%lu user_present=%d stable_live=%d start_ready=%d bridge=%s\n",
       source ? source : "unknown",
       weight,
       distance,
       static_cast<unsigned long>(now),
-      stableContract.userPresent ? 1 : 0,
-      stableContract.stableReadyLive ? 1 : 0,
-      stableContract.startReady ? 1 : 0,
-      stableContract.startReadyBridge ? stableContract.startReadyBridge : "unknown");
+      snapshot.userPresent ? 1 : 0,
+      snapshot.stableReadyLive ? 1 : 0,
+      snapshot.startReady ? 1 : 0,
+      snapshot.startReadyBridge);
 }
 
 void LaserModule::logBaselineContractClear(
@@ -1139,26 +1211,22 @@ void LaserModule::logBaselineContractClear(
     return;
   }
 
-  if (!before.stableCandidate &&
-      !before.stableReadyLive &&
-      !before.baselineReadyLatched &&
-      !before.startReady &&
-      before.baselineReadyWeightKg <= 0.0f &&
-      before.startReadyWeightKg <= 0.0f) {
+  const BaselineActionStateSnapshot beforeSnapshot = captureBaselineActionSnapshot(before);
+  if (!baselineActionSnapshotHasState(beforeSnapshot)) {
     return;
   }
 
   Serial.printf(
       "[BASELINE_CONTRACT] event=clear reason=%s before_user_present=%d before_stable_candidate=%d before_stable_live=%d before_baseline_latched=%d before_start_ready=%d before_baseline_weight=%.2f before_start_weight=%.2f before_bridge=%s cleared_ms=%lu\n",
       reason ? reason : "unspecified",
-      before.userPresent ? 1 : 0,
-      before.stableCandidate ? 1 : 0,
-      before.stableReadyLive ? 1 : 0,
-      before.baselineReadyLatched ? 1 : 0,
-      before.startReady ? 1 : 0,
-      before.baselineReadyWeightKg,
-      before.startReadyWeightKg,
-      before.startReadyBridge ? before.startReadyBridge : "unknown",
+      beforeSnapshot.userPresent ? 1 : 0,
+      beforeSnapshot.stableCandidate ? 1 : 0,
+      beforeSnapshot.stableReadyLive ? 1 : 0,
+      beforeSnapshot.baselineReadyLatched ? 1 : 0,
+      beforeSnapshot.startReady ? 1 : 0,
+      beforeSnapshot.baselineReadyWeightKg,
+      beforeSnapshot.startReadyWeightKg,
+      beforeSnapshot.startReadyBridge,
       static_cast<unsigned long>(now));
 }
 
@@ -1173,46 +1241,25 @@ void LaserModule::logStartReadyWriteback(
     return;
   }
 
-  const char* safeSource = source ? source : "unknown";
-  const char* safeReason = reason ? reason : "unknown";
-  const bool sourceChanged =
-      !lastLoggedStartReadyWritebackSource ||
-      strcmp(lastLoggedStartReadyWritebackSource, safeSource) != 0;
-  const bool reasonChanged =
-      !lastLoggedStartReadyWritebackReason ||
-      strcmp(lastLoggedStartReadyWritebackReason, safeReason) != 0;
-  const bool weightChanged =
-      ready &&
-      fabsf(lastLoggedStartReadyWritebackWeightKg - stableWeightKg) >= 0.01f;
-  const bool shouldLog =
-      !hasLoggedStartReadyWriteback ||
-      lastLoggedStartReadyWritebackReady != ready ||
-      lastLoggedStartReadyWritebackTopState != topState ||
-      sourceChanged ||
-      reasonChanged ||
-      weightChanged;
-  if (!shouldLog) {
+  const BaselineActionWritebackEvidence evidence =
+      makeStartReadyWritebackEvidence(now, source, topState, ready, stableWeightKg, reason);
+  if (!shouldLogStartReadyWriteback(evidence)) {
     return;
   }
 
   Serial.printf(
       "[BASELINE_CONTRACT] event=start_ready_writeback source=%s top_state=%s start_ready=%d start_weight=%.2f reason=%s user_present=%d baseline_latched=%d stable_live=%d baseline_weight=%.2f\n",
-      safeSource,
-      topStateName(topState),
-      ready ? 1 : 0,
-      stableWeightKg,
-      safeReason,
-      stableContract.userPresent ? 1 : 0,
-      stableContract.baselineReadyLatched ? 1 : 0,
-      stableContract.stableReadyLive ? 1 : 0,
-      stableContract.baselineReadyWeightKg);
+      evidence.source,
+      topStateName(evidence.topState),
+      evidence.startReady ? 1 : 0,
+      evidence.startReadyWeightKg,
+      evidence.reason,
+      evidence.state.userPresent ? 1 : 0,
+      evidence.state.baselineReadyLatched ? 1 : 0,
+      evidence.state.stableReadyLive ? 1 : 0,
+      evidence.state.baselineReadyWeightKg);
 
-  hasLoggedStartReadyWriteback = true;
-  lastLoggedStartReadyWritebackReady = ready;
-  lastLoggedStartReadyWritebackTopState = topState;
-  lastLoggedStartReadyWritebackWeightKg = stableWeightKg;
-  lastLoggedStartReadyWritebackSource = safeSource;
-  lastLoggedStartReadyWritebackReason = safeReason;
+  rememberStartReadyWriteback(evidence);
 }
 
 void LaserModule::resetStableTracking(const char* reason, bool logIfActive) {

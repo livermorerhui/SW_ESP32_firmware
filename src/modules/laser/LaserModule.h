@@ -59,6 +59,27 @@ struct StableContractState {
   const char* startReadyBridge = "not_ready";
 };
 
+struct BaselineActionStateSnapshot {
+  bool userPresent = false;
+  bool stableCandidate = false;
+  bool stableReadyLive = false;
+  bool baselineReadyLatched = false;
+  bool startReady = false;
+  float baselineReadyWeightKg = 0.0f;
+  float startReadyWeightKg = 0.0f;
+  const char* startReadyBridge = "not_ready";
+};
+
+struct BaselineActionWritebackEvidence {
+  uint32_t now = 0;
+  const char* source = "unknown";
+  TopState topState = TopState::IDLE;
+  bool startReady = false;
+  float startReadyWeightKg = 0.0f;
+  const char* reason = "unknown";
+  BaselineActionStateSnapshot state{};
+};
+
 class LaserModule {
 public:
   void begin(EventBus* eb, SystemStateMachine* fsm, WaveModule* waveModule);
@@ -138,6 +159,17 @@ private:
   void resetStartGateDiagnosticsWindow(uint32_t now);
   void syncStableContractBridge(uint32_t now, const RhythmStateUpdateResult& result);
   void clearStableContractBridge(const char* reason);
+  BaselineActionStateSnapshot captureBaselineActionSnapshot(const StableContractState& state) const;
+  bool baselineActionSnapshotHasState(const BaselineActionStateSnapshot& snapshot) const;
+  BaselineActionWritebackEvidence makeStartReadyWritebackEvidence(
+      uint32_t now,
+      const char* source,
+      TopState topState,
+      bool ready,
+      float stableWeightKg,
+      const char* reason) const;
+  bool shouldLogStartReadyWriteback(const BaselineActionWritebackEvidence& evidence) const;
+  void rememberStartReadyWriteback(const BaselineActionWritebackEvidence& evidence);
   void logBaselineContractLatch(uint32_t now, const char* source, float distance, float weight) const;
   void logBaselineContractClear(
       uint32_t now,

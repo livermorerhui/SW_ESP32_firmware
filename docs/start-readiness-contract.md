@@ -235,3 +235,64 @@ Frozen boundaries:
 - `LaserModule` still owns baseline latch/clear timing, start-ready write-back
   timing, occupied-cycle cleanup, and rhythm reset timing.
 - `SystemStateMachine` still owns final start allow/reject behavior.
+
+## Baseline Action Timing Freeze
+
+2026-04-28 audit result:
+
+- Baseline action timing is not a pure decision boundary. It currently spans
+  `LaserModule`, `SystemStateMachine`, `RhythmStateJudge`, and `DualZeroState`.
+- `LaserModule` remains the owner of action ordering for presence enter, stable
+  latch, baseline latch, start-ready write-back, confirmed-leave clear,
+  calibration/config/zero clear, and invalid-measurement recovery.
+- `SystemStateMachine` remains the final owner of `runtime_ready`,
+  `start_ready`, state transition, leave action, fault/pause handling, and
+  `WAVE:START` allow/reject.
+- `RhythmStateJudge` remains an evidence mirror for accepted baseline and
+  motion-safety evaluation only.
+
+Frozen action order:
+
+- Presence enter locks effective-zero before stable/baseline latch.
+- Stable latch updates `StableContractState` before
+  `RhythmStateJudge::refreshBaselineFromStable`.
+- `SystemStateMachine::setStartReadiness` is written back from
+  `LaserModule::taskLoop` after `syncStableContractBridge`.
+- Manual stop must not clear durable baseline while the user is still present.
+- Confirmed leave clears occupied-cycle state, resets `RhythmStateJudge`, clears
+  stable contract bridge, then writes `start_ready=false`.
+- Calibration, device config, and zero changes remain strong clear paths and
+  must not wait for the next normal measurement lifecycle.
+- Invalid measurement is not the same as confirmed leave and must not directly
+  own baseline clear.
+
+Do not move in the next refactor cut:
+
+- `SystemStateMachine::setStartReadiness`
+- `SystemStateMachine::setRuntimeReady`
+- `SystemStateMachine::onUserOff`
+- `lockEffectiveZeroForOccupiedCycle`
+- `releaseOccupiedCycle`
+- `clearStableContractBridge`
+- `RhythmStateJudge::reset`
+- `RhythmStateJudge::refreshBaselineFromStable`
+
+Safe next cut:
+
+- Add read-only action evidence/snapshot helpers if needed.
+- Centralize reason construction and before/after evidence logging.
+- Keep all action execution timing in `LaserModule` until a later audit proves
+  it can be moved without changing start/stop/leave behavior.
+
+Implementation note:
+
+- `BaselineActionStateSnapshot` and `BaselineActionWritebackEvidence` centralize
+  the serial diagnostic evidence used by `[BASELINE_CONTRACT]`.
+- They are read-only evidence structs. They do not execute actions, own state,
+  or change call timing.
+- `LaserModule` still invokes `SystemStateMachine::setStartReadiness`,
+  `clearStableContractBridge`, `releaseOccupiedCycle`, and `RhythmStateJudge`
+  methods at the same call sites.
+- 2026-04-28 minimum device smoke confirmed the evidence path still emits
+  `latch`, `start_ready_writeback`, and `clear` events, while normal
+  connect/start/stop/leave behavior remains intact.
