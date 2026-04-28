@@ -27,6 +27,16 @@
 - 把 `FALL_SUSPECTED`、律动保护开关、stop reason/source fallback 的纯判定逻辑抽成 `SafetyActionContractEvaluator`。
 - 继续保持 `SystemStateMachine` 作为唯一 final safety action / stop action owner。
 
+当前状态：
+
+- 2026-04-28 已完成最小实现。
+- `git diff --check` 通过。
+- `python3 tools/run_evaluator_unit_tests.py` 通过。
+- `python3 -m platformio run -e esp32s3` 通过。
+- 2026-04-28 最小真机 smoke `safety_action_log_policy_smoke_retry` 通过：SW APP 连接、开始、停止、手动断开/重连体感正常；Android 侧 `CONNECT_SUCCESS=2`、`DEVICE_SNAPSHOT_SYNCED=20`、`CONNECT_SNAPSHOT_REFRESH_FAILED=0`、`start_confirmed_by_device=2`、`stop_confirmed_by_device=1`；ESP32 串口真实可用，采到 `START ALLOW=1`、`STOP_SUMMARY=1`、`reconnect_snapshot_compensated=2`，无 reset/panic/Brownout/Guru、无 `MEASUREMENT_TRANSIENT`、无 Modbus read fail。
+- 同包补充 BLE TX 高频日志成熟化第一刀：新增 `FirmwareLogPolicy`，让非关键 `send_skipped` 与 `BLE_TX_PRESSURE` 走统一节流；关键 reconnect truth 仍保留。
+- `send_skipped` 断链阶段已从高频刷屏降为约 2 秒一条；`BLE_TX_PRESSURE` 仍作为周期性诊断摘要保留，后续如需要发布态更安静，可继续做 debug/release log level facade，不抢占本包。
+
 允许迁移：
 
 - `FallStopActionDecision` DTO。
@@ -46,12 +56,11 @@
 - `onBleDisconnected`
 - `setSensorHealthy`
 
-验证要求：
+后续验证要求：
 
-- host evaluator unit tests。
-- `git diff --check`。
-- `python3 -m platformio run -e esp32s3`。
-- 如运行代码接触 stop/safety 行为，必须做最小真机 smoke，并复核 capture。
+- 已完成自动化验证。
+- 已完成最小真机 smoke；后续不需要为了本包重复长时间 soak。
+- 不需要长时间 soak。
 
 ### P2: StopReason / RunSummary / EVT:STOP 一致性审计
 
@@ -245,10 +254,9 @@ base 和 degraded 都是 PLUS 正常形态的简化或降级形态。
 
 默认下一步：
 
-- 做 `SafetyActionContractEvaluator` 最小纯函数抽取。
-- 不迁移 action timing。
-- 不改 BLE 线格式。
-- 不改 Android `SessionCoordinator`。
+- `SafetyActionContractEvaluator` 最小真机 smoke 已通过，可按固件实现、固件文档、SW 总表同步分类提交。
+- 下一项再进入 `StopReason / RunSummary / EVT:STOP` 一致性审计。
+- 仍不迁移 action timing、不改 BLE 线格式、不改 Android `SessionCoordinator`。
 
 ## 5. 当前进度判断
 
@@ -260,7 +268,7 @@ base 和 degraded 都是 PLUS 正常形态的简化或降级形态。
 
 差距主要不在 PLUS 正常主链，而在：
 
-- SafetyAction / StopReason action owner 还没最小抽取。
+- SafetyAction / StopReason action owner 已完成第一刀纯函数抽取和最小真机 smoke，当前可收口提交。
 - base / degraded 还没做新一轮整机复核。
 - motion safety shadow 还没决定是否接 runtime。
 - release hardening 矩阵和 soak 还没最终补齐。
