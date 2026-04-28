@@ -93,6 +93,7 @@ static constexpr uint32_t MEASUREMENT_NO_LASER_BYPASS_LOG_INTERVAL_MS = 5000UL;
 static constexpr bool DEBUG_MEASUREMENT_PLANE_VERBOSE = false;
 static constexpr bool START_GATE_DIAG_ENABLED = true;
 static constexpr uint32_t START_GATE_DIAG_LOG_INTERVAL_MS = 5000UL;
+static constexpr bool BASELINE_CONTRACT_DIAG_ENABLED = true;
 #define DEBUG_LASER_STREAM 0
 #define DEBUG_BLE_TX_VERBOSE 0
 

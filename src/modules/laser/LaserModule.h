@@ -124,7 +124,7 @@ private:
   bool updatePresenceState(float weight);
   void noteInvalidPresenceSample(uint32_t now, const char* reason);
   void syncStableLiveContract(uint32_t now);
-  void latchBaselineReadyFromStable(uint32_t now, float distance, float weight);
+  void latchBaselineReadyFromStable(uint32_t now, const char* source, float distance, float weight);
   void syncStartReadyContract(uint32_t now, TopState currentTopState, const RhythmStateUpdateResult& result);
   void observeStartGateDiagnostics(
       uint32_t now,
@@ -137,7 +137,19 @@ private:
       const StartGateContractResult& evaluation);
   void resetStartGateDiagnosticsWindow(uint32_t now);
   void syncStableContractBridge(uint32_t now, const RhythmStateUpdateResult& result);
-  void clearStableContractBridge();
+  void clearStableContractBridge(const char* reason);
+  void logBaselineContractLatch(uint32_t now, const char* source, float distance, float weight) const;
+  void logBaselineContractClear(
+      uint32_t now,
+      const char* reason,
+      const StableContractState& before) const;
+  void logStartReadyWriteback(
+      uint32_t now,
+      const char* source,
+      TopState topState,
+      bool ready,
+      float stableWeightKg,
+      const char* reason);
   void handleInvalidMeasurement(const char* reason);
   void latchStable(uint32_t now, const char* mode, float stddev);
   void resetStableTracking(const char* reason, bool logIfActive);
@@ -257,4 +269,10 @@ private:
   uint32_t startGateDiagLiveStableNotReady = 0;
   uint32_t startGateDiagRunningHold = 0;
   uint32_t startGateDiagIdleReady = 0;
+  bool hasLoggedStartReadyWriteback = false;
+  bool lastLoggedStartReadyWritebackReady = false;
+  TopState lastLoggedStartReadyWritebackTopState = TopState::IDLE;
+  float lastLoggedStartReadyWritebackWeightKg = 0.0f;
+  const char* lastLoggedStartReadyWritebackSource = nullptr;
+  const char* lastLoggedStartReadyWritebackReason = nullptr;
 };

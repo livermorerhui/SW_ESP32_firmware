@@ -230,7 +230,7 @@ void LaserModule::begin(EventBus* eb, SystemStateMachine* fsm, WaveModule* waveM
   refreshEffectiveZero();
   resetStableSignalFilter();
   syncStableLiveContract(millis());
-  clearStableContractBridge();
+  clearStableContractBridge("boot");
   resetMeasurementPlane("boot", false);
 }
 
@@ -264,8 +264,11 @@ void LaserModule::setParams(float zero, float factor) {
   resetMeasurementPlane("scale_cal", true);
   releaseOccupiedCycle("scale_cal", millis());
   rhythmStateJudge.reset("scale_cal_reset");
-  clearStableContractBridge();
-  if (sm) sm->setStartReadiness(false, 0.0f);
+  clearStableContractBridge("scale_cal");
+  if (sm) {
+    logStartReadyWriteback(millis(), "scale_cal", sm->state(), false, 0.0f, "scale_cal");
+    sm->setStartReadiness(false, 0.0f);
+  }
   needSendParams = true;
 }
 
@@ -364,8 +367,11 @@ bool LaserModule::setCalibrationModel(const CalibrationModel& model, String& rea
   resetMeasurementPlane("cal_model", true);
   releaseOccupiedCycle("cal_model", millis());
   rhythmStateJudge.reset("cal_model_reset");
-  clearStableContractBridge();
-  if (sm) sm->setStartReadiness(false, 0.0f);
+  clearStableContractBridge("cal_model");
+  if (sm) {
+    logStartReadyWriteback(millis(), "cal_model", sm->state(), false, 0.0f, "cal_model");
+    sm->setStartReadiness(false, 0.0f);
+  }
   needSendParams = true;
   return true;
 }
@@ -474,7 +480,7 @@ void LaserModule::applyDeviceConfigRuntimeEffects(const char* source) {
   resetRuntimeZero(source);
   resetMeasurementPlane(source, true);
   rhythmStateJudge.reset(source ? source : "device_config");
-  clearStableContractBridge();
+  clearStableContractBridge(source ? source : "device_config");
   stableContract.userPresent = false;
   presenceEnterConfirmCount = 0;
   presenceExitConfirmCount = 0;
@@ -491,6 +497,13 @@ void LaserModule::applyDeviceConfigRuntimeEffects(const char* source) {
   if (!sm) return;
 
   sm->setRuntimeReady(false);
+  logStartReadyWriteback(
+      millis(),
+      source ? source : "device_config",
+      sm->state(),
+      false,
+      0.0f,
+      source ? source : "device_config");
   sm->setStartReadiness(false, 0.0f);
   sm->setSensorHealthy(false);
 }
@@ -935,11 +948,16 @@ void LaserModule::syncStableLiveContract(uint32_t now) {
   }
 }
 
-void LaserModule::latchBaselineReadyFromStable(uint32_t now, float distance, float weight) {
+void LaserModule::latchBaselineReadyFromStable(
+    uint32_t now,
+    const char* source,
+    float distance,
+    float weight) {
   stableContract.baselineReadyLatched = true;
   stableContract.baselineReadyWeightKg = weight;
   stableContract.baselineReadyDistance = distance;
   stableContract.baselineReadyAtMs = now;
+  logBaselineContractLatch(now, source, distance, weight);
 }
 
 void LaserModule::syncStartReadyContract(
@@ -1063,6 +1081,7 @@ void LaserModule::syncStableContractBridge(
   if (!stableContract.baselineReadyLatched && result.evidence.baselineReady) {
     latchBaselineReadyFromStable(
         result.evidence.baselineCapturedAtMs ? result.evidence.baselineCapturedAtMs : now,
+        "rhythm_bridge",
         result.evidence.baselineDistance,
         result.evidence.baselineWeightKg);
   } else if (stableContract.baselineReadyLatched &&
@@ -1074,7 +1093,8 @@ void LaserModule::syncStableContractBridge(
   syncStartReadyContract(now, sm ? sm->state() : TopState::IDLE, result);
 }
 
-void LaserModule::clearStableContractBridge() {
+void LaserModule::clearStableContractBridge(const char* reason) {
+  const StableContractState before = stableContract;
   stableContract.stableCandidate = false;
   stableContract.stableReadyLive = false;
   stableContract.baselineReadyLatched = false;
@@ -1087,6 +1107,112 @@ void LaserModule::clearStableContractBridge() {
   stableContract.stableReadyAtMs = 0;
   stableContract.baselineReadyAtMs = 0;
   stableContract.startReadyBridge = "not_ready";
+  logBaselineContractClear(millis(), reason, before);
+}
+
+void LaserModule::logBaselineContractLatch(
+    uint32_t now,
+    const char* source,
+    float distance,
+    float weight) const {
+  if (!BASELINE_CONTRACT_DIAG_ENABLED) {
+    return;
+  }
+
+  Serial.printf(
+      "[BASELINE_CONTRACT] event=latch source=%s baseline_latched=1 weight=%.2f distance=%.2f captured_ms=%lu user_present=%d stable_live=%d start_ready=%d bridge=%s\n",
+      source ? source : "unknown",
+      weight,
+      distance,
+      static_cast<unsigned long>(now),
+      stableContract.userPresent ? 1 : 0,
+      stableContract.stableReadyLive ? 1 : 0,
+      stableContract.startReady ? 1 : 0,
+      stableContract.startReadyBridge ? stableContract.startReadyBridge : "unknown");
+}
+
+void LaserModule::logBaselineContractClear(
+    uint32_t now,
+    const char* reason,
+    const StableContractState& before) const {
+  if (!BASELINE_CONTRACT_DIAG_ENABLED) {
+    return;
+  }
+
+  if (!before.stableCandidate &&
+      !before.stableReadyLive &&
+      !before.baselineReadyLatched &&
+      !before.startReady &&
+      before.baselineReadyWeightKg <= 0.0f &&
+      before.startReadyWeightKg <= 0.0f) {
+    return;
+  }
+
+  Serial.printf(
+      "[BASELINE_CONTRACT] event=clear reason=%s before_user_present=%d before_stable_candidate=%d before_stable_live=%d before_baseline_latched=%d before_start_ready=%d before_baseline_weight=%.2f before_start_weight=%.2f before_bridge=%s cleared_ms=%lu\n",
+      reason ? reason : "unspecified",
+      before.userPresent ? 1 : 0,
+      before.stableCandidate ? 1 : 0,
+      before.stableReadyLive ? 1 : 0,
+      before.baselineReadyLatched ? 1 : 0,
+      before.startReady ? 1 : 0,
+      before.baselineReadyWeightKg,
+      before.startReadyWeightKg,
+      before.startReadyBridge ? before.startReadyBridge : "unknown",
+      static_cast<unsigned long>(now));
+}
+
+void LaserModule::logStartReadyWriteback(
+    uint32_t now,
+    const char* source,
+    TopState topState,
+    bool ready,
+    float stableWeightKg,
+    const char* reason) {
+  if (!BASELINE_CONTRACT_DIAG_ENABLED) {
+    return;
+  }
+
+  const char* safeSource = source ? source : "unknown";
+  const char* safeReason = reason ? reason : "unknown";
+  const bool sourceChanged =
+      !lastLoggedStartReadyWritebackSource ||
+      strcmp(lastLoggedStartReadyWritebackSource, safeSource) != 0;
+  const bool reasonChanged =
+      !lastLoggedStartReadyWritebackReason ||
+      strcmp(lastLoggedStartReadyWritebackReason, safeReason) != 0;
+  const bool weightChanged =
+      ready &&
+      fabsf(lastLoggedStartReadyWritebackWeightKg - stableWeightKg) >= 0.01f;
+  const bool shouldLog =
+      !hasLoggedStartReadyWriteback ||
+      lastLoggedStartReadyWritebackReady != ready ||
+      lastLoggedStartReadyWritebackTopState != topState ||
+      sourceChanged ||
+      reasonChanged ||
+      weightChanged;
+  if (!shouldLog) {
+    return;
+  }
+
+  Serial.printf(
+      "[BASELINE_CONTRACT] event=start_ready_writeback source=%s top_state=%s start_ready=%d start_weight=%.2f reason=%s user_present=%d baseline_latched=%d stable_live=%d baseline_weight=%.2f\n",
+      safeSource,
+      topStateName(topState),
+      ready ? 1 : 0,
+      stableWeightKg,
+      safeReason,
+      stableContract.userPresent ? 1 : 0,
+      stableContract.baselineReadyLatched ? 1 : 0,
+      stableContract.stableReadyLive ? 1 : 0,
+      stableContract.baselineReadyWeightKg);
+
+  hasLoggedStartReadyWriteback = true;
+  lastLoggedStartReadyWritebackReady = ready;
+  lastLoggedStartReadyWritebackTopState = topState;
+  lastLoggedStartReadyWritebackWeightKg = stableWeightKg;
+  lastLoggedStartReadyWritebackSource = safeSource;
+  lastLoggedStartReadyWritebackReason = safeReason;
 }
 
 void LaserModule::resetStableTracking(const char* reason, bool logIfActive) {
@@ -1233,7 +1359,7 @@ void LaserModule::latchStable(uint32_t now, const char* mode, float stddev) {
 
   // stable_weight：稳定体重。
   // 只在未律动且稳定站立时锁定一次，直到确认离台后才允许清空。
-  latchBaselineReadyFromStable(now, finalDistance, finalWeight);
+  latchBaselineReadyFromStable(now, "stable_primary", finalDistance, finalWeight);
   rhythmStateJudge.refreshBaselineFromStable(finalDistance, finalWeight, now);
   emitBaselineReadyLog(now);
 }
@@ -1348,7 +1474,16 @@ void LaserModule::handleInvalidMeasurement(const char* reason) {
     stableContract.startReady = false;
     stableContract.startReadyWeightKg = 0.0f;
     stableContract.startReadyBridge = "measurement_invalid";
-    if (sm) sm->setStartReadiness(false, 0.0f);
+    if (sm) {
+      logStartReadyWriteback(
+          millis(),
+          "measurement_invalid",
+          currentTopState,
+          false,
+          0.0f,
+          stableContract.startReadyBridge);
+      sm->setStartReadiness(false, 0.0f);
+    }
   }
 
   if (stableState == StableState::STABLE_CANDIDATE) {
@@ -1366,6 +1501,13 @@ void LaserModule::handleInvalidMeasurement(const char* reason) {
     }
     if (sm) {
       sm->setRuntimeReady(false);
+      logStartReadyWriteback(
+          millis(),
+          "user_not_present_invalid",
+          currentTopState,
+          false,
+          0.0f,
+          "user_not_present");
       sm->setStartReadiness(false, 0.0f);
     }
   }
@@ -1717,9 +1859,12 @@ void LaserModule::taskLoop() {
       resetRuntimeZero("zero");
       resetStableTracking("zero", true);
       rhythmStateJudge.reset("zero_reset");
-      clearStableContractBridge();
+      clearStableContractBridge("zero");
       resetMeasurementPlane("zero_reset", true);
-      if (sm) sm->setStartReadiness(false, 0.0f);
+      if (sm) {
+        logStartReadyWriteback(now, "zero", sm->state(), false, 0.0f, "zero");
+        sm->setStartReadiness(false, 0.0f);
+      }
       needZero = false;
       Serial.printf("🔘 ZERO done: %.2f\n", zeroDistance);
       lastLogDist = -999.0f;
@@ -1800,6 +1945,13 @@ void LaserModule::taskLoop() {
     if (sm) {
       // baseline_ready 才是正式 start/leave gate；
       // runtime_ready 仍仅表示人在平台上，不再单独承担“可开始”语义。
+      logStartReadyWriteback(
+          now,
+          "loop_contract_writeback",
+          sm->state(),
+          stableContract.startReady,
+          stableContract.startReadyWeightKg,
+          stableContract.startReadyBridge);
       sm->setStartReadiness(
           stableContract.startReady,
           stableContract.startReadyWeightKg);
@@ -1823,8 +1975,17 @@ void LaserModule::taskLoop() {
       // 这里同步清掉正式 start readiness，避免只靠首秒屏蔽或阈值调高来掩盖问题。
       releaseOccupiedCycle("user_left_platform_confirmed", now);
       rhythmStateJudge.reset("user_left_platform_confirmed");
-      clearStableContractBridge();
-      if (sm) sm->setStartReadiness(false, 0.0f);
+      clearStableContractBridge("user_left_platform_confirmed");
+      if (sm) {
+        logStartReadyWriteback(
+            now,
+            "user_left_platform_confirmed",
+            currentTopState,
+            false,
+            0.0f,
+            "user_left_platform_confirmed");
+        sm->setStartReadiness(false, 0.0f);
+      }
     } else if (!stableContract.userPresent &&
                currentTopState != TopState::RUNNING &&
                dualZero.occupiedCycleActive &&

@@ -211,3 +211,27 @@ Validation note:
   evaluator contract without hardware.
 - `python3 -m platformio run -e esp32s3` must still pass after evaluator
   changes.
+
+## BaselineContract Diagnostics Freeze
+
+2026-04-27 diagnostic implementation:
+
+- `BASELINE_CONTRACT_DIAG_ENABLED` gates serial-only baseline contract
+  diagnostics.
+- `[BASELINE_CONTRACT] event=latch` records where baseline truth was latched:
+  `stable_primary` or `rhythm_bridge`.
+- `[BASELINE_CONTRACT] event=clear` records why durable baseline/start-ready
+  bridge state was cleared, including the previous bridge state and weights.
+- `[BASELINE_CONTRACT] event=start_ready_writeback` records each meaningful
+  `SystemStateMachine::setStartReadiness` write-back transition, including
+  source, top state, final reason, and weight.
+
+Frozen boundaries:
+
+- These diagnostics are serial evidence only.
+- They must not become APP / Demo APP / backend protocol dependencies.
+- They do not change `SNAPSHOT.start_ready`, `SNAPSHOT.baseline_ready`,
+  `EVT:BASELINE`, `EVT:STREAM`, or `WAVE:START` ACK/NACK behavior.
+- `LaserModule` still owns baseline latch/clear timing, start-ready write-back
+  timing, occupied-cycle cleanup, and rhythm reset timing.
+- `SystemStateMachine` still owns final start allow/reject behavior.
