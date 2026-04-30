@@ -1,6 +1,6 @@
 # ESP32 Firmware Remaining Work And Lessons
 
-最后更新时间：2026-04-28
+最后更新时间：2026-04-30
 
 ## 1. 当前可交付点
 
@@ -13,8 +13,7 @@
 
 当前不应对外承诺：
 
-- `ESP32-base` 已完成新一轮整机复核。
-- `ESP32-plus degraded / 485 或 laser 故障形态` 已完成新一轮整机复核。
+- `ESP32-plus degraded / 485 或 laser 故障形态` 已达到完全无观察项。
 - motion safety 新 detector 已接入 runtime 停波动作。
 - 四端 release hardening、长时间 soak、发布矩阵已全部完成。
 
@@ -121,6 +120,13 @@
 - base 是 PLUS 正常形态的简化形态。
 - 之前 base 测试可能只覆盖 ESP32 模块，不足以代表整机链路。
 
+当前状态：
+
+- 2026-04-30 已完成 SW APP 真机复核。
+- 首轮 APP 证据通过但 ESP32 串口只采到连接 / CAP / SNAPSHOT；随后修复 SW capture 脚本 `SCRIPT_DIR` 未定义和 stop 汇总 `import re` 漏写问题。
+- 补测 `esp32_base_platformio_serial_evidence` 已补齐 ESP32 串口证据：`WAVE:START=1`、`START_ALLOW=1`、`WAVE:STOP=1`，无 reset/panic/Brownout/Guru/MEASUREMENT_TRANSIENT/Modbus read fail。
+- base 当前不作为 blocker。
+
 ### P3: ESP32-plus degraded / 故障形态复核
 
 目标：
@@ -131,6 +137,20 @@
 
 - plus degraded 是 PLUS 正常链路的降级形式。
 - PLUS 正常链路跑通后，再看 degraded 会更容易定位是外设异常、measurement 不可用，还是 APP 展示问题。
+
+当前状态：
+
+- 2026-04-30 已完成合同化审计：`PLUS + laser_installed=1 + measurement unavailable` 通过 `SNAPSHOT.degraded_start_available / degraded_start_enabled` 进入 degraded-start 确认路径；`PLUS + laser_installed=0` 仍是不支持 profile。
+- Android focused 单测分组通过：repository degraded-start sync/confirm、SessionCoordinator start gate、手动/自设页 start gate owner、旧激光告警抑制。
+- 真机 `esp32_plus_degraded_start_smoke` 证明合同链路通过：`CONNECT_SUCCESS=1`、`CONNECT_SNAPSHOT_REFRESH_FAILED=0`、确认前后 `degraded_start_enabled false -> true`、`DEVICE_DEGRADED_START_ACK available=true enabled=true`、`start_confirmed_by_device`、`stop_confirmed_by_device` 均存在；ESP32 侧 `WAVE:START / START ALLOW / i2s_start=0 / ramp complete / WAVE:STOP / i2s_stop=0` 可见，无 reset/panic/Brownout/Guru。
+- 同轮观察项：用户体感首次起震弱且断续；ESP32 串口有 `MEASUREMENT_TRANSIENT_COUNT=12`、`MODBUS_READ_FAIL_COUNT=12`，RUNNING 阶段持续 `0xE2 read_ms=2009`。
+- 2026-04-30 已新增 `WaveModule` 只读启动诊断：`WAVE_OUTPUT_STARTUP` 与 `WAVE_OUTPUT_WRITE`，构建通过；复测 `esp32_plus_degraded_wave_output_observability` 体感正常，输出启动证据完整：`request=6ms`、`i2s_start=21ms`、`first_emit=41ms`、`ramp_complete=804ms`，`WAVE_OUTPUT_WRITE error/short/slow=0`；详见 `reports/task_20260430_plus_degraded_wave_output_observability.md`。
+
+下一步：
+
+- 当前 degraded-start 合同与 wave output startup 观测包可收口。
+- 后续如继续优化 degraded 故障形态，建议单独审 `degraded measurement circuit-breaker / low-frequency probe`：RUNNING 阶段 measurement unavailable 是否仍应持续 2 秒 timeout。
+- 不先改 ramp、不先改 BLE 线格式、不先改 start/stop action timing。
 
 ### P4: release hardening 补齐
 
@@ -239,7 +259,18 @@ base 和 degraded 都是 PLUS 正常形态的简化或降级形态。
 - 内部 owner 拆分可以做，但不得顺手改 BLE 线格式。
 - 如确实要改协议，必须另起跨仓合同变更包。
 
-### 3.9 `reports/` 和 `docs/` 不能混用
+### 3.9 输出体感异常必须拆成合同、输出和测量三层
+
+`ESP32-plus degraded` 真机 smoke 里，APP/BLE/start gate 合同链路已经通过，但用户仍感知首次起震弱且断续。不能因为 `START ALLOW` 和 `i2s_start=0` 就直接写成完整通过。
+
+长期规则：
+
+- 先确认合同层：`SNAPSHOT`、degraded ACK、`WAVE:START`、`EVT:WAVE_OUTPUT`、APP start/stop confirmation。
+- 再确认输出层：`WAVE_OUTPUT_STARTUP`、I2S start、first emit、ramp complete、I2S write error/short/slow。
+- 最后确认测量层：RUNNING 阶段 measurement unavailable 是否持续 2 秒 timeout，是否需要 degraded circuit-breaker / low-frequency probe。
+- 不得把正常 `800ms` ramp 体感、真实 I2S 输出抖动、MAX485 连续读失败混在一起下结论。
+
+### 3.10 `reports/` 和 `docs/` 不能混用
 
 过程报告适合留在 `reports/`，但长期恢复工作不能依赖日期型报告。
 
@@ -249,7 +280,7 @@ base 和 degraded 都是 PLUS 正常形态的简化或降级形态。
 - `docs/` 记录长期有效规则、合同、冻结边界和回归清单。
 - 继续工作时先读 `SW/docs/system/ESP32与APP联调优化优先级总表.md`，再读本文。
 
-### 3.10 长周期任务要按整包推进
+### 3.11 长周期任务要按整包推进
 
 这轮协作的主要摩擦来自步骤碎、进度不清、建议缺失。
 
@@ -271,8 +302,8 @@ base 和 degraded 都是 PLUS 正常形态的简化或降级形态。
 
 默认下一步：
 
-- `SafetyActionContractEvaluator` 最小真机 smoke 已通过，可按固件实现、固件文档、SW 总表同步分类提交。
-- 下一项再进入 `StopReason / RunSummary / EVT:STOP` 一致性审计。
+- `ESP32-plus degraded` 合同与 wave output startup 观测包已通过，可收口。
+- 如果继续优化 degraded 故障形态，下一步建议审 `degraded measurement circuit-breaker / low-frequency probe`，先审不实现。
 - 仍不迁移 action timing、不改 BLE 线格式、不改 Android `SessionCoordinator`。
 
 ## 5. 当前进度判断
@@ -281,11 +312,11 @@ base 和 degraded 都是 PLUS 正常形态的简化或降级形态。
 
 - ESP32-plus 正常主链：可先交付。
 - A 级固件内部重构：约 `75% - 80%`。
-- 全 ESP32 变体发布准备：约 `65%`。
+- 全 ESP32 变体发布准备：约 `70%`。
 
 差距主要不在 PLUS 正常主链，而在：
 
-- SafetyAction / StopReason action owner 已完成第一刀纯函数抽取和最小真机 smoke，当前可收口提交。
-- base / degraded 还没做新一轮整机复核。
+- base 已完成新一轮整机 smoke 与串口补证据。
+- degraded-start 合同链路已通过，wave output startup 复测已解释输出侧无异常；剩余观察项是 degraded measurement unavailable 在 RUNNING 阶段持续 `0xE2 read_ms=2009` 是否需要效率优化。
 - motion safety shadow 还没决定是否接 runtime。
 - release hardening 矩阵和 soak 还没最终补齐。

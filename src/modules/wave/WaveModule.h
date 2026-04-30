@@ -56,6 +56,8 @@ private:
   volatile bool     run_requested    = false;
   volatile bool     run_state        = false;
   volatile float    display_freq     = 0.0f;
+  volatile uint32_t output_start_sequence = 0;
+  volatile uint32_t output_start_requested_at_ms = 0;
   EventBus* event_bus                = nullptr;
 
   static const int16_t MAX_AMPLITUDE = 8826;
