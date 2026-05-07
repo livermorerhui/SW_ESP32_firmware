@@ -19,6 +19,10 @@ static BleTransport g_ble;
 static String g_bleDeviceName;
 static String buildBleDeviceName(PlatformModel model);
 
+static void clearBoardRgbLed() {
+  neopixelWrite(BOARD_RGB_LED_PIN, 0, 0, 0);
+}
+
 static const char* resetReasonName(esp_reset_reason_t reason) {
   switch (reason) {
     case ESP_RST_POWERON: return "POWERON";
@@ -357,8 +361,10 @@ static String buildBleDeviceName(PlatformModel model) {
 }
 
 void setup() {
+  clearBoardRgbLed();
   Serial.begin(115200);
   delay(1500);
+  clearBoardRgbLed();
   Serial.println("\n=== SonicWave Hub FW (Integrated) ===");
   const esp_reset_reason_t resetReason = esp_reset_reason();
   Serial.printf(

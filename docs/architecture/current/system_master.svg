@@ -77,11 +77,11 @@
 
   <rect class="card" x="1180" y="160" width="430" height="95"/>
   <text class="h2" x="1200" y="194">Laser Sensor (Modbus UART)</text>
-  <text class="txt" x="1200" y="220">Serial1 RX=15 TX=14, slave=1, reg=0x0064</text>
+  <text class="txt" x="1200" y="220">Serial1 RX=17 TX=18, slave=1, reg=0x0064</text>
 
   <rect class="card" x="1180" y="280" width="430" height="95"/>
   <text class="h2" x="1200" y="314">PCM5102A DAC (I2S)</text>
-  <text class="txt" x="1200" y="340">BCLK=4, LRCK=5, DOUT=6</text>
+  <text class="txt" x="1200" y="340">BCLK=1, LRCK=21, DOUT=2</text>
 
   <rect class="card" x="1180" y="400" width="430" height="95"/>
   <text class="h2" x="1200" y="434">TPA3255 Amplifier</text>

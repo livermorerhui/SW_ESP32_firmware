@@ -12,9 +12,9 @@
 #define WAVE_I2S_SAMPLE_BITS 16
 #define WAVE_INTENSITY_MAX 120
 
-#define I2S_BCLK_PIN    4
-#define I2S_LRCK_PIN    5
-#define I2S_DOUT_PIN    6
+#define I2S_BCLK_PIN    1
+#define I2S_LRCK_PIN    21
+#define I2S_DOUT_PIN    2
 
 // ===== Wave Ramp =====
 static constexpr uint32_t RAMP_START_TIME_MS = 800UL;
@@ -23,11 +23,14 @@ static constexpr uint32_t RAMP_UPDATE_INTERVAL_MS = 10UL;
 static constexpr float RAMP_FREQ_STEP_HZ = 0.5f;
 
 // ===== Laser / Modbus =====
-#define RX_PIN 15
-#define TX_PIN 14
+#define RX_PIN 17
+#define TX_PIN 18
 #define MODBUS_BAUD 9600
 #define MODBUS_SLAVE_ID 1
 #define REG_DISTANCE 0x0064
+
+// ===== Board indicators =====
+static constexpr uint8_t BOARD_RGB_LED_PIN = 48;
 // Continuous measurement plane now polls independently from the slower
 // baseline/rhythm-state evaluation path. This keeps live distance/weight/MA12
 // samples flowing without forcing the legacy stable/baseline semantics to run

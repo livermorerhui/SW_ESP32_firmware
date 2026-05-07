@@ -38,16 +38,18 @@ ESP32-S3
 
 引脚定义来源：`src/config/GlobalConfig.h`
 
-- `I2S_BCLK_PIN = 4`
+- `I2S_BCLK_PIN = 1`
   - I2S 位时钟（BCLK）。
-- `I2S_LRCK_PIN = 5`
+- `I2S_LRCK_PIN = 21`
   - I2S 声道/字时钟（LRCK/WS）。
-- `I2S_DOUT_PIN = 6`
+- `I2S_DOUT_PIN = 2`
   - I2S 数据输出（DIN 到 PCM5102A）。
-- `RX_PIN = 15`
-  - UART 接收（ESP32 接收激光传感器数据）。
-- `TX_PIN = 14`
-  - UART 发送（ESP32 发送 Modbus 请求）。
+- `RX_PIN = 17`
+  - UART 接收（MAX485 模块 TXD/RO -> ESP32 RX）。
+- `TX_PIN = 18`
+  - UART 发送（ESP32 TX -> MAX485 模块 RXD/DI）。
+
+当前 active profile 与旧底座 legacy profile 见 `docs/system/esp32s3_pin_profiles.md`。
 
 ## 4. 音频链路
 
