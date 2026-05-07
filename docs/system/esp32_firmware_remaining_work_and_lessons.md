@@ -145,11 +145,12 @@
 - 真机 `esp32_plus_degraded_start_smoke` 证明合同链路通过：`CONNECT_SUCCESS=1`、`CONNECT_SNAPSHOT_REFRESH_FAILED=0`、确认前后 `degraded_start_enabled false -> true`、`DEVICE_DEGRADED_START_ACK available=true enabled=true`、`start_confirmed_by_device`、`stop_confirmed_by_device` 均存在；ESP32 侧 `WAVE:START / START ALLOW / i2s_start=0 / ramp complete / WAVE:STOP / i2s_stop=0` 可见，无 reset/panic/Brownout/Guru。
 - 同轮观察项：用户体感首次起震弱且断续；ESP32 串口有 `MEASUREMENT_TRANSIENT_COUNT=12`、`MODBUS_READ_FAIL_COUNT=12`，RUNNING 阶段持续 `0xE2 read_ms=2009`。
 - 2026-04-30 已新增 `WaveModule` 只读启动诊断：`WAVE_OUTPUT_STARTUP` 与 `WAVE_OUTPUT_WRITE`，构建通过；复测 `esp32_plus_degraded_wave_output_observability` 体感正常，输出启动证据完整：`request=6ms`、`i2s_start=21ms`、`first_emit=41ms`、`ramp_complete=804ms`，`WAVE_OUTPUT_WRITE error/short/slow=0`；详见 `reports/task_20260430_plus_degraded_wave_output_observability.md`。
+- 2026-04-30 已完成 `degraded measurement circuit-breaker / low-frequency probe` 审计：`0xE2` 是 Modbus response timeout，单次失败阻塞约 `2009ms`；当前非 RUNNING 有 `3000ms` unavailable backoff，但 RUNNING 阶段失败后 `nextReadEligibleAtMs=0`，会持续做 2 秒级失败探测；功能正确性不受影响，但 A 级质量建议做 internal circuit-breaker / low-frequency probe；详见 `reports/task_20260430_degraded_measurement_circuit_breaker_audit.md`。
 
 下一步：
 
-- 当前 degraded-start 合同与 wave output startup 观测包可收口。
-- 后续如继续优化 degraded 故障形态，建议单独审 `degraded measurement circuit-breaker / low-frequency probe`：RUNNING 阶段 measurement unavailable 是否仍应持续 2 秒 timeout。
+- 建议下一包做 `MeasurementAvailabilityProbePolicy minimal implementation`。
+- 只对连续 `0xE2` 的已知 unavailable measurement 链路做低频 probe；正常健康链路仍保持 `20ms` 读取节奏。
 - 不先改 ramp、不先改 BLE 线格式、不先改 start/stop action timing。
 
 ### P4: release hardening 补齐
@@ -302,8 +303,8 @@ base 和 degraded 都是 PLUS 正常形态的简化或降级形态。
 
 默认下一步：
 
-- `ESP32-plus degraded` 合同与 wave output startup 观测包已通过，可收口。
-- 如果继续优化 degraded 故障形态，下一步建议审 `degraded measurement circuit-breaker / low-frequency probe`，先审不实现。
+- `degraded measurement circuit-breaker / low-frequency probe` 审计已完成。
+- 下一步建议做 `MeasurementAvailabilityProbePolicy minimal implementation`，只改固件内部 probe policy 和串口/capture 可观测性。
 - 仍不迁移 action timing、不改 BLE 线格式、不改 Android `SessionCoordinator`。
 
 ## 5. 当前进度判断
@@ -317,6 +318,6 @@ base 和 degraded 都是 PLUS 正常形态的简化或降级形态。
 差距主要不在 PLUS 正常主链，而在：
 
 - base 已完成新一轮整机 smoke 与串口补证据。
-- degraded-start 合同链路已通过，wave output startup 复测已解释输出侧无异常；剩余观察项是 degraded measurement unavailable 在 RUNNING 阶段持续 `0xE2 read_ms=2009` 是否需要效率优化。
+- degraded-start 合同链路已通过，wave output startup 复测已解释输出侧无异常；measurement circuit-breaker 审计已确认需要做最小 low-frequency probe 实现来优化 RUNNING 阶段持续 `0xE2 read_ms=2009`。
 - motion safety shadow 还没决定是否接 runtime。
 - release hardening 矩阵和 soak 还没最终补齐。

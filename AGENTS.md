@@ -105,6 +105,10 @@
 - 如果某一路日志只有文件、没有可读内容，或内容不足以支撑结论，AI 必须明确标记该路证据未通过，不能笼统写成“测试通过”
 - 修改串口采集、PlatformIO monitor、烧录、真机日志、BLE 回放等工具链前，AI 必须先搜索并审计成熟方案，优先使用 PlatformIO / 官方工具 / 项目既有脚本；禁止未经对比就自写底层串口或采集器并让用户反复真机试错
 - 如确需自写工具，必须先说明官方方案为何不适用、替代哪一层能力、如何验证、如何回退
+- 涉及 ESP32-S3 N16R8 底座引脚切换时，必须先读取 `docs/system/esp32s3_pin_profiles.md`：
+  - 旧底座未到期前，active 固件保持旧底座 profile。
+  - 新底座到货并明确切换后，再按待切换 profile 同步 `src/config/GlobalConfig.h`、`docs/hardware.md` 与架构图文案。
+  - MAX485 `RXD/TXD` 必须先区分模块丝印视角与 ESP32 `Serial1` 视角，禁止直接把模块 `RXD` 写成 ESP32 `RX_PIN`。
 
 ## 验证
 
