@@ -114,6 +114,8 @@ static constexpr uint32_t MOTION_SAFETY_SHADOW_LOG_INTERVAL_MS = 2000UL;
 static constexpr bool MOTION_SAFETY_SHADOW_VERBOSE_RESET_LOG = false;
 // 摔倒停波保护默认开启：达到跌倒危险停波候选时执行真实停波动作。
 static constexpr bool FALL_STOP_ENABLED_DEFAULT = true;
+// 律动离开保护默认开启：用户离开平台时执行可恢复暂停 / 停波动作。
+static constexpr bool LEAVE_STOP_ENABLED_DEFAULT = true;
 
 // ===== Safety Policy（Task-4 对齐）=====
 // 用户离台默认走“可恢复暂停”风格：停波，但不进入异常停机。

@@ -15,6 +15,7 @@ enum class CmdType : uint8_t {
   CAL_GET_MODEL,
   CAL_SET_MODEL,
   FALL_STOP_SET,
+  LEAVE_PROTECTION_SET,
   MOTION_SAMPLING_MODE_SET,
   LEGACY_FIE     // 兼容 F/I/E 组合命令
 };
@@ -37,6 +38,10 @@ struct FallStopCommand {
   bool enabled = true;
 };
 
+struct LeaveProtectionCommand {
+  bool enabled = true;
+};
+
 struct DeviceConfigCommand {
   PlatformModel platformModel = PlatformModel::PLUS;
   bool laserInstalled = true;
@@ -54,6 +59,7 @@ struct Command {
   CalibrationCaptureRequest capture{};
   CalibrationModelCommand model{};
   FallStopCommand fallStop{};
+  LeaveProtectionCommand leaveProtection{};
   MotionSamplingModeCommand motionSamplingMode{};
   DeviceConfigCommand deviceConfig{};
   DegradedStartCommand degradedStart{};

@@ -21,4 +21,6 @@ struct PlatformSnapshot {
   bool protectionDegraded = true;
   bool degradedStartAvailable = false;
   bool degradedStartEnabled = false;
+  bool leaveStopSupported = false;
+  bool leaveStopEnabled = true;
 };

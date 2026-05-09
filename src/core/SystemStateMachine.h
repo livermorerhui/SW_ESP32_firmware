@@ -31,6 +31,9 @@ public:
   void setFallStopEnabled(bool enabled);
   bool fallStopEnabled() const;
   const char* fallStopModeName() const;
+  void setLeaveStopEnabled(bool enabled);
+  bool leaveStopEnabled() const;
+  const char* leaveStopModeName() const;
   FallStopActionDecision decideFallSuspectedAction() const;
   void applyFallSuspectedAction(const FallStopActionDecision& decision);
   void setMotionSamplingMode(bool enabled);
@@ -108,6 +111,8 @@ private:
   bool motion_sampling_mode_enabled = false;
   bool degraded_start_authorized = false;
   uint32_t last_suppressed_fall_notice_ms = 0;
+  bool leave_stop_enabled = LEAVE_STOP_ENABLED_DEFAULT;
+  uint32_t last_suppressed_leave_notice_ms = 0;
   // runtime_ready 只表示“人是否仍在平台上”的 presence 结果。
   // 本轮修复后，它不再直接承担正式 start allow 的语义。
   bool runtime_ready = false;

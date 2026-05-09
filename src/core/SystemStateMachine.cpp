@@ -64,9 +64,11 @@ void SystemStateMachine::begin(EventBus* eb, WaveModule* waveModule) {
   clear_window_active = false;
   clear_candidate_ms = 0;
   fall_stop_enabled = FALL_STOP_ENABLED_DEFAULT;
+  leave_stop_enabled = LEAVE_STOP_ENABLED_DEFAULT;
   motion_sampling_mode_enabled = false;
   degraded_start_authorized = false;
   last_suppressed_fall_notice_ms = 0;
+  last_suppressed_leave_notice_ms = 0;
   runtime_ready = false;
   start_ready = false;
   start_ready_stable_weight_kg = 0.0f;
@@ -171,6 +173,8 @@ PlatformSnapshot SystemStateMachine::snapshot() const {
   out.protectionDegraded = effectiveProtectionDegraded();
   out.degradedStartAvailable = degradedStartAvailable();
   out.degradedStartEnabled = degradedStartBypassActive();
+  out.leaveStopSupported = true;
+  out.leaveStopEnabled = leave_stop_enabled;
 
   if (wave) {
     float ignoredIntensityNormalized = 0.0f;
@@ -186,6 +190,25 @@ bool SystemStateMachine::fallStopEnabled() const {
 
 const char* SystemStateMachine::fallStopModeName() const {
   return fall_stop_enabled ? "ENABLED_STOP" : "DETECT_ONLY";
+}
+
+void SystemStateMachine::setLeaveStopEnabled(bool enabled) {
+  if (leave_stop_enabled == enabled) return;
+
+  leave_stop_enabled = enabled;
+  last_suppressed_leave_notice_ms = 0;
+  Serial.printf("%s [LEAVE_STOP] enabled=%d mode=%s\n",
+                LogMarker::kSafety,
+                enabled ? 1 : 0,
+                leaveStopModeName());
+}
+
+bool SystemStateMachine::leaveStopEnabled() const {
+  return leave_stop_enabled;
+}
+
+const char* SystemStateMachine::leaveStopModeName() const {
+  return leave_stop_enabled ? "ENABLED_PAUSE" : "WARNING_ONLY";
 }
 
 bool SystemStateMachine::motionSamplingModeEnabled() const {
@@ -594,19 +617,38 @@ void SystemStateMachine::onUserOff() {
 
   if (!leaveDetectionEnabled()) {
     Serial.printf(
-        "%s [LEAVE] suppress enabled=0 reason=%s state=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d\n",
+        "%s [LEAVE] suppress action=not_eligible reason=%s state=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d leave_stop_enabled=%d\n",
         LogMarker::kSafety,
         start_ready ? "not_running" : "baseline_not_ready",
         topStateName(st),
         start_ready ? 1 : 0,
         start_ready_stable_weight_kg,
+        runtime_ready ? 1 : 0,
+        leave_stop_enabled ? 1 : 0);
+    syncReadyState();
+    return;
+  }
+
+  if (!leave_stop_enabled) {
+    const uint32_t now = millis();
+    Serial.printf(
+        "%s [LEAVE] suppress action=warning_only state=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d leave_stop_enabled=0\n",
+        LogMarker::kSafety,
+        topStateName(st),
+        start_ready ? 1 : 0,
+        start_ready_stable_weight_kg,
         runtime_ready ? 1 : 0);
+    if (last_suppressed_leave_notice_ms == 0 ||
+        now - last_suppressed_leave_notice_ms >= MOTION_SAMPLING_SUPPRESSED_FALL_NOTICE_INTERVAL_MS) {
+      last_suppressed_leave_notice_ms = now;
+      emitSafety(FaultCode::USER_LEFT_PLATFORM, SafetySignalKind::WARNING_ONLY);
+    }
     syncReadyState();
     return;
   }
 
   Serial.printf(
-      "%s [LEAVE] trigger enabled=1 state=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d policy=%s\n",
+      "%s [LEAVE] trigger enabled=1 state=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d policy=%s leave_stop_enabled=1\n",
       LogMarker::kSafety,
       topStateName(st),
       start_ready ? 1 : 0,

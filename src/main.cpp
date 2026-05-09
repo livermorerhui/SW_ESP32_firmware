@@ -103,6 +103,7 @@ public:
         appendKeyIntValue(outAck, " proto=", PROTO_VER);
         appendKeyValue(outAck, " platform_model=", platformModelName(l->platformModel()));
         appendKeyIntValue(outAck, " laser_installed=", l->laserInstalled() ? 1 : 0);
+        appendKeyIntValue(outAck, " leave_stop_supported=", 1);
         ProtocolCodec::logTruthPayloadBudgetWarningIfNeeded(
             "bootstrap_truth",
             outAck.length() + 1,
@@ -292,6 +293,15 @@ public:
         outAck.reserve(56);
         appendKeyIntValue(outAck, "ACK:FALL_STOP enabled=", c.fallStop.enabled ? 1 : 0);
         appendKeyValue(outAck, " mode=", sm->fallStopModeName());
+        return true;
+
+      case CmdType::LEAVE_PROTECTION_SET:
+        sm->setLeaveStopEnabled(c.leaveProtection.enabled);
+        outAck = "";
+        outAck.reserve(80);
+        appendKeyIntValue(outAck, "ACK:LEAVE_PROTECTION enabled=", sm->leaveStopEnabled() ? 1 : 0);
+        appendKeyIntValue(outAck, " supported=", 1);
+        appendKeyValue(outAck, " effect=", sm->leaveStopModeName());
         return true;
 
       case CmdType::MOTION_SAMPLING_MODE_SET:

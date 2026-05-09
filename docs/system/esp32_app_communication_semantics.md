@@ -130,6 +130,7 @@
 其中：
 
 - `USER_LEFT_PLATFORM` -> `effect=RECOVERABLE_PAUSE`
+- `USER_LEFT_PLATFORM` with `SAFETY:LEAVE_PROTECTION enabled=0` -> `effect=WARNING_ONLY`
 - `FALL_SUSPECTED` -> `effect=ABNORMAL_STOP`
 - `BLE_DISCONNECTED` -> effect 取决于 disconnect policy；当前 APP-driven 默认构建为 `RECOVERABLE_PAUSE`
 
@@ -164,18 +165,50 @@
 当前固件真实表现：
 
 - owner：`LaserModule` 在位判定
+- final action owner：`SystemStateMachine`
 - 默认 effect：`RECOVERABLE_PAUSE`
 - 若发生在 `RUNNING`：
   - `EVT:STOP stop_reason=USER_LEFT_PLATFORM stop_source=FORMAL_SAFETY_OTHER effect=RECOVERABLE_PAUSE state=IDLE`
   - `EVT:STATE IDLE`
   - `EVT:FAULT 100`
   - `EVT:SAFETY reason=USER_LEFT_PLATFORM code=100 effect=RECOVERABLE_PAUSE state=IDLE wave=STOPPED`
+- 若 `SAFETY:LEAVE_PROTECTION enabled=0`：
+  - 保留离台检测与串口日志
+  - 发出 `EVT:SAFETY reason=USER_LEFT_PLATFORM code=100 effect=WARNING_ONLY state=RUNNING wave=RUNNING`
+  - 不因为该离台事件进入 `RECOVERABLE_PAUSE`
+  - 不改变 `FALL_SUSPECTED` 的自动停波配置
 
 重要说明：
 
 - `USER_LEFT_PLATFORM` 确实已对外导出
 - 命名 reason 仍以 `SAFETY` / `STOP` 为主 owner
 - 但当前阶段也会桥接到 `EVT:FAULT 100 reason=USER_LEFT_PLATFORM`
+
+### 4.1.1 Leave protection switch protocol
+
+正式命令：
+
+- `SAFETY:LEAVE_PROTECTION enabled=0/1`
+
+兼容别名：
+
+- `DEBUG:LEAVE_STOP enabled=0/1`
+
+ACK：
+
+- `ACK:LEAVE_PROTECTION enabled=<0/1> supported=1 effect=<ENABLED_PAUSE|WARNING_ONLY>`
+
+能力与快照：
+
+- `ACK:CAP ... leave_stop_supported=1`
+- `SNAPSHOT: ... leave_stop_supported=1 leave_stop_enabled=<0/1>`
+
+边界：
+
+- 固件是 `leave_stop_enabled` 真相源。
+- APP 只能消费 `ACK:LEAVE_PROTECTION`、`ACK:CAP leave_stop_supported`、`SNAPSHOT leave_stop_enabled`。
+- 旧固件没有这些字段时，APP 必须视为不支持，不得伪造开关状态。
+- `enabled=0` 只关闭 `USER_LEFT_PLATFORM` 自动暂停 / 停波动作；检测、日志、`EVT:SAFETY` 可见性仍保留。
 
 ### 4.2 `FALL_SUSPECTED`
 

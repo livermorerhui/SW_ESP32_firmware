@@ -58,6 +58,10 @@ public:
     s += snapshot.degradedStartAvailable ? "1" : "0";
     s += " degraded_start_enabled=";
     s += snapshot.degradedStartEnabled ? "1" : "0";
+    s += " leave_stop_supported=";
+    s += snapshot.leaveStopSupported ? "1" : "0";
+    s += " leave_stop_enabled=";
+    s += snapshot.leaveStopEnabled ? "1" : "0";
     logTruthPayloadBudgetWarningIfNeeded(
         "runtime_truth",
         s.length() + 1,
@@ -299,6 +303,21 @@ public:
         return false;
       }
       out.fallStop.enabled = enabled;
+      return true;
+    }
+    if (s.startsWith("SAFETY:LEAVE_PROTECTION") || s.startsWith("DEBUG:LEAVE_STOP")) {
+      out.type = CmdType::LEAVE_PROTECTION_SET;
+
+      String enabledStr;
+      bool hasEnabled = readParam("enabled=", enabledStr) || readParam("mode=", enabledStr);
+      if (!hasEnabled) { err = "INVALID_PARAM"; return false; }
+
+      bool enabled = false;
+      if (!parseBoolValue(enabledStr, enabled)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+      out.leaveProtection.enabled = enabled;
       return true;
     }
     if (s.startsWith("DEBUG:MOTION_SAMPLING")) {

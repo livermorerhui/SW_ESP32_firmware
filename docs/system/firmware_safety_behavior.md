@@ -10,6 +10,13 @@
   - wave stops
   - state leaves `RUNNING`
   - no abnormal-stop latch by default
+- configurable protection switch:
+  - command: `SAFETY:LEAVE_PROTECTION enabled=0/1`
+  - compatibility alias: `DEBUG:LEAVE_STOP enabled=0/1`
+  - ACK: `ACK:LEAVE_PROTECTION enabled=<0/1> supported=1 effect=<ENABLED_PAUSE|WARNING_ONLY>`
+  - `enabled=1`: keep the default `USER_LEFT_PLATFORM -> RECOVERABLE_PAUSE` action.
+  - `enabled=0`: keep detection and logs, emit `EVT:SAFETY reason=USER_LEFT_PLATFORM effect=WARNING_ONLY`, and do not enter recoverable pause only because of this leave event.
+  - default value after boot is enabled.
 
 ### Fall Suspected
 
@@ -44,6 +51,10 @@
 - `EVT:STATE`
 - `EVT:FAULT`
 - `EVT:SAFETY`
+- `ACK:CAP ... leave_stop_supported=1`
+- `SNAPSHOT: ... leave_stop_supported=1 leave_stop_enabled=<0/1>`
+
+`leave_stop_enabled` is firmware-owned runtime truth. APPs must not cache or invent the switch state after reconnect; they must consume `ACK:LEAVE_PROTECTION`, `SNAPSHOT`, or capability evidence.
 
 ## SafetyAction / StopReason Owner Boundary
 
@@ -59,6 +70,8 @@ Frozen rule:
 - A detector or measurement owner must not directly stop the wave or publish final BLE safety semantics.
 - `USER_LEFT_PLATFORM` and `FALL_SUSPECTED` must remain separate product reasons.
 - Disabling `FALL_STOP` only suppresses the `FALL_SUSPECTED` automatic stop action; it does not suppress `USER_LEFT_PLATFORM`.
+- Disabling `LEAVE_PROTECTION` only suppresses the `USER_LEFT_PLATFORM` automatic recoverable-pause action; it does not suppress `FALL_SUSPECTED`.
+- A `WARNING_ONLY` safety event is observable evidence, not a final stop action.
 - Any future extraction must first move pure reason/effect/source evaluation only, while leaving action timing in `SystemStateMachine`.
 
 2026-04-28 implementation boundary:
