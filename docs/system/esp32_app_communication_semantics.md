@@ -81,6 +81,7 @@
 | 参数/ready 扩展 | `PARAM` | `LaserModule` | 零点/系数与兼容 ready 扩展 |
 | 实时流 | `STREAM` | `LaserModule` | 距离/体重调试流 |
 | baseline-main 证据 | `BASELINE` | `LaserModule + RhythmStateJudge` | baseline_ready、MA7、ratio、danger evidence |
+| 测量健康 | `SNAPSHOT.measurement_health` | `LaserModule` | 测量链路运行健康态：`BOOTING/PROBING/READY/TRANSIENT_UNAVAILABLE/FAULT` |
 
 ## 3. stop / fault / state / baseline 的正式角色
 
@@ -201,7 +202,7 @@ ACK：
 能力与快照：
 
 - `ACK:CAP ... leave_stop_supported=1`
-- `SNAPSHOT: ... leave_stop_supported=1 leave_stop_enabled=<0/1>`
+- `SNAPSHOT: ... leave_stop_enabled=<0/1>`
 
 边界：
 
@@ -243,10 +244,44 @@ ACK：
 2. runtime readiness truth
 
 - `SNAPSHOT.start_ready`
-- `SNAPSHOT.baseline_ready`
+- `SNAPSHOT.measurement_health`
 - `SNAPSHOT.degraded_start_available`
-- `SNAPSHOT.degraded_start_enabled`
+- `SNAPSHOT.leave_stop_enabled`
 - reconnect 后重新拉取 `SNAPSHOT`
+
+### 5.0.1 measurement health truth
+
+`measurement_health` 是固件测量链路运行时真相源，不属于 `ACK:CAP`。
+
+当前正式值：
+
+- `BOOTING`
+- `PROBING`
+- `READY`
+- `TRANSIENT_UNAVAILABLE`
+- `FAULT`
+
+消费规则：
+
+- `BOOTING/PROBING` 表示启动期或首个有效测量前的探测状态，不得被 APP 升级为“激光故障”。
+- `READY` 表示连续有效测量已确认，APP 应清除由测量健康导致的不可用/故障提示。
+- `TRANSIENT_UNAVAILABLE` 表示 ready 后短暂不可用，默认不弹激光故障；后续如需 UI 提示，应作为初始化/临时不可用，不作为维修故障。
+- `FAULT` 才是正式测量链路故障，可驱动激光异常、degraded-start 维修确认、顶栏设置不可用。
+- 固件不得在 `TRANSIENT_UNAVAILABLE` 阶段通过 `setSensorHealthy(false)` 抢先发布正式 `MEASUREMENT_UNAVAILABLE`；只有进入 `FAULT` 才能发布正式故障 truth。`READY/FAULT` 切换必须发布 `SNAPSHOT`，供 APP 对账。
+- 旧固件没有该字段时，APP 才回退到 `laser_available / protection_degraded` 兼容逻辑。
+- APP 不得用本地定时器伪造 `measurement_health`。
+
+启动连接规则：
+
+- ESP32-plus 上电后，BLE advertising 应等测量健康启动判定完成后再开放；判定完成指 `READY` 或 `FAULT`，无激光配置也视为完成。
+- 这样 APP 不需要按“连接早晚”猜状态；连接后只按 ESP32 的正式 `SNAPSHOT / ACK / EVT` 处理。
+- 固件启动等待必须有串口证据：`[BLE_STARTUP_GATE] result=<resolved|timeout> health=<...> wait_ms=<...>`。
+
+降级开始规则：
+
+- `MEASUREMENT_UNAVAILABLE`、`measurement_health=FAULT`、`protection_degraded=true` 可以驱动保护失效 UI 和设置入口不可用，但不能被 APP 用来伪造 `degraded_start_available=true`。
+- 是否允许保护模块故障后继续开始，只能由固件 `SNAPSHOT.degraded_start_available / degraded_start_enabled` 或 `ACK:DEGRADED_START` 决定。
+- 如果固件 ACK 返回 `available=false enabled=false`，APP 必须停止本次 start 链路，不得继续发送 `WAVE:START`。
 
 3. control confirmation truth
 

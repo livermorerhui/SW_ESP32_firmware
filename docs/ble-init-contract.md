@@ -36,14 +36,11 @@ It answers one question:
 Current connect-time/start-gate subset:
 
 - `top_state`
-- `runtime_ready`
 - `start_ready`
-- `baseline_ready`
-- `platform_model`
-- `laser_installed`
 - `laser_available`
+- `measurement_health`
 - `degraded_start_available`
-- `degraded_start_enabled`
+- `leave_stop_enabled`
 
 This subset is intentionally constrained to stay within the common
 single-notify MTU path.
@@ -57,7 +54,27 @@ single-frame safety budget include:
 - `stable_weight`
 - `current_frequency`
 - `current_intensity`
+- `runtime_ready`
+- `baseline_ready`
+- `platform_model`
+- `laser_installed`
 - `protection_degraded`
+- `degraded_start_enabled`
+- `leave_stop_supported`
+
+`measurement_health` is runtime measurement-chain truth, not bootstrap truth.
+It is intentionally kept in `SNAPSHOT` rather than `ACK:CAP`.
+Current values:
+
+- `BOOTING`
+- `PROBING`
+- `READY`
+- `TRANSIENT_UNAVAILABLE`
+- `FAULT`
+
+Only `FAULT` represents confirmed measurement-chain fault for APP product UI.
+`BOOTING` / `PROBING` are startup readiness states and must not be upgraded
+into user-visible laser fault by the APP.
 
 If richer runtime health needs to grow again, it must move to a dedicated
 query/event plane rather than inflating connect-time `SNAPSHOT`.
@@ -78,6 +95,7 @@ Examples of prohibited fields:
 
 - `laser_available`
 - `protection_degraded`
+- `measurement_health`
 - `runtime_ready`
 - `start_ready`
 - `baseline_ready`

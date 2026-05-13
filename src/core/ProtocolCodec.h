@@ -38,28 +38,20 @@ public:
     // Keep connect-time snapshot within a single BLE notify frame for the
     // common MTU=185 path. Startup/start-button truth must not depend on a
     // multi-fragment SNAPSHOT.
-    s.reserve(220);
+    s.reserve(160);
     s = "SNAPSHOT:";
     s += "top_state=";
     s += topStateName(snapshot.topState);
-    s += " runtime_ready=";
-    s += snapshot.runtimeReady ? "1" : "0";
     s += " start_ready=";
     s += snapshot.startReady ? "1" : "0";
-    s += " baseline_ready=";
-    s += snapshot.baselineReady ? "1" : "0";
-    s += " platform_model=";
-    s += platformModelName(snapshot.platformModel);
-    s += " laser_installed=";
-    s += snapshot.laserInstalled ? "1" : "0";
     s += " laser_available=";
     s += snapshot.laserAvailable ? "1" : "0";
+    s += " measurement_health=";
+    s += measurementHealthStateName(snapshot.measurementHealth);
     s += " degraded_start_available=";
     s += snapshot.degradedStartAvailable ? "1" : "0";
     s += " degraded_start_enabled=";
     s += snapshot.degradedStartEnabled ? "1" : "0";
-    s += " leave_stop_supported=";
-    s += snapshot.leaveStopSupported ? "1" : "0";
     s += " leave_stop_enabled=";
     s += snapshot.leaveStopEnabled ? "1" : "0";
     logTruthPayloadBudgetWarningIfNeeded(
@@ -506,6 +498,8 @@ public:
         s += " state=";
         s += topStateName(e.state);
         return s;
+      case EventType::SNAPSHOT:
+        return "EVT:UNKNOWN";
     }
     return "EVT:UNKNOWN";
   }

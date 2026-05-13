@@ -166,6 +166,8 @@ const char* BleTransport::eventTypeName(EventType type) {
       return "BASELINE_MAIN";
     case EventType::STOP:
       return "STOP";
+    case EventType::SNAPSHOT:
+      return "SNAPSHOT";
   }
   return "UNKNOWN";
 }
@@ -181,6 +183,7 @@ bool BleTransport::isCriticalEvent(EventType type) {
     case EventType::BASELINE_MAIN:
     case EventType::STABLE_WEIGHT:
     case EventType::PARAMS:
+    case EventType::SNAPSHOT:
     case EventType::STREAM:
       return false;
   }
@@ -1476,6 +1479,19 @@ void BleTransport::txTaskLoop() {
 }
 
 void BleTransport::onEvent(const Event& e) {
+  if (e.type == EventType::SNAPSHOT) {
+    const SystemStateMachine* snapshotOwner = SystemStateMachine::activeInstance();
+    if (!snapshotOwner) {
+      noteEventEnqueueFailure(e.type, "SNAPSHOT");
+      return;
+    }
+    const String snapshot = ProtocolCodec::encodeSnapshot(snapshotOwner->snapshot());
+    if (!enqueueTxLine(snapshot)) {
+      noteEventEnqueueFailure(e.type, snapshot.c_str());
+    }
+    return;
+  }
+
   const String encoded = ProtocolCodec::encodeEvent(e);
   if (e.type == EventType::STREAM) {
     if (!enqueueStreamTxLine(encoded)) {

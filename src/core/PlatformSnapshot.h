@@ -19,6 +19,7 @@ struct PlatformSnapshot {
   bool laserInstalled = true;
   bool laserAvailable = false;
   bool protectionDegraded = true;
+  MeasurementHealthState measurementHealth = MeasurementHealthState::BOOTING;
   bool degradedStartAvailable = false;
   bool degradedStartEnabled = false;
   bool leaveStopSupported = false;

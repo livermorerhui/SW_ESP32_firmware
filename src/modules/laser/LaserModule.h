@@ -96,6 +96,9 @@ public:
   PlatformModel platformModel() const;
   bool laserInstalled() const;
   bool laserAvailable() const;
+  MeasurementHealthState measurementHealth() const;
+  bool measurementFaultConfirmed() const;
+  bool measurementStartupResolved() const;
   bool protectionDegraded() const;
   void getDeviceConfig(DeviceConfigSnapshot& out) const;
   bool setDeviceConfig(PlatformModel platformModel, bool laserInstalled, String& reason);
@@ -115,6 +118,18 @@ private:
       bool sentinel,
       const char* reason,
       uint32_t now);
+  void resetMeasurementHealth(const char* reason, uint32_t now);
+  void updateMeasurementHealth(
+      uint32_t now,
+      bool transportOk,
+      bool validDistance,
+      const char* reason);
+  void logMeasurementHealthChange(
+      uint32_t now,
+      MeasurementHealthState previous,
+      MeasurementHealthState next,
+      const char* reason) const;
+  void syncSensorHealthToStateMachine();
   bool measurementBypassActive() const;
   void logConfigTruth(const char* source, const char* reason = nullptr);
   void loadDeviceConfig();
@@ -279,6 +294,12 @@ private:
 
   volatile float latestWeightKg = 0.0f;
   bool lastMeasurementValid = false;
+  MeasurementHealthState measurementHealthState = MeasurementHealthState::BOOTING;
+  uint32_t measurementHealthStartedAtMs = 0;
+  uint32_t measurementHealthLastReadyAtMs = 0;
+  uint8_t measurementHealthSuccessSamples = 0;
+  uint8_t measurementHealthFailureSamples = 0;
+  bool measurementHealthEverReady = false;
   uint32_t lastValidityLogMs = 0;
   bool hasLoggedMeasurementBypassState = false;
   bool lastLoggedMeasurementBypassState = false;

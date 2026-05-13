@@ -10,7 +10,8 @@ enum class EventType : uint8_t {
   PARAMS,
   STREAM,
   BASELINE_MAIN,
-  STOP
+  STOP,
+  SNAPSHOT
 };
 
 struct Event {

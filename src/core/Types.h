@@ -43,6 +43,14 @@ enum class VerificationStopSource : uint8_t {
   USER_MANUAL_OTHER
 };
 
+enum class MeasurementHealthState : uint8_t {
+  BOOTING,
+  PROBING,
+  READY,
+  TRANSIENT_UNAVAILABLE,
+  FAULT
+};
+
 inline const char* topStateName(TopState s) {
   switch (s) {
     case TopState::IDLE: return "IDLE";
@@ -83,6 +91,17 @@ inline const char* verificationStopSourceName(VerificationStopSource source) {
     case VerificationStopSource::BASELINE_MAIN_LOGIC: return "BASELINE_MAIN_LOGIC";
     case VerificationStopSource::FORMAL_SAFETY_OTHER: return "FORMAL_SAFETY_OTHER";
     case VerificationStopSource::USER_MANUAL_OTHER: return "USER_MANUAL_OTHER";
+  }
+  return "UNKNOWN";
+}
+
+inline const char* measurementHealthStateName(MeasurementHealthState state) {
+  switch (state) {
+    case MeasurementHealthState::BOOTING: return "BOOTING";
+    case MeasurementHealthState::PROBING: return "PROBING";
+    case MeasurementHealthState::READY: return "READY";
+    case MeasurementHealthState::TRANSIENT_UNAVAILABLE: return "TRANSIENT_UNAVAILABLE";
+    case MeasurementHealthState::FAULT: return "FAULT";
   }
   return "UNKNOWN";
 }

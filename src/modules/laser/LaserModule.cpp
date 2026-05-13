@@ -8,6 +8,7 @@ namespace {
 constexpr uint32_t kLaserLoopIntervalNoLaserMs = 200UL;
 constexpr uint32_t kLaserLoopIntervalUnavailableIdleMs = 250UL;
 constexpr uint32_t kLaserUnavailableIdleReadBackoffMs = 3000UL;
+constexpr uint32_t kLaserRuntimeReadFailBackoffMs = 0UL;
 
 struct WindowStats {
   float mean = NAN;
@@ -180,11 +181,12 @@ bool LaserModule::measurementBypassActive() const {
 void LaserModule::logConfigTruth(const char* source, const char* reason) {
   const bool measurementBypass = measurementBypassActive();
   Serial.printf(
-      "[LAYER:CONFIG_TRUTH] measurement_bypass=%d platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d source=%s",
+      "[LAYER:CONFIG_TRUTH] measurement_bypass=%d platform_model=%s laser_installed=%d laser_available=%d measurement_health=%s protection_degraded=%d source=%s",
       measurementBypass ? 1 : 0,
       platformModelName(deviceConfig.platformModel),
       deviceConfig.laserInstalled ? 1 : 0,
       laserAvailable() ? 1 : 0,
+      measurementHealthStateName(measurementHealthState),
       protectionDegraded() ? 1 : 0,
       source ? source : "unknown");
   if (reason && reason[0] != '\0') {
@@ -205,6 +207,7 @@ void LaserModule::begin(EventBus* eb, SystemStateMachine* fsm, WaveModule* waveM
 
   preferences.begin("scale_cal", false);
   loadDeviceConfig();
+  resetMeasurementHealth("boot", millis());
   const LegacyScaleParams legacyParams = calibrationModelStore.loadLegacyParams(preferences);
   zeroDistance = legacyParams.zeroDistance;
   scaleFactor  = legacyParams.scaleFactor;
@@ -305,11 +308,31 @@ bool LaserModule::laserAvailable() const {
   return deviceConfig.laserInstalled && lastMeasurementValid;
 }
 
+MeasurementHealthState LaserModule::measurementHealth() const {
+  if (!deviceConfig.laserInstalled) {
+    return MeasurementHealthState::FAULT;
+  }
+  return measurementHealthState;
+}
+
+bool LaserModule::measurementFaultConfirmed() const {
+  return deviceConfig.laserInstalled &&
+      measurementHealthState == MeasurementHealthState::FAULT;
+}
+
+bool LaserModule::measurementStartupResolved() const {
+  if (!deviceConfig.laserInstalled) {
+    return true;
+  }
+  return measurementHealthState == MeasurementHealthState::READY ||
+      measurementHealthState == MeasurementHealthState::FAULT;
+}
+
 bool LaserModule::protectionDegraded() const {
   if (!deviceConfig.laserInstalled) {
     return true;
   }
-  return !laserAvailable();
+  return measurementFaultConfirmed();
 }
 
 void LaserModule::getDeviceConfig(DeviceConfigSnapshot& out) const {
@@ -434,6 +457,130 @@ void LaserModule::resetMeasurementPlane(const char* reason, bool logReset) {
   measurementPlane.reset(reason, logReset);
 }
 
+void LaserModule::resetMeasurementHealth(const char* reason, uint32_t now) {
+  MeasurementHealthState nextState = deviceConfig.laserInstalled
+      ? MeasurementHealthState::BOOTING
+      : MeasurementHealthState::FAULT;
+  const MeasurementHealthState previous = measurementHealthState;
+  measurementHealthState = nextState;
+  measurementHealthStartedAtMs = now;
+  measurementHealthLastReadyAtMs = 0;
+  measurementHealthSuccessSamples = 0;
+  measurementHealthFailureSamples = 0;
+  measurementHealthEverReady = false;
+  if (previous != measurementHealthState) {
+    logMeasurementHealthChange(now, previous, measurementHealthState, reason);
+  }
+}
+
+void LaserModule::logMeasurementHealthChange(
+    uint32_t now,
+    MeasurementHealthState previous,
+    MeasurementHealthState next,
+    const char* reason) const {
+  Serial.printf(
+      "[MEASUREMENT_HEALTH] state=%s previous=%s reason=%s ever_ready=%d success=%u failure=%u uptime_ms=%lu\n",
+      measurementHealthStateName(next),
+      measurementHealthStateName(previous),
+      reason ? reason : "unknown",
+      measurementHealthEverReady ? 1 : 0,
+      static_cast<unsigned>(measurementHealthSuccessSamples),
+      static_cast<unsigned>(measurementHealthFailureSamples),
+      static_cast<unsigned long>(now));
+}
+
+void LaserModule::syncSensorHealthToStateMachine() {
+  if (!sm) return;
+  if (!deviceConfig.laserInstalled) {
+    sm->setSensorHealthy(false);
+    return;
+  }
+  if (measurementHealthState == MeasurementHealthState::READY) {
+    sm->setSensorHealthy(true);
+    return;
+  }
+  if (measurementHealthState == MeasurementHealthState::FAULT) {
+    sm->setSensorHealthy(false);
+  }
+}
+
+void LaserModule::updateMeasurementHealth(
+    uint32_t now,
+    bool transportOk,
+    bool validDistance,
+    const char* reason) {
+  if (!deviceConfig.laserInstalled) {
+    const MeasurementHealthState previous = measurementHealthState;
+    measurementHealthState = MeasurementHealthState::FAULT;
+    measurementHealthStartedAtMs = now;
+    measurementHealthSuccessSamples = 0;
+    measurementHealthFailureSamples = 0;
+    measurementHealthEverReady = false;
+    if (previous != measurementHealthState) {
+      logMeasurementHealthChange(now, previous, measurementHealthState, reason);
+    }
+    syncSensorHealthToStateMachine();
+    return;
+  }
+
+  const bool sampleReady = transportOk && validDistance;
+  const MeasurementHealthState previous = measurementHealthState;
+  if (measurementHealthStartedAtMs == 0) {
+    measurementHealthStartedAtMs = now;
+  }
+
+  if (sampleReady) {
+    if (measurementHealthSuccessSamples < 0xFF) {
+      measurementHealthSuccessSamples++;
+    }
+    measurementHealthFailureSamples = 0;
+    if (measurementHealthSuccessSamples >= LASER_HEALTH_READY_SUCCESS_SAMPLES) {
+      measurementHealthState = MeasurementHealthState::READY;
+      measurementHealthEverReady = true;
+      measurementHealthLastReadyAtMs = now;
+    } else if (!measurementHealthEverReady) {
+      measurementHealthState = MeasurementHealthState::PROBING;
+    }
+  } else {
+    measurementHealthSuccessSamples = 0;
+    if (measurementHealthFailureSamples < 0xFF) {
+      measurementHealthFailureSamples++;
+    }
+
+    const uint32_t startupAgeMs = now >= measurementHealthStartedAtMs
+        ? (now - measurementHealthStartedAtMs)
+        : 0;
+    const uint32_t sinceReadyMs =
+        measurementHealthLastReadyAtMs > 0 && now >= measurementHealthLastReadyAtMs
+            ? (now - measurementHealthLastReadyAtMs)
+            : UINT32_MAX;
+    const bool runtimeFaultPath = measurementHealthEverReady;
+    const uint8_t failureThreshold = runtimeFaultPath
+        ? LASER_HEALTH_RUNTIME_FAULT_FAILURE_SAMPLES
+        : LASER_HEALTH_FAULT_FAILURE_SAMPLES;
+    const uint32_t faultGraceMs = runtimeFaultPath
+        ? LASER_HEALTH_RUNTIME_FAULT_GRACE_MS
+        : LASER_HEALTH_TRANSIENT_GRACE_MS;
+    const bool failureThresholdReached =
+        measurementHealthFailureSamples >= failureThreshold;
+
+    if (!measurementHealthEverReady) {
+      measurementHealthState = startupAgeMs < LASER_STARTUP_GRACE_MS
+          ? MeasurementHealthState::PROBING
+          : MeasurementHealthState::FAULT;
+    } else if (failureThresholdReached && sinceReadyMs >= faultGraceMs) {
+      measurementHealthState = MeasurementHealthState::FAULT;
+    } else {
+      measurementHealthState = MeasurementHealthState::TRANSIENT_UNAVAILABLE;
+    }
+  }
+
+  if (previous != measurementHealthState) {
+    logMeasurementHealthChange(now, previous, measurementHealthState, reason);
+  }
+  syncSensorHealthToStateMachine();
+}
+
 void LaserModule::publishMeasurementSample(
     uint32_t now,
     bool valid,
@@ -491,6 +638,7 @@ void LaserModule::applyDeviceConfigRuntimeEffects(const char* source) {
   lastMeasurementValid = false;
   lastInvalidReason = deviceConfig.laserInstalled ? nullptr : "LASER_NOT_INSTALLED";
   lastLogDist = -999.0f;
+  resetMeasurementHealth(source ? source : "device_config", millis());
 
   logConfigTruth(source ? source : "device_config");
 
@@ -505,7 +653,7 @@ void LaserModule::applyDeviceConfigRuntimeEffects(const char* source) {
       0.0f,
       source ? source : "device_config");
   sm->setStartReadiness(false, 0.0f);
-  sm->setSensorHealthy(false);
+  syncSensorHealthToStateMachine();
 }
 
 void LaserModule::loadCalibrationModel() {
@@ -1821,6 +1969,7 @@ void LaserModule::taskLoop() {
       nextReadEligibleAtMs = 0;
       lastMeasurementValid = false;
       lastInvalidReason = "LASER_NOT_INSTALLED";
+      updateMeasurementHealth(now, false, false, "LASER_NOT_INSTALLED");
       resetMeasurementPlane("no_laser_config", false);
       if (!hasLoggedMeasurementBypassState || !lastLoggedMeasurementBypassState) {
         logConfigTruth("measurement_bypass_changed", "no_laser_config");
@@ -1842,9 +1991,15 @@ void LaserModule::taskLoop() {
     now = readResult.readCompletedAtMs;
     if (!readResult.transportOk) {
       noteDistanceValidity(false, 0, 0, NAN, false, "READ_FAIL", now);
-      if (sm) sm->setSensorHealthy(false);
+      updateMeasurementHealth(now, false, false, "READ_FAIL");
+      const bool runtimeFaultPath = measurementHealthEverReady;
+      const uint32_t readFailBackoffMs = runtimeFaultPath
+          ? kLaserRuntimeReadFailBackoffMs
+          : kLaserUnavailableIdleReadBackoffMs;
       nextReadEligibleAtMs =
-          readAttemptTopState == TopState::RUNNING ? 0 : (now + kLaserUnavailableIdleReadBackoffMs);
+          readAttemptTopState == TopState::RUNNING || readFailBackoffMs == 0
+              ? 0
+              : (now + readFailBackoffMs);
       resetMeasurementPlane("modbus_read_fail", false);
       handleInvalidMeasurement("modbus_read_fail");
       publishMeasurementSample(now, false, 0.0f, 0.0f, "READ_FAIL");
@@ -1852,7 +2007,6 @@ void LaserModule::taskLoop() {
     }
 
     nextReadEligibleAtMs = 0;
-    if (sm) sm->setSensorHealthy(true);
 
     const char* validityReason = readResult.invalidReason;
     if (!readResult.validDistance) {
@@ -1864,7 +2018,7 @@ void LaserModule::taskLoop() {
           readResult.sentinel,
           validityReason,
           now);
-      if (sm) sm->setSensorHealthy(false);
+      updateMeasurementHealth(now, true, false, validityReason);
       resetMeasurementPlane(readResult.sentinel ? "distance_sentinel" : "distance_out_of_range", false);
       handleInvalidMeasurement(readResult.sentinel ? "distance_sentinel" : "distance_out_of_range");
       publishMeasurementSample(now, false, 0.0f, 0.0f, validityReason);
@@ -1886,11 +2040,11 @@ void LaserModule::taskLoop() {
           false,
           readResult.rawRegister,
           readResult.signedRaw,
-          dist,
-          false,
-          "DISTANCE_NONFINITE",
-          now);
-      if (sm) sm->setSensorHealthy(false);
+        dist,
+        false,
+        "DISTANCE_NONFINITE",
+        now);
+      updateMeasurementHealth(now, true, false, "DISTANCE_NONFINITE");
       resetMeasurementPlane("distance_invalid", false);
       handleInvalidMeasurement("distance_invalid");
       publishMeasurementSample(now, false, 0.0f, 0.0f, "DISTANCE_NONFINITE");
@@ -1921,12 +2075,13 @@ void LaserModule::taskLoop() {
 
     float weight = evaluateCalibrationWeight(dist);
     if (!isfinite(weight)) {
-      if (sm) sm->setSensorHealthy(false);
+      updateMeasurementHealth(now, true, false, "WEIGHT_INVALID");
       resetMeasurementPlane("weight_invalid", false);
       handleInvalidMeasurement("weight_invalid");
       publishMeasurementSample(now, false, dist, 0.0f, "WEIGHT_INVALID");
       continue;
     }
+    updateMeasurementHealth(now, true, true, nullptr);
     latestWeightKg = weight;
     invalidPresenceSamples = 0;
     publishMeasurementSample(now, true, dist, weight, nullptr);

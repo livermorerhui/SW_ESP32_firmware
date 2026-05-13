@@ -60,6 +60,7 @@ private:
   void emitState();
   void emitFault(FaultCode code);
   void emitSafety(FaultCode code, SafetySignalKind safety);
+  void emitSnapshot();
   void emitVisibleSignals();
   void enterBlockingFault(FaultCode code, const char* detail);
   void enterRecoverablePause(FaultCode code, const char* detail);

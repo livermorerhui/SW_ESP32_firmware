@@ -19,6 +19,23 @@ static BleTransport g_ble;
 static String g_bleDeviceName;
 static String buildBleDeviceName(PlatformModel model);
 
+static MeasurementHealthState waitForMeasurementStartupResolved() {
+  const uint32_t startedAt = millis();
+  MeasurementHealthState health = g_laser.measurementHealth();
+  while (!g_laser.measurementStartupResolved() &&
+      millis() - startedAt < BLE_STARTUP_MEASUREMENT_READY_WAIT_MS) {
+    delay(BLE_STARTUP_MEASUREMENT_READY_POLL_MS);
+    health = g_laser.measurementHealth();
+  }
+  Serial.printf(
+      "[BLE_STARTUP_GATE] result=%s health=%s wait_ms=%lu timeout_ms=%lu\n",
+      g_laser.measurementStartupResolved() ? "resolved" : "timeout",
+      measurementHealthStateName(health),
+      static_cast<unsigned long>(millis() - startedAt),
+      static_cast<unsigned long>(BLE_STARTUP_MEASUREMENT_READY_WAIT_MS));
+  return health;
+}
+
 static void clearBoardRgbLed() {
   neopixelWrite(BOARD_RGB_LED_PIN, 0, 0, 0);
 }
@@ -393,8 +410,8 @@ void setup() {
 #endif
   );
 
-  // Init order: bus -> state machine -> modules -> BLE transport.
-  g_eventBus.setSink(&g_ble);
+  // Init order: state machine -> modules -> startup measurement gate -> BLE transport.
+  // EventBus is connected to BLE only after BLE queues are initialized; startup samples are recovered by SNAPSHOT.
   g_fsm.begin(&g_eventBus, &g_wave);
 
   g_wave.begin(&g_eventBus);
@@ -403,10 +420,12 @@ void setup() {
   g_cmdBus.setHandler(&g_handler);
 
   g_ble.setDisconnectSink(&g_handler);
+  waitForMeasurementStartupResolved();
   g_bleDeviceName = buildBleDeviceName(g_laser.platformModel());
   g_ble.begin(&g_cmdBus,
       g_bleDeviceName.c_str(),
       platformModelName(g_laser.platformModel()));
+  g_eventBus.setSink(&g_ble);
 
   Serial.println("Ready ✅");
   Serial.println("Try: CAP?");

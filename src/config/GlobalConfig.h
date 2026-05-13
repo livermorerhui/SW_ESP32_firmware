@@ -47,6 +47,14 @@ static constexpr float LASER_DISTANCE_RUNTIME_DIVISOR = 100.0f;
 static constexpr float LASER_DISTANCE_MM_TO_RUNTIME_UNITS =
     1.0f / LASER_DISTANCE_RUNTIME_DIVISOR;
 static constexpr uint32_t LASER_INVALID_LOG_INTERVAL_MS = 1000UL;
+static constexpr uint32_t LASER_STARTUP_GRACE_MS = 10000UL;
+static constexpr uint32_t BLE_STARTUP_MEASUREMENT_READY_WAIT_MS = 12000UL;
+static constexpr uint32_t BLE_STARTUP_MEASUREMENT_READY_POLL_MS = 100UL;
+static constexpr uint32_t LASER_HEALTH_TRANSIENT_GRACE_MS = 3000UL;
+static constexpr uint32_t LASER_HEALTH_RUNTIME_FAULT_GRACE_MS = 1000UL;
+static constexpr uint8_t LASER_HEALTH_READY_SUCCESS_SAMPLES = 2;
+static constexpr uint8_t LASER_HEALTH_FAULT_FAILURE_SAMPLES = 3;
+static constexpr uint8_t LASER_HEALTH_RUNTIME_FAULT_FAILURE_SAMPLES = 2;
 
 // ===== Scale Algo =====
 #define WINDOW_N 10

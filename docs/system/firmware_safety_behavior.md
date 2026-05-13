@@ -46,13 +46,27 @@
   - no accidental start block by default
   - behavior remains configurable through firmware policy
 
+### Measurement Health Startup Semantics
+
+`LaserModule` owns the measurement-chain health state exposed through
+`SNAPSHOT measurement_health=<BOOTING|PROBING|READY|TRANSIENT_UNAVAILABLE|FAULT>`.
+
+- `BOOTING` / `PROBING`: ESP32 has not yet confirmed the laser measurement chain ready. Modbus read failures during the startup grace window are diagnostic evidence only and must not be reported as a confirmed laser fault.
+- `READY`: consecutive valid measurement samples have confirmed the measurement chain.
+- `TRANSIENT_UNAVAILABLE`: the chain was ready and then briefly lost valid measurement. This is a warning/readiness state, not confirmed fault.
+- `FAULT`: startup grace or post-ready failure threshold has been exceeded. Only this state may drive confirmed measurement unavailable / degraded-start UI.
+- Runtime `TRANSIENT_UNAVAILABLE` must not publish the formal `MEASUREMENT_UNAVAILABLE` safety/fault truth ahead of `FAULT`. The firmware publishes a snapshot when the confirmed `FAULT` or recovered `READY` truth changes so clients can reconcile their mirrors.
+
+`ACK:CAP` must not include `measurement_health`; it remains runtime truth in
+`SNAPSHOT`. APPs must not synthesize this state from local timers.
+
 ## APP-Facing Signals
 
 - `EVT:STATE`
 - `EVT:FAULT`
 - `EVT:SAFETY`
 - `ACK:CAP ... leave_stop_supported=1`
-- `SNAPSHOT: ... leave_stop_supported=1 leave_stop_enabled=<0/1>`
+- `SNAPSHOT: ... measurement_health=<...> leave_stop_enabled=<0/1>`
 
 `leave_stop_enabled` is firmware-owned runtime truth. APPs must not cache or invent the switch state after reconnect; they must consume `ACK:LEAVE_PROTECTION`, `SNAPSHOT`, or capability evidence.
 

@@ -125,8 +125,8 @@ bool SystemStateMachine::laserlessRuntimeStrategyActive() const {
 
 bool SystemStateMachine::degradedStartAvailable() const {
   return laserConfiguredInstalled() &&
-      sensor_state_known &&
-      !sensor_healthy;
+      laser &&
+      laser->measurementFaultConfirmed();
 }
 
 bool SystemStateMachine::degradedStartAuthorized() const {
@@ -153,7 +153,7 @@ bool SystemStateMachine::effectiveProtectionDegraded() const {
   if (!laserConfiguredInstalled()) {
     return true;
   }
-  return !effectiveLaserAvailable();
+  return laser ? laser->measurementFaultConfirmed() : false;
 }
 
 PlatformSnapshot SystemStateMachine::snapshot() const {
@@ -171,6 +171,7 @@ PlatformSnapshot SystemStateMachine::snapshot() const {
   out.laserInstalled = laserConfiguredInstalled();
   out.laserAvailable = effectiveLaserAvailable();
   out.protectionDegraded = effectiveProtectionDegraded();
+  out.measurementHealth = laser ? laser->measurementHealth() : MeasurementHealthState::FAULT;
   out.degradedStartAvailable = degradedStartAvailable();
   out.degradedStartEnabled = degradedStartBypassActive();
   out.leaveStopSupported = true;
@@ -330,6 +331,16 @@ void SystemStateMachine::emitSafety(FaultCode code, SafetySignalKind safety) {
   bus->publish(e);
 }
 
+void SystemStateMachine::emitSnapshot() {
+  if (!bus) return;
+
+  Event e{};
+  e.type = EventType::SNAPSHOT;
+  e.ts_ms = millis();
+
+  bus->publish(e);
+}
+
 FaultCode SystemStateMachine::visibleReasonCode() const {
   if (blocking_fault_code != FaultCode::NONE) return blocking_fault_code;
   if (pause_reason_code != FaultCode::NONE) return pause_reason_code;
@@ -415,6 +426,7 @@ void SystemStateMachine::setWarningFault(FaultCode code, const char* detail) {
 
   if (blocking_fault_code == FaultCode::NONE && pause_reason_code == FaultCode::NONE) {
     emitVisibleSignals();
+    emitSnapshot();
   }
 }
 
@@ -430,6 +442,7 @@ void SystemStateMachine::clearWarningFault(FaultCode code, const char* detail) {
 
   if (blocking_fault_code == FaultCode::NONE && pause_reason_code == FaultCode::NONE) {
     emitVisibleSignals();
+    emitSnapshot();
   }
 }
 
@@ -853,6 +866,7 @@ void SystemStateMachine::setSensorHealthy(bool healthy) {
   }
 
   if (!healthy && changed) {
+    emitSnapshot();
     if (SAFETY_POLICY_MEASUREMENT_UNAVAILABLE_STOPS_WAVE && st == TopState::RUNNING) {
       enterBlockingFault(FaultCode::MEASUREMENT_UNAVAILABLE, "sensor_unhealthy");
       return;
@@ -863,6 +877,7 @@ void SystemStateMachine::setSensorHealthy(bool healthy) {
   }
 
   if (healthy) {
+    emitSnapshot();
     clearWarningFault(FaultCode::MEASUREMENT_UNAVAILABLE, "sensor_recovered");
   }
 
