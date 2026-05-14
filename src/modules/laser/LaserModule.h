@@ -9,6 +9,7 @@
 #include "modules/laser/CalibrationModelStore.h"
 #include "modules/laser/DeviceConfigStore.h"
 #include "modules/laser/LaserMeasurementReader.h"
+#include "modules/laser/MeasurementHealthStateMachine.h"
 #include "modules/laser/MeasurementPlane.h"
 #include "modules/laser/MotionSafetyShadowEvaluator.h"
 #include "modules/laser/PresenceContractEvaluator.h"
@@ -294,12 +295,7 @@ private:
 
   volatile float latestWeightKg = 0.0f;
   bool lastMeasurementValid = false;
-  MeasurementHealthState measurementHealthState = MeasurementHealthState::BOOTING;
-  uint32_t measurementHealthStartedAtMs = 0;
-  uint32_t measurementHealthLastReadyAtMs = 0;
-  uint8_t measurementHealthSuccessSamples = 0;
-  uint8_t measurementHealthFailureSamples = 0;
-  bool measurementHealthEverReady = false;
+  MeasurementHealthStateMachine measurementHealthMachine{};
   uint32_t lastValidityLogMs = 0;
   bool hasLoggedMeasurementBypassState = false;
   bool lastLoggedMeasurementBypassState = false;

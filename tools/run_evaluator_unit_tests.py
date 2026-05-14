@@ -40,6 +40,7 @@ TEST_MAIN = r"""
 #include <iostream>
 
 #include "modules/laser/BaselineEvidenceEvaluator.h"
+#include "modules/laser/MeasurementHealthStateMachine.h"
 #include "modules/laser/PresenceContractEvaluator.h"
 #include "modules/laser/StopOutcomeSummaryEvaluator.h"
 #include "core/SafetyActionContractEvaluator.h"
@@ -306,6 +307,98 @@ void test_stop_outcome_summary_evaluator() {
   expect_reason(result.stopSourceText, "NONE");
 }
 
+void test_measurement_health_startup_and_ready() {
+  MeasurementHealthConfig config{};
+  config.startupGraceMs = 1000;
+  config.transientGraceMs = 300;
+  config.runtimeFaultGraceMs = 100;
+  config.readySuccessSamples = 2;
+  config.startupFaultFailureSamples = 3;
+  config.runtimeFaultFailureSamples = 2;
+
+  MeasurementHealthStateMachine machine(config);
+  MeasurementHealthTransition transition = machine.reset(10, true);
+  assert(machine.state() == MeasurementHealthState::BOOTING);
+  assert(!transition.changed);
+  assert(!machine.startupResolved());
+
+  transition = machine.observe(100, true, false, false);
+  assert(machine.state() == MeasurementHealthState::PROBING);
+  assert(transition.changed);
+  assert(machine.failureSamples() == 1);
+  assert(!machine.startupResolved());
+
+  transition = machine.observe(200, true, true, true);
+  assert(machine.state() == MeasurementHealthState::PROBING);
+  assert(!transition.changed);
+  assert(machine.successSamples() == 1);
+
+  transition = machine.observe(220, true, true, true);
+  assert(machine.state() == MeasurementHealthState::READY);
+  assert(transition.changed);
+  assert(machine.everReady());
+  assert(machine.startupResolved());
+}
+
+void test_measurement_health_startup_fault_after_grace() {
+  MeasurementHealthConfig config{};
+  config.startupGraceMs = 1000;
+  config.startupFaultFailureSamples = 3;
+
+  MeasurementHealthStateMachine machine(config);
+  machine.reset(0, true);
+
+  machine.observe(100, true, false, false);
+  assert(machine.state() == MeasurementHealthState::PROBING);
+  MeasurementHealthTransition transition = machine.observe(1200, true, false, false);
+  assert(machine.state() == MeasurementHealthState::FAULT);
+  assert(transition.changed);
+  assert(machine.faultConfirmed());
+  assert(machine.startupResolved());
+}
+
+void test_measurement_health_runtime_fault_and_recovery() {
+  MeasurementHealthConfig config{};
+  config.startupGraceMs = 1000;
+  config.runtimeFaultGraceMs = 100;
+  config.readySuccessSamples = 2;
+  config.runtimeFaultFailureSamples = 2;
+
+  MeasurementHealthStateMachine machine(config);
+  machine.reset(0, true);
+  machine.observe(10, true, true, true);
+  machine.observe(20, true, true, true);
+  assert(machine.state() == MeasurementHealthState::READY);
+
+  MeasurementHealthTransition transition = machine.observe(40, true, false, false);
+  assert(machine.state() == MeasurementHealthState::TRANSIENT_UNAVAILABLE);
+  assert(transition.changed);
+
+  transition = machine.observe(150, true, false, false);
+  assert(machine.state() == MeasurementHealthState::FAULT);
+  assert(transition.changed);
+
+  transition = machine.observe(170, true, true, true);
+  assert(machine.state() == MeasurementHealthState::FAULT);
+  assert(!transition.changed);
+  transition = machine.observe(190, true, true, true);
+  assert(machine.state() == MeasurementHealthState::READY);
+  assert(transition.changed);
+}
+
+void test_measurement_health_no_laser_is_fault() {
+  MeasurementHealthStateMachine machine;
+  MeasurementHealthTransition transition = machine.reset(5, false);
+  assert(machine.state() == MeasurementHealthState::FAULT);
+  assert(transition.changed);
+  assert(machine.faultConfirmed());
+  assert(machine.startupResolved());
+
+  transition = machine.observe(20, false, true, true);
+  assert(machine.state() == MeasurementHealthState::FAULT);
+  assert(!transition.changed);
+}
+
 }  // namespace
 
 int main() {
@@ -317,6 +410,10 @@ int main() {
   test_fall_stop_action_decision();
   test_stop_reason_and_source_fallbacks();
   test_stop_outcome_summary_evaluator();
+  test_measurement_health_startup_and_ready();
+  test_measurement_health_startup_fault_after_grace();
+  test_measurement_health_runtime_fault_and_recovery();
+  test_measurement_health_no_laser_is_fault();
   std::cout << "evaluator unit tests passed\n";
   return 0;
 }
@@ -344,6 +441,7 @@ def run() -> None:
       str(main_cpp),
       str(ROOT / "src/modules/laser/PresenceContractEvaluator.cpp"),
       str(ROOT / "src/modules/laser/BaselineEvidenceEvaluator.cpp"),
+      str(ROOT / "src/modules/laser/MeasurementHealthStateMachine.cpp"),
       str(ROOT / "src/modules/laser/StopOutcomeSummaryEvaluator.cpp"),
       str(ROOT / "src/core/SafetyActionContractEvaluator.cpp"),
       "-o",
