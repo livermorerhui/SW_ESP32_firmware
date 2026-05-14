@@ -129,10 +129,6 @@ DegradedStartPolicyDecision SystemStateMachine::degradedStartPolicyDecision() co
   return RuntimeProtectionPolicy::evaluateDegradedStart(input);
 }
 
-bool SystemStateMachine::laserlessRuntimeStrategyActive() const {
-  return degradedStartPolicyDecision().laserlessRuntimeStrategyActive;
-}
-
 bool SystemStateMachine::degradedStartAvailable() const {
   return degradedStartPolicyDecision().degradedStartAvailable;
 }

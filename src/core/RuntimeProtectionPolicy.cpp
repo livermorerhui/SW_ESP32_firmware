@@ -3,14 +3,14 @@
 DegradedStartPolicyDecision RuntimeProtectionPolicy::evaluateDegradedStart(
     const DegradedStartPolicyInput& input) {
   DegradedStartPolicyDecision decision{};
-  decision.laserlessRuntimeStrategyActive = !input.laserConfiguredInstalled;
+  decision.noLaserStartBypassActive = !input.laserConfiguredInstalled;
   decision.degradedStartAvailable =
       input.laserConfiguredInstalled && input.measurementFaultConfirmed;
   decision.degradedStartEnabled =
       decision.degradedStartAvailable && input.degradedStartAuthorized;
 
   const bool bypassActive =
-      decision.laserlessRuntimeStrategyActive || decision.degradedStartEnabled;
+      decision.noLaserStartBypassActive || decision.degradedStartEnabled;
   decision.effectiveRuntimeReady = bypassActive ? true : input.runtimeReady;
   decision.effectiveStartReady = bypassActive ? true : input.startReady;
   decision.protectionDegraded =

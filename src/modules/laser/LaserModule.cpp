@@ -1369,7 +1369,7 @@ void LaserModule::resetStableTracking(const char* reason, bool logIfActive) {
 
 void LaserModule::beginStableCandidate(float distance, float weight) {
   if (stableState != StableState::STABLE_CANDIDATE) {
-    // 本轮约 3 秒体感优化优先落在 stable build，而不是 baseline_ready/start_ready 后半段。
+    // 当前约 3 秒体感优化优先落在 stable build，而不是 baseline_ready/start_ready 后半段。
     // 这里记录 build 入口，便于现场直接看出候选开始到 latch 的真实耗时。
     Serial.printf(
         "[STABLE] CANDIDATE state_eval_interval_ms=%lu early_samples=%u legacy_window=%d\n",
@@ -2105,7 +2105,7 @@ void LaserModule::taskLoop() {
         currentTopState != TopState::RUNNING &&
         stableContract.baselineReadyLatched) {
       // stable_weight：稳定体重。
-      // 只有确认离台后，才清空本轮主判断基线。
+      // 只有确认离台后，才清空当前主判断基线。
       // 这里同步清掉正式 start readiness，避免只靠首秒屏蔽或阈值调高来掩盖问题。
       releaseOccupiedCycle("user_left_platform_confirmed", now);
       rhythmStateJudge.reset("user_left_platform_confirmed");

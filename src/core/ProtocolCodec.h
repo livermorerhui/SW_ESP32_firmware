@@ -62,11 +62,11 @@ public:
     return s;
   }
 
-  // 本轮只做最小兼容增强，不改 stop/state owner，也不删 Demo 旧链。
+  // 当前只做最小兼容增强，不改 stop/state owner，也不删 Demo 兼容链。
   // formal current branch 仍通过 Event.Fault.reason 识别关键停波语义，
   // 因此这里只在目标场景给 EVT:FAULT 追加 reason 文本，同时保留 numeric code
   // 作为前缀，避免误伤 Demo / legacy parser 现有对数字 fault 的依赖。
-  // 这是一层阶段性桥接，不代表最终 canonical 协议；后续统一治理应在
+  // 这是一层兼容桥接，不代表最终 canonical 协议；后续统一治理应在
   // formal 正式切到 STOP/SAFETY/BASELINE owner 后再做。
   static const char* minimalCompatFaultReason(FaultCode code) {
     switch (code) {

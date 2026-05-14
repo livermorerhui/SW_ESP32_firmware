@@ -89,7 +89,6 @@ private:
   DegradedStartPolicyDecision degradedStartPolicyDecision() const;
   UserLeftProtectionDecision decideUserLeftAction() const;
   bool laserConfiguredInstalled() const;
-  bool laserlessRuntimeStrategyActive() const;
   bool effectiveRuntimeReady() const;
   bool effectiveStartReady() const;
   bool effectiveLaserAvailable() const;
@@ -118,7 +117,7 @@ private:
   bool leave_stop_enabled = LEAVE_STOP_ENABLED_DEFAULT;
   uint32_t last_suppressed_leave_notice_ms = 0;
   // runtime_ready 只表示“人是否仍在平台上”的 presence 结果。
-  // 本轮修复后，它不再直接承担正式 start allow 的语义。
+  // 当前语义下，runtime_ready 只承载 presence，不直接承担正式 start allow。
   bool runtime_ready = false;
   // start_ready 才是正式 start readiness：
   // 只有 stable/baseline 已建立后才会置 1，并与 leave 启用时机对齐。

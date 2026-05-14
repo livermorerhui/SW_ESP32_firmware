@@ -11,7 +11,7 @@ struct DegradedStartPolicyInput {
 };
 
 struct DegradedStartPolicyDecision {
-  bool laserlessRuntimeStrategyActive = true;
+  bool noLaserStartBypassActive = true;
   bool degradedStartAvailable = false;
   bool degradedStartEnabled = false;
   bool effectiveRuntimeReady = true;

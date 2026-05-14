@@ -410,7 +410,7 @@ void test_degraded_start_policy_profiles() {
 
   DegradedStartPolicyDecision decision =
       RuntimeProtectionPolicy::evaluateDegradedStart(input);
-  assert(decision.laserlessRuntimeStrategyActive);
+  assert(decision.noLaserStartBypassActive);
   assert(!decision.degradedStartAvailable);
   assert(!decision.degradedStartEnabled);
   assert(decision.effectiveRuntimeReady);
@@ -422,7 +422,7 @@ void test_degraded_start_policy_profiles() {
   input.runtimeReady = true;
   input.startReady = false;
   decision = RuntimeProtectionPolicy::evaluateDegradedStart(input);
-  assert(!decision.laserlessRuntimeStrategyActive);
+  assert(!decision.noLaserStartBypassActive);
   assert(!decision.degradedStartAvailable);
   assert(!decision.degradedStartEnabled);
   assert(decision.effectiveRuntimeReady);

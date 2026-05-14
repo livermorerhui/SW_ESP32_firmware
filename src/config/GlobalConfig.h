@@ -69,8 +69,8 @@ static constexpr uint8_t STABLE_TRIMMED_MEAN_DROP_SAMPLES = 1;
 // 不能简单粗暴把所有窗口统一缩短。
 // 因此保留 legacy 满窗 10 样本 + STD_TH 的兜底路径，只额外增加一个更保守的
 // “9 样本提前锁定”分支：只有离散度更小、且最新样本没有明显偏离均值时才允许提前 latch。
-// 这些值是本阶段把体感从约 3 秒压到约 2 秒级的阶段性参数，不代表最终全局最优。
-// 本轮是 baseline build 时延点位的最后一次固件侧小范围尝试：
+// 这些值是把体感从约 3 秒压到约 2 秒级的当前参数，不代表最终全局最优。
+// 当前 baseline build 时延点位只做小范围兜底：
 // 主问题不是 fallback 缺失，而是 early_strict 现场命中率仍然偏低。
 // 因此这里只补一个“整窗略松、尾段更严”的 guarded 条件，专门兜住
 // “整体已接近 legacy 合格，但 recent tail 明显已经站稳”的 case。
