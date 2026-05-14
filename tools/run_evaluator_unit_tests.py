@@ -43,6 +43,7 @@ TEST_MAIN = r"""
 #include "modules/laser/MeasurementHealthStateMachine.h"
 #include "modules/laser/PresenceContractEvaluator.h"
 #include "modules/laser/StopOutcomeSummaryEvaluator.h"
+#include "core/RuntimeProtectionPolicy.h"
 #include "core/SafetyActionContractEvaluator.h"
 
 namespace {
@@ -399,6 +400,97 @@ void test_measurement_health_no_laser_is_fault() {
   assert(!transition.changed);
 }
 
+void test_degraded_start_policy_profiles() {
+  DegradedStartPolicyInput input{};
+  input.laserConfiguredInstalled = false;
+  input.measurementFaultConfirmed = false;
+  input.degradedStartAuthorized = false;
+  input.runtimeReady = false;
+  input.startReady = false;
+
+  DegradedStartPolicyDecision decision =
+      RuntimeProtectionPolicy::evaluateDegradedStart(input);
+  assert(decision.laserlessRuntimeStrategyActive);
+  assert(!decision.degradedStartAvailable);
+  assert(!decision.degradedStartEnabled);
+  assert(decision.effectiveRuntimeReady);
+  assert(decision.effectiveStartReady);
+  assert(decision.protectionDegraded);
+
+  input.laserConfiguredInstalled = true;
+  input.measurementFaultConfirmed = false;
+  input.runtimeReady = true;
+  input.startReady = false;
+  decision = RuntimeProtectionPolicy::evaluateDegradedStart(input);
+  assert(!decision.laserlessRuntimeStrategyActive);
+  assert(!decision.degradedStartAvailable);
+  assert(!decision.degradedStartEnabled);
+  assert(decision.effectiveRuntimeReady);
+  assert(!decision.effectiveStartReady);
+  assert(!decision.protectionDegraded);
+
+  input.measurementFaultConfirmed = true;
+  input.degradedStartAuthorized = false;
+  input.runtimeReady = false;
+  input.startReady = false;
+  decision = RuntimeProtectionPolicy::evaluateDegradedStart(input);
+  assert(decision.degradedStartAvailable);
+  assert(!decision.degradedStartEnabled);
+  assert(!decision.effectiveRuntimeReady);
+  assert(!decision.effectiveStartReady);
+  assert(decision.protectionDegraded);
+
+  input.degradedStartAuthorized = true;
+  decision = RuntimeProtectionPolicy::evaluateDegradedStart(input);
+  assert(decision.degradedStartAvailable);
+  assert(decision.degradedStartEnabled);
+  assert(decision.effectiveRuntimeReady);
+  assert(decision.effectiveStartReady);
+  assert(decision.protectionDegraded);
+}
+
+void test_user_left_policy_actions() {
+  UserLeftProtectionInput input{};
+  input.topState = TopState::IDLE;
+  input.laserConfiguredInstalled = true;
+  input.startReady = true;
+  input.leaveStopEnabled = true;
+  input.recoverablePausePolicy = true;
+
+  UserLeftProtectionDecision decision = RuntimeProtectionPolicy::decideUserLeft(input);
+  assert(decision.action == UserLeftProtectionAction::NOT_ELIGIBLE);
+  assert(!decision.eligible);
+  assert(decision.safetySignal == SafetySignalKind::NONE);
+  expect_reason(decision.suppressReason, "not_running");
+
+  input.topState = TopState::RUNNING;
+  input.startReady = false;
+  decision = RuntimeProtectionPolicy::decideUserLeft(input);
+  assert(decision.action == UserLeftProtectionAction::NOT_ELIGIBLE);
+  assert(!decision.eligible);
+  expect_reason(decision.suppressReason, "baseline_not_ready");
+
+  input.startReady = true;
+  input.leaveStopEnabled = false;
+  decision = RuntimeProtectionPolicy::decideUserLeft(input);
+  assert(decision.action == UserLeftProtectionAction::WARNING_ONLY);
+  assert(decision.eligible);
+  assert(decision.safetySignal == SafetySignalKind::WARNING_ONLY);
+
+  input.leaveStopEnabled = true;
+  input.recoverablePausePolicy = true;
+  decision = RuntimeProtectionPolicy::decideUserLeft(input);
+  assert(decision.action == UserLeftProtectionAction::RECOVERABLE_PAUSE);
+  assert(decision.eligible);
+  assert(decision.safetySignal == SafetySignalKind::RECOVERABLE_PAUSE);
+
+  input.recoverablePausePolicy = false;
+  decision = RuntimeProtectionPolicy::decideUserLeft(input);
+  assert(decision.action == UserLeftProtectionAction::BLOCKING_FAULT);
+  assert(decision.eligible);
+  assert(decision.safetySignal == SafetySignalKind::ABNORMAL_STOP);
+}
+
 }  // namespace
 
 int main() {
@@ -414,6 +506,8 @@ int main() {
   test_measurement_health_startup_fault_after_grace();
   test_measurement_health_runtime_fault_and_recovery();
   test_measurement_health_no_laser_is_fault();
+  test_degraded_start_policy_profiles();
+  test_user_left_policy_actions();
   std::cout << "evaluator unit tests passed\n";
   return 0;
 }
@@ -443,6 +537,7 @@ def run() -> None:
       str(ROOT / "src/modules/laser/BaselineEvidenceEvaluator.cpp"),
       str(ROOT / "src/modules/laser/MeasurementHealthStateMachine.cpp"),
       str(ROOT / "src/modules/laser/StopOutcomeSummaryEvaluator.cpp"),
+      str(ROOT / "src/core/RuntimeProtectionPolicy.cpp"),
       str(ROOT / "src/core/SafetyActionContractEvaluator.cpp"),
       "-o",
       str(binary),

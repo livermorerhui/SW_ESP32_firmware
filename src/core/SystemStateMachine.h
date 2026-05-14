@@ -2,6 +2,7 @@
 #include "Types.h"
 #include "EventBus.h"
 #include "PlatformSnapshotOwner.h"
+#include "RuntimeProtectionPolicy.h"
 #include "SafetyActionContractEvaluator.h"
 #include "config/GlobalConfig.h"
 
@@ -85,6 +86,8 @@ private:
   void clearPendingStopContext();
   const char* resolvedStopReasonText(FaultCode code, const char* fallback) const;
   VerificationStopSource resolvedStopSource(VerificationStopSource fallback) const;
+  DegradedStartPolicyDecision degradedStartPolicyDecision() const;
+  UserLeftProtectionDecision decideUserLeftAction() const;
   bool laserConfiguredInstalled() const;
   bool laserlessRuntimeStrategyActive() const;
   bool effectiveRuntimeReady() const;

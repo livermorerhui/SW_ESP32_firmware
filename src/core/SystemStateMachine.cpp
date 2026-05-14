@@ -119,14 +119,22 @@ bool SystemStateMachine::laserConfiguredInstalled() const {
   return laser ? laser->laserInstalled() : false;
 }
 
+DegradedStartPolicyDecision SystemStateMachine::degradedStartPolicyDecision() const {
+  DegradedStartPolicyInput input{};
+  input.laserConfiguredInstalled = laserConfiguredInstalled();
+  input.measurementFaultConfirmed = laser ? laser->measurementFaultConfirmed() : false;
+  input.degradedStartAuthorized = degraded_start_authorized;
+  input.runtimeReady = runtime_ready;
+  input.startReady = start_ready;
+  return RuntimeProtectionPolicy::evaluateDegradedStart(input);
+}
+
 bool SystemStateMachine::laserlessRuntimeStrategyActive() const {
-  return !laserConfiguredInstalled();
+  return degradedStartPolicyDecision().laserlessRuntimeStrategyActive;
 }
 
 bool SystemStateMachine::degradedStartAvailable() const {
-  return laserConfiguredInstalled() &&
-      laser &&
-      laser->measurementFaultConfirmed();
+  return degradedStartPolicyDecision().degradedStartAvailable;
 }
 
 bool SystemStateMachine::degradedStartAuthorized() const {
@@ -134,15 +142,15 @@ bool SystemStateMachine::degradedStartAuthorized() const {
 }
 
 bool SystemStateMachine::degradedStartBypassActive() const {
-  return degradedStartAvailable() && degraded_start_authorized;
+  return degradedStartPolicyDecision().degradedStartEnabled;
 }
 
 bool SystemStateMachine::effectiveRuntimeReady() const {
-  return (laserlessRuntimeStrategyActive() || degradedStartBypassActive()) ? true : runtime_ready;
+  return degradedStartPolicyDecision().effectiveRuntimeReady;
 }
 
 bool SystemStateMachine::effectiveStartReady() const {
-  return (laserlessRuntimeStrategyActive() || degradedStartBypassActive()) ? true : start_ready;
+  return degradedStartPolicyDecision().effectiveStartReady;
 }
 
 bool SystemStateMachine::effectiveLaserAvailable() const {
@@ -150,10 +158,7 @@ bool SystemStateMachine::effectiveLaserAvailable() const {
 }
 
 bool SystemStateMachine::effectiveProtectionDegraded() const {
-  if (!laserConfiguredInstalled()) {
-    return true;
-  }
-  return laser ? laser->measurementFaultConfirmed() : false;
+  return degradedStartPolicyDecision().protectionDegraded;
 }
 
 PlatformSnapshot SystemStateMachine::snapshot() const {
@@ -221,10 +226,7 @@ bool SystemStateMachine::startReady() const {
 }
 
 bool SystemStateMachine::leaveDetectionEnabled() const {
-  // leave 判定必须和正式 start readiness 对齐。
-  // 这里不用 runtime_ready 直接做 owner，避免再次把 presence 误当成“已站稳可运行”。
-  // 这只是本阶段的固件侧收口，不代表 stable/runtime/leave 全语义治理已经结束。
-  return st == TopState::RUNNING && laserConfiguredInstalled() && start_ready;
+  return decideUserLeftAction().eligible;
 }
 
 const char* SystemStateMachine::lastStopReasonText() const {
@@ -267,6 +269,16 @@ VerificationStopSource SystemStateMachine::resolvedStopSource(
   return SafetyActionContractEvaluator::resolveStopSource(
       pending_stop_source,
       fallback);
+}
+
+UserLeftProtectionDecision SystemStateMachine::decideUserLeftAction() const {
+  UserLeftProtectionInput input{};
+  input.topState = st;
+  input.laserConfiguredInstalled = laserConfiguredInstalled();
+  input.startReady = start_ready;
+  input.leaveStopEnabled = leave_stop_enabled;
+  input.recoverablePausePolicy = SAFETY_POLICY_USER_LEFT_RECOVERABLE_PAUSE;
+  return RuntimeProtectionPolicy::decideUserLeft(input);
 }
 
 bool SystemStateMachine::canEnterArmedState() const {
@@ -627,12 +639,13 @@ void SystemStateMachine::onUserOn() {
 
 void SystemStateMachine::onUserOff() {
   runtime_ready = false;
+  const UserLeftProtectionDecision decision = decideUserLeftAction();
 
-  if (!leaveDetectionEnabled()) {
+  if (decision.action == UserLeftProtectionAction::NOT_ELIGIBLE) {
     Serial.printf(
         "%s [LEAVE] suppress action=not_eligible reason=%s state=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d leave_stop_enabled=%d\n",
         LogMarker::kSafety,
-        start_ready ? "not_running" : "baseline_not_ready",
+        decision.suppressReason,
         topStateName(st),
         start_ready ? 1 : 0,
         start_ready_stable_weight_kg,
@@ -642,7 +655,7 @@ void SystemStateMachine::onUserOff() {
     return;
   }
 
-  if (!leave_stop_enabled) {
+  if (decision.action == UserLeftProtectionAction::WARNING_ONLY) {
     const uint32_t now = millis();
     Serial.printf(
         "%s [LEAVE] suppress action=warning_only state=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d leave_stop_enabled=0\n",
@@ -654,7 +667,7 @@ void SystemStateMachine::onUserOff() {
     if (last_suppressed_leave_notice_ms == 0 ||
         now - last_suppressed_leave_notice_ms >= MOTION_SAMPLING_SUPPRESSED_FALL_NOTICE_INTERVAL_MS) {
       last_suppressed_leave_notice_ms = now;
-      emitSafety(FaultCode::USER_LEFT_PLATFORM, SafetySignalKind::WARNING_ONLY);
+      emitSafety(FaultCode::USER_LEFT_PLATFORM, decision.safetySignal);
     }
     syncReadyState();
     return;
@@ -669,12 +682,12 @@ void SystemStateMachine::onUserOff() {
       runtime_ready ? 1 : 0,
       SAFETY_POLICY_USER_LEFT_RECOVERABLE_PAUSE ? "RECOVERABLE_PAUSE" : "BLOCKING_FAULT");
 
-  if (SAFETY_POLICY_USER_LEFT_RECOVERABLE_PAUSE) {
-    enterRecoverablePause(FaultCode::USER_LEFT_PLATFORM, "user_left_platform");
+  if (decision.action == UserLeftProtectionAction::RECOVERABLE_PAUSE) {
+    enterRecoverablePause(FaultCode::USER_LEFT_PLATFORM, decision.detail);
     return;
   }
 
-  enterBlockingFault(FaultCode::USER_LEFT_PLATFORM, "user_left_platform");
+  enterBlockingFault(FaultCode::USER_LEFT_PLATFORM, decision.detail);
 }
 
 void SystemStateMachine::onBleConnected() {
