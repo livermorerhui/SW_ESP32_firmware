@@ -9,6 +9,7 @@
 #include "modules/laser/CalibrationModelStore.h"
 #include "modules/laser/DeviceConfigStore.h"
 #include "modules/laser/LaserMeasurementReader.h"
+#include "modules/laser/MeasurementAvailabilityProbePolicy.h"
 #include "modules/laser/MeasurementHealthStateMachine.h"
 #include "modules/laser/MeasurementPlane.h"
 #include "modules/laser/MotionSafetyShadowEvaluator.h"
@@ -230,6 +231,12 @@ private:
       float weight,
       const char* reason);
   void logLatestMeasurementPlaneSummary(const char* trigger);
+  void logMeasurementProbeDecision(
+      const MeasurementProbeDecision& decision,
+      TopState topState) const;
+  void logMeasurementProbeObservation(
+      const MeasurementProbeObservation& observation,
+      TopState topState) const;
 
   float getMean(const float* values) const;
   float getStdDev(const float* values) const;
@@ -295,6 +302,7 @@ private:
 
   volatile float latestWeightKg = 0.0f;
   bool lastMeasurementValid = false;
+  MeasurementAvailabilityProbePolicy measurementProbePolicy{};
   MeasurementHealthStateMachine measurementHealthMachine{};
   uint32_t lastValidityLogMs = 0;
   bool hasLoggedMeasurementBypassState = false;

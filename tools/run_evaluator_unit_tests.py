@@ -40,6 +40,7 @@ TEST_MAIN = r"""
 #include <iostream>
 
 #include "modules/laser/BaselineEvidenceEvaluator.h"
+#include "modules/laser/MeasurementAvailabilityProbePolicy.h"
 #include "modules/laser/MeasurementHealthStateMachine.h"
 #include "modules/laser/PresenceContractEvaluator.h"
 #include "modules/laser/StopOutcomeSummaryEvaluator.h"
@@ -400,6 +401,136 @@ void test_measurement_health_no_laser_is_fault() {
   assert(!transition.changed);
 }
 
+void test_measurement_probe_policy_waits_for_confirmed_fault() {
+  MeasurementAvailabilityProbeConfig config{};
+  config.timeoutCode = 0xE2;
+  config.openAfterConsecutiveTimeouts = 2;
+  config.probeIntervalMs = 5000;
+  MeasurementAvailabilityProbePolicy policy(config);
+
+  MeasurementProbeObservation observation =
+      policy.afterRead(100, true, false, false, 0xE2, TopState::RUNNING);
+  assert(observation.event == MeasurementProbeEvent::NONE);
+  assert(policy.state() == MeasurementProbeState::CLOSED);
+  assert(policy.consecutiveTimeouts() == 0);
+
+  observation = policy.afterRead(200, false, true, false, 0xE2, TopState::RUNNING);
+  assert(observation.event == MeasurementProbeEvent::NONE);
+  assert(policy.state() == MeasurementProbeState::CLOSED);
+  assert(policy.consecutiveTimeouts() == 0);
+}
+
+void test_measurement_probe_policy_opens_after_timeout_threshold() {
+  MeasurementAvailabilityProbeConfig config{};
+  config.timeoutCode = 0xE2;
+  config.openAfterConsecutiveTimeouts = 2;
+  config.probeIntervalMs = 5000;
+  MeasurementAvailabilityProbePolicy policy(config);
+
+  MeasurementProbeObservation observation =
+      policy.afterRead(100, true, true, false, 0xE2, TopState::RUNNING);
+  assert(observation.event == MeasurementProbeEvent::NONE);
+  assert(policy.state() == MeasurementProbeState::CLOSED);
+  assert(policy.consecutiveTimeouts() == 1);
+
+  observation = policy.afterRead(200, true, true, false, 0xE2, TopState::RUNNING);
+  assert(observation.event == MeasurementProbeEvent::OPEN);
+  assert(policy.state() == MeasurementProbeState::OPEN_UNAVAILABLE);
+  assert(policy.nextProbeAtMs() == 5200);
+  assert(observation.consecutiveTimeouts == 2);
+}
+
+void test_measurement_probe_policy_skips_until_probe_due() {
+  MeasurementAvailabilityProbeConfig config{};
+  config.timeoutCode = 0xE2;
+  config.openAfterConsecutiveTimeouts = 2;
+  config.probeIntervalMs = 5000;
+  config.skipLogIntervalMs = 1000;
+  MeasurementAvailabilityProbePolicy policy(config);
+
+  policy.afterRead(100, true, true, false, 0xE2, TopState::RUNNING);
+  policy.afterRead(200, true, true, false, 0xE2, TopState::RUNNING);
+
+  MeasurementProbeDecision decision = policy.beforeRead(300, true, true, TopState::RUNNING);
+  assert(!decision.shouldRead);
+  assert(decision.event == MeasurementProbeEvent::SKIP);
+  assert(decision.nextProbeInMs == 4900);
+
+  decision = policy.beforeRead(800, true, true, TopState::RUNNING);
+  assert(!decision.shouldRead);
+  assert(decision.event == MeasurementProbeEvent::NONE);
+
+  decision = policy.beforeRead(5300, true, true, TopState::RUNNING);
+  assert(decision.shouldRead);
+  assert(decision.event == MeasurementProbeEvent::PROBE);
+}
+
+void test_measurement_probe_policy_probe_failure_and_recovery() {
+  MeasurementAvailabilityProbeConfig config{};
+  config.timeoutCode = 0xE2;
+  config.openAfterConsecutiveTimeouts = 2;
+  config.probeIntervalMs = 5000;
+  MeasurementAvailabilityProbePolicy policy(config);
+
+  policy.afterRead(100, true, true, false, 0xE2, TopState::RUNNING);
+  policy.afterRead(200, true, true, false, 0xE2, TopState::RUNNING);
+
+  MeasurementProbeObservation observation =
+      policy.afterRead(5300, true, true, false, 0xE2, TopState::RUNNING);
+  assert(observation.event == MeasurementProbeEvent::STILL_UNAVAILABLE);
+  assert(policy.state() == MeasurementProbeState::OPEN_UNAVAILABLE);
+  assert(policy.nextProbeAtMs() == 10300);
+
+  observation = policy.afterRead(10400, true, true, true, 0x00, TopState::RUNNING);
+  assert(observation.event == MeasurementProbeEvent::RECOVERED);
+  assert(policy.state() == MeasurementProbeState::CLOSED);
+  assert(policy.consecutiveTimeouts() == 0);
+}
+
+void test_measurement_probe_policy_open_non_timeout_failure_stays_low_frequency() {
+  MeasurementAvailabilityProbeConfig config{};
+  config.timeoutCode = 0xE2;
+  config.openAfterConsecutiveTimeouts = 2;
+  config.probeIntervalMs = 5000;
+  MeasurementAvailabilityProbePolicy policy(config);
+
+  policy.afterRead(100, true, true, false, 0xE2, TopState::RUNNING);
+  policy.afterRead(200, true, true, false, 0xE2, TopState::RUNNING);
+
+  MeasurementProbeObservation observation =
+      policy.afterRead(5300, true, true, false, 0xE1, TopState::RUNNING);
+  assert(observation.event == MeasurementProbeEvent::STILL_UNAVAILABLE);
+  assert(policy.state() == MeasurementProbeState::OPEN_UNAVAILABLE);
+  assert(policy.nextProbeAtMs() == 10300);
+
+  MeasurementProbeDecision decision = policy.beforeRead(5400, true, true, TopState::RUNNING);
+  assert(!decision.shouldRead);
+  assert(decision.nextProbeInMs == 4900);
+}
+
+void test_measurement_probe_policy_ignores_non_timeout_and_resets_when_ineligible() {
+  MeasurementAvailabilityProbeConfig config{};
+  config.timeoutCode = 0xE2;
+  config.openAfterConsecutiveTimeouts = 2;
+  config.probeIntervalMs = 5000;
+  MeasurementAvailabilityProbePolicy policy(config);
+
+  MeasurementProbeObservation observation =
+      policy.afterRead(100, true, true, false, 0xE1, TopState::RUNNING);
+  assert(observation.event == MeasurementProbeEvent::NONE);
+  assert(policy.state() == MeasurementProbeState::CLOSED);
+  assert(policy.consecutiveTimeouts() == 0);
+
+  policy.afterRead(200, true, true, false, 0xE2, TopState::RUNNING);
+  policy.afterRead(300, true, true, false, 0xE2, TopState::RUNNING);
+  assert(policy.state() == MeasurementProbeState::OPEN_UNAVAILABLE);
+
+  MeasurementProbeDecision decision = policy.beforeRead(400, false, true, TopState::RUNNING);
+  assert(decision.event == MeasurementProbeEvent::RESET);
+  assert(policy.state() == MeasurementProbeState::CLOSED);
+  assert(policy.consecutiveTimeouts() == 0);
+}
+
 void test_degraded_start_policy_profiles() {
   DegradedStartPolicyInput input{};
   input.laserConfiguredInstalled = false;
@@ -506,6 +637,12 @@ int main() {
   test_measurement_health_startup_fault_after_grace();
   test_measurement_health_runtime_fault_and_recovery();
   test_measurement_health_no_laser_is_fault();
+  test_measurement_probe_policy_waits_for_confirmed_fault();
+  test_measurement_probe_policy_opens_after_timeout_threshold();
+  test_measurement_probe_policy_skips_until_probe_due();
+  test_measurement_probe_policy_probe_failure_and_recovery();
+  test_measurement_probe_policy_open_non_timeout_failure_stays_low_frequency();
+  test_measurement_probe_policy_ignores_non_timeout_and_resets_when_ineligible();
   test_degraded_start_policy_profiles();
   test_user_left_policy_actions();
   std::cout << "evaluator unit tests passed\n";
@@ -535,6 +672,7 @@ def run() -> None:
       str(main_cpp),
       str(ROOT / "src/modules/laser/PresenceContractEvaluator.cpp"),
       str(ROOT / "src/modules/laser/BaselineEvidenceEvaluator.cpp"),
+      str(ROOT / "src/modules/laser/MeasurementAvailabilityProbePolicy.cpp"),
       str(ROOT / "src/modules/laser/MeasurementHealthStateMachine.cpp"),
       str(ROOT / "src/modules/laser/StopOutcomeSummaryEvaluator.cpp"),
       str(ROOT / "src/core/RuntimeProtectionPolicy.cpp"),
