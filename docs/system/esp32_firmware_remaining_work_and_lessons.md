@@ -1,6 +1,10 @@
 # ESP32 Firmware Remaining Work And Lessons
 
-最后更新时间：2026-04-30
+最后更新时间：2026-05-17
+
+> 状态说明：本文保留为阶段经验和历史记录。ESP32 固件后续优化的单一优先级入口已迁移到 `docs/system/esp32_firmware_optimization_priority_table.md`。
+>
+> 重要更新：`degraded measurement circuit-breaker / low-frequency probe` 已在 2026-05-17 完成 `MeasurementAvailabilityProbePolicy` 实现、本地验证和真机 capture 复核，不再是待实现项。
 
 ## 1. 当前可交付点
 
@@ -13,7 +17,7 @@
 
 当前不应对外承诺：
 
-- `ESP32-plus degraded / 485 或 laser 故障形态` 已达到完全无观察项。
+- `ESP32-plus degraded / 485 或 laser 故障形态` 已达到完全无观察项；其中 measurement unavailable 低频 probe 已完成，但 degraded 场景仍应按真机 capture 验收具体外设状态。
 - motion safety 新 detector 已接入 runtime 停波动作。
 - 四端 release hardening、长时间 soak、发布矩阵已全部完成。
 
@@ -146,11 +150,14 @@
 - 同轮观察项：用户体感首次起震弱且断续；ESP32 串口有 `MEASUREMENT_TRANSIENT_COUNT=12`、`MODBUS_READ_FAIL_COUNT=12`，RUNNING 阶段持续 `0xE2 read_ms=2009`。
 - 2026-04-30 已新增 `WaveModule` 只读启动诊断：`WAVE_OUTPUT_STARTUP` 与 `WAVE_OUTPUT_WRITE`，构建通过；复测 `esp32_plus_degraded_wave_output_observability` 体感正常，输出启动证据完整：`request=6ms`、`i2s_start=21ms`、`first_emit=41ms`、`ramp_complete=804ms`，`WAVE_OUTPUT_WRITE error/short/slow=0`；详见 `reports/task_20260430_plus_degraded_wave_output_observability.md`。
 - 2026-04-30 已完成 `degraded measurement circuit-breaker / low-frequency probe` 审计：`0xE2` 是 Modbus response timeout，单次失败阻塞约 `2009ms`；当前非 RUNNING 有 `3000ms` unavailable backoff，但 RUNNING 阶段失败后 `nextReadEligibleAtMs=0`，会持续做 2 秒级失败探测；功能正确性不受影响，但 A 级质量建议做 internal circuit-breaker / low-frequency probe；详见 `reports/task_20260430_degraded_measurement_circuit_breaker_audit.md`。
+- 2026-05-17 已完成 `MeasurementAvailabilityProbePolicy` 最小实现：连续 `0xE2` 且 measurement fault confirmed 后进入 low-frequency probe；open 未到期时跳过真实 Modbus read，不再持续发布新的 `EVT:STREAM valid=0 reason=READ_FAIL`；成功 probe 后恢复正常读取节奏。
+- 2026-05-17 已完成本地验证：`git diff --check`、`python3 tools/run_evaluator_unit_tests.py`、`python3 -m platformio run -e esp32s3`、`python3 -m platformio run -e esp32_plus_laser_sim`。
+- 2026-05-17 已完成真机 capture 复核：APP 连接、degraded-start、手动 start/stop 通过；ESP32 串口捕获 `MEASUREMENT_PROBE event=probe / skip / still_unavailable`，说明 low-frequency probe 已生效；本轮 capture 未覆盖 `event=open` 转换瞬间，但不影响确认 open 后行为通过。详见 `reports/task_20260517_measurement_availability_probe_policy.md`。
 
 下一步：
 
-- 建议下一包做 `MeasurementAvailabilityProbePolicy minimal implementation`。
-- 只对连续 `0xE2` 的已知 unavailable measurement 链路做低频 probe；正常健康链路仍保持 `20ms` 读取节奏。
+- 本项不再作为待实现优化项。
+- 后续如要补齐 `event=open` 转换瞬间证据，需要重启 ESP32 后立即开始 capture，或在 capture 前清空故障历史再复现。
 - 不先改 ramp、不先改 BLE 线格式、不先改 start/stop action timing。
 
 ### P4: release hardening 补齐
@@ -295,16 +302,17 @@ base 和 degraded 都是 PLUS 正常形态的简化或降级形态。
 
 如果后续换窗口继续，默认读取顺序：
 
-1. `SW/docs/system/ESP32与APP联调优化优先级总表.md`
-2. `SW_ESP3_Firmware/docs/system/esp32_plus_normal_delivery_freeze.md`
-3. `SW_ESP3_Firmware/docs/system/esp32_firmware_remaining_work_and_lessons.md`
-4. `SW_ESP3_Firmware/docs/system/firmware_safety_behavior.md`
-5. `SW_ESP3_Firmware/docs/start-readiness-contract.md`
+1. `SW_ESP3_Firmware/docs/system/esp32_firmware_optimization_priority_table.md`
+2. `SW/docs/system/ESP32与APP联调优化优先级总表.md`
+3. `SW_ESP3_Firmware/docs/system/esp32_plus_normal_delivery_freeze.md`
+4. `SW_ESP3_Firmware/docs/system/esp32_firmware_remaining_work_and_lessons.md`
+5. `SW_ESP3_Firmware/docs/system/firmware_safety_behavior.md`
+6. `SW_ESP3_Firmware/docs/start-readiness-contract.md`
 
 默认下一步：
 
-- `degraded measurement circuit-breaker / low-frequency probe` 审计已完成。
-- 下一步建议做 `MeasurementAvailabilityProbePolicy minimal implementation`，只改固件内部 probe policy 和串口/capture 可观测性。
+- `MeasurementAvailabilityProbePolicy` 已完成实现、本地验证和真机 capture 复核。
+- 下一步按 `esp32_firmware_optimization_priority_table.md` 执行：先做文档真相源收口，再做协议合同 host-side 测试。
 - 仍不迁移 action timing、不改 BLE 线格式、不改 Android `SessionCoordinator`。
 
 ## 5. 当前进度判断
@@ -312,12 +320,12 @@ base 和 degraded 都是 PLUS 正常形态的简化或降级形态。
 按“可先交付”口径：
 
 - ESP32-plus 正常主链：可先交付。
-- A 级固件内部重构：约 `75% - 80%`。
+- A 级固件内部重构：约 `80% - 85%`。
 - 全 ESP32 变体发布准备：约 `70%`。
 
 差距主要不在 PLUS 正常主链，而在：
 
 - base 已完成新一轮整机 smoke 与串口补证据。
-- degraded-start 合同链路已通过，wave output startup 复测已解释输出侧无异常；measurement circuit-breaker 审计已确认需要做最小 low-frequency probe 实现来优化 RUNNING 阶段持续 `0xE2 read_ms=2009`。
+- degraded-start 合同链路已通过，wave output startup 复测已解释输出侧无异常；measurement low-frequency probe 已完成并通过真机 capture。
 - motion safety shadow 还没决定是否接 runtime。
 - release hardening 矩阵和 soak 还没最终补齐。

@@ -21,6 +21,12 @@ ARDUINO_STUB = r"""
 #include <cstdint>
 #include <cmath>
 #include <cstddef>
+#include <cstdarg>
+#include <cstdio>
+#include <climits>
+#include <string>
+#include <algorithm>
+#include <cctype>
 
 #ifndef NAN
 #define NAN __builtin_nanf("")
@@ -31,14 +37,142 @@ using std::uint16_t;
 using std::uint32_t;
 
 #define I2S_NUM_0 0
+
+class String {
+public:
+  String() = default;
+  String(const char* value) : data(value ? value : "") {}
+  String(const std::string& value) : data(value) {}
+  String(char value) : data(1, value) {}
+  String(int value) : data(std::to_string(value)) {}
+  String(unsigned value) : data(std::to_string(value)) {}
+  String(uint16_t value) : data(std::to_string(value)) {}
+  String(unsigned long value) : data(std::to_string(value)) {}
+  String(float value, unsigned int decimals) {
+    char buffer[48]{};
+    std::snprintf(buffer, sizeof(buffer), "%.*f", static_cast<int>(decimals), value);
+    data = buffer;
+  }
+
+  size_t length() const { return data.length(); }
+  const char* c_str() const { return data.c_str(); }
+  void reserve(size_t size) { data.reserve(size); }
+
+  void trim() {
+    size_t first = 0;
+    while (first < data.size() && std::isspace(static_cast<unsigned char>(data[first]))) {
+      ++first;
+    }
+    size_t last = data.size();
+    while (last > first && std::isspace(static_cast<unsigned char>(data[last - 1]))) {
+      --last;
+    }
+    data = data.substr(first, last - first);
+  }
+
+  bool equalsIgnoreCase(const char* other) const {
+    return equalsIgnoreCase(String(other));
+  }
+
+  bool equalsIgnoreCase(const String& other) const {
+    if (data.size() != other.data.size()) return false;
+    for (size_t i = 0; i < data.size(); ++i) {
+      if (std::tolower(static_cast<unsigned char>(data[i])) !=
+          std::tolower(static_cast<unsigned char>(other.data[i]))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool startsWith(const char* prefix) const {
+    const std::string target(prefix ? prefix : "");
+    return data.rfind(target, 0) == 0;
+  }
+
+  int indexOf(char needle, int from = 0) const {
+    if (from < 0) from = 0;
+    const size_t found = data.find(needle, static_cast<size_t>(from));
+    return found == std::string::npos ? -1 : static_cast<int>(found);
+  }
+
+  int indexOf(const char* needle, int from = 0) const {
+    if (from < 0) from = 0;
+    const size_t found = data.find(needle ? needle : "", static_cast<size_t>(from));
+    return found == std::string::npos ? -1 : static_cast<int>(found);
+  }
+
+  int indexOf(const String& needle, int from = 0) const {
+    return indexOf(needle.c_str(), from);
+  }
+
+  String substring(int begin) const {
+    if (begin < 0) begin = 0;
+    if (static_cast<size_t>(begin) >= data.size()) return String("");
+    return String(data.substr(static_cast<size_t>(begin)));
+  }
+
+  String substring(int begin, int end) const {
+    if (begin < 0) begin = 0;
+    if (end < begin) end = begin;
+    const size_t start = std::min(static_cast<size_t>(begin), data.size());
+    const size_t stop = std::min(static_cast<size_t>(end), data.size());
+    return String(data.substr(start, stop - start));
+  }
+
+  bool operator==(const char* other) const { return data == (other ? other : ""); }
+  bool operator!=(const char* other) const { return !(*this == other); }
+
+  String& operator=(const char* value) {
+    data = value ? value : "";
+    return *this;
+  }
+
+  String& operator+=(const String& other) {
+    data += other.data;
+    return *this;
+  }
+
+  String& operator+=(const char* value) {
+    data += value ? value : "";
+    return *this;
+  }
+
+  String& operator+=(char value) {
+    data += value;
+    return *this;
+  }
+
+  String& operator+=(int value) {
+    data += std::to_string(value);
+    return *this;
+  }
+
+private:
+  std::string data;
+};
+
+inline String operator+(const char* lhs, const String& rhs) {
+  String result(lhs);
+  result += rhs;
+  return result;
+}
+
+struct SerialStub {
+  void printf(const char*, ...) {}
+};
+
+static SerialStub Serial;
 """
 
 
 TEST_MAIN = r"""
 #include <cassert>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 
+#include "core/ProtocolCodec.h"
 #include "modules/laser/BaselineEvidenceEvaluator.h"
 #include "modules/laser/MeasurementAvailabilityProbePolicy.h"
 #include "modules/laser/MeasurementHealthStateMachine.h"
@@ -52,6 +186,14 @@ namespace {
 void expect_reason(const char* actual, const char* expected) {
   assert(actual != nullptr);
   assert(std::strcmp(actual, expected) == 0);
+}
+
+void expect_contains(const String& actual, const char* expected) {
+  assert(actual.indexOf(expected) >= 0);
+}
+
+void expect_not_contains(const String& actual, const char* unexpected) {
+  assert(actual.indexOf(unexpected) < 0);
 }
 
 void test_presence_enter_exit() {
@@ -622,6 +764,173 @@ void test_user_left_policy_actions() {
   assert(decision.safetySignal == SafetySignalKind::ABNORMAL_STOP);
 }
 
+void test_protocol_parse_core_commands() {
+  Command command{};
+  String error;
+
+  assert(ProtocolCodec::parseCommand(" CAP? ", command, error));
+  assert(command.type == CmdType::CAP_QUERY);
+
+  assert(ProtocolCodec::isSnapshotQuery(" SNAPSHOT?\r\n"));
+
+  assert(ProtocolCodec::parseCommand("WAVE:SET f=40.5,i=80", command, error));
+  assert(command.type == CmdType::WAVE_SET);
+  assert(command.wave.freqHz > 40.49f && command.wave.freqHz < 40.51f);
+  assert(command.wave.intensity == 80);
+
+  assert(ProtocolCodec::parseCommand("WAVE:SET freq=12.25 amp=30", command, error));
+  assert(command.type == CmdType::WAVE_SET);
+  assert(command.wave.freqHz > 12.24f && command.wave.freqHz < 12.26f);
+  assert(command.wave.intensity == 30);
+
+  assert(ProtocolCodec::parseCommand("WAVE:START", command, error));
+  assert(command.type == CmdType::WAVE_START);
+
+  assert(ProtocolCodec::parseCommand("WAVE:STOP", command, error));
+  assert(command.type == CmdType::WAVE_STOP);
+
+  assert(!ProtocolCodec::parseCommand("WAVE:SET f=60,i=80", command, error));
+  expect_reason(error.c_str(), "INVALID_PARAM");
+}
+
+void test_protocol_parse_config_and_safety_commands() {
+  Command command{};
+  String error;
+
+  assert(ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG platform_model=PLUS,laser_installed=1",
+      command,
+      error));
+  assert(command.type == CmdType::DEVICE_SET_CONFIG);
+  assert(command.deviceConfig.platformModel == PlatformModel::PLUS);
+  assert(command.deviceConfig.laserInstalled);
+
+  assert(ProtocolCodec::parseCommand("DEBUG:DEGRADED_START enabled=true", command, error));
+  assert(command.type == CmdType::DEGRADED_START_SET);
+  assert(command.degradedStart.enabled);
+
+  assert(ProtocolCodec::parseCommand("SAFETY:LEAVE_PROTECTION enabled=off", command, error));
+  assert(command.type == CmdType::LEAVE_PROTECTION_SET);
+  assert(!command.leaveProtection.enabled);
+
+  assert(ProtocolCodec::parseCommand("DEBUG:FALL_STOP mode=disabled", command, error));
+  assert(command.type == CmdType::FALL_STOP_SET);
+  assert(!command.fallStop.enabled);
+
+  assert(!ProtocolCodec::parseCommand("DEBUG:DEGRADED_START enabled=maybe", command, error));
+  expect_reason(error.c_str(), "INVALID_PARAM");
+}
+
+void test_protocol_parse_legacy_commands() {
+  Command command{};
+  String error;
+
+  assert(ProtocolCodec::parseCommand("F:40,I:90,E:1", command, error));
+  assert(command.type == CmdType::LEGACY_FIE);
+  assert(command.wave.freqHz > 39.99f && command.wave.freqHz < 40.01f);
+  assert(command.wave.intensity == 90);
+  assert(command.wave.hasEnable);
+  assert(command.wave.enable);
+
+  assert(ProtocolCodec::parseCommand("I:50", command, error));
+  assert(command.type == CmdType::LEGACY_FIE);
+  assert(command.wave.freqHz == -1);
+  assert(command.wave.intensity == 50);
+  assert(!command.wave.hasEnable);
+
+  assert(ProtocolCodec::parseCommand("E:0", command, error));
+  assert(command.type == CmdType::LEGACY_FIE);
+  assert(command.wave.freqHz == -1);
+  assert(command.wave.intensity == -1);
+  assert(command.wave.hasEnable);
+  assert(!command.wave.enable);
+}
+
+void test_protocol_encode_snapshot_contract() {
+  PlatformSnapshot snapshot{};
+  snapshot.topState = TopState::RUNNING;
+  snapshot.startReady = true;
+  snapshot.laserAvailable = false;
+  snapshot.measurementHealth = MeasurementHealthState::FAULT;
+  snapshot.degradedStartAvailable = true;
+  snapshot.degradedStartEnabled = true;
+  snapshot.leaveStopEnabled = false;
+
+  const String encoded = ProtocolCodec::encodeSnapshot(snapshot);
+  expect_contains(encoded, "SNAPSHOT:");
+  expect_contains(encoded, "top_state=RUNNING");
+  expect_contains(encoded, "start_ready=1");
+  expect_contains(encoded, "laser_available=0");
+  expect_contains(encoded, "measurement_health=FAULT");
+  expect_contains(encoded, "degraded_start_available=1");
+  expect_contains(encoded, "degraded_start_enabled=1");
+  expect_contains(encoded, "leave_stop_enabled=0");
+}
+
+void test_protocol_encode_stream_contract() {
+  Event event{};
+  event.type = EventType::STREAM;
+  event.sampleSeq = 7;
+  event.ts_ms = 1234;
+  event.measurementValid = false;
+  event.ma12Ready = false;
+  std::snprintf(event.measurementReason, sizeof(event.measurementReason), "%s", "READ_FAIL");
+
+  String encoded = ProtocolCodec::encodeEvent(event);
+  expect_contains(encoded, "EVT:STREAM ");
+  expect_contains(encoded, "seq=7");
+  expect_contains(encoded, "ts_ms=1234");
+  expect_contains(encoded, "valid=0");
+  expect_contains(encoded, "ma12_ready=0");
+  expect_contains(encoded, "reason=READ_FAIL");
+  expect_not_contains(encoded, "distance=");
+
+  event.measurementValid = true;
+  event.ma12Ready = true;
+  event.distance = 12.345f;
+  event.weightKg = 67.891f;
+  event.ma12WeightKg = 66.543f;
+  encoded = ProtocolCodec::encodeEvent(event);
+  expect_contains(encoded, "valid=1");
+  expect_contains(encoded, "distance=12.35");
+  expect_contains(encoded, "weight=67.89");
+  expect_contains(encoded, "ma12=66.54");
+  expect_not_contains(encoded, "reason=");
+}
+
+void test_protocol_encode_stop_and_safety_contract() {
+  Event safety{};
+  safety.type = EventType::SAFETY;
+  safety.fault = FaultCode::USER_LEFT_PLATFORM;
+  safety.safety = SafetySignalKind::RECOVERABLE_PAUSE;
+  safety.state = TopState::RUNNING;
+  safety.waveStopped = true;
+
+  String encoded = ProtocolCodec::encodeEvent(safety);
+  expect_contains(encoded, "EVT:SAFETY ");
+  expect_contains(encoded, "reason=USER_LEFT_PLATFORM");
+  expect_contains(encoded, "code=100");
+  expect_contains(encoded, "effect=RECOVERABLE_PAUSE");
+  expect_contains(encoded, "state=RUNNING");
+  expect_contains(encoded, "wave=STOPPED");
+
+  Event stop{};
+  stop.type = EventType::STOP;
+  stop.fault = FaultCode::FALL_SUSPECTED;
+  stop.safety = SafetySignalKind::ABNORMAL_STOP;
+  stop.state = TopState::FAULT_STOP;
+  std::snprintf(stop.stopReasonText, sizeof(stop.stopReasonText), "%s", "FALL_SUSPECTED");
+  std::snprintf(stop.stopSourceText, sizeof(stop.stopSourceText), "%s", "BASELINE_MAIN_LOGIC");
+
+  encoded = ProtocolCodec::encodeEvent(stop);
+  expect_contains(encoded, "EVT:STOP ");
+  expect_contains(encoded, "stop_reason=FALL_SUSPECTED");
+  expect_contains(encoded, "stop_source=BASELINE_MAIN_LOGIC");
+  expect_contains(encoded, "code=101");
+  expect_contains(encoded, "effect=ABNORMAL_STOP");
+  expect_contains(encoded, "state=FAULT_STOP");
+}
+
 }  // namespace
 
 int main() {
@@ -645,6 +954,12 @@ int main() {
   test_measurement_probe_policy_ignores_non_timeout_and_resets_when_ineligible();
   test_degraded_start_policy_profiles();
   test_user_left_policy_actions();
+  test_protocol_parse_core_commands();
+  test_protocol_parse_config_and_safety_commands();
+  test_protocol_parse_legacy_commands();
+  test_protocol_encode_snapshot_contract();
+  test_protocol_encode_stream_contract();
+  test_protocol_encode_stop_and_safety_contract();
   std::cout << "evaluator unit tests passed\n";
   return 0;
 }
