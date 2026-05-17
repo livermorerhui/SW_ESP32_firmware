@@ -5,6 +5,7 @@
 #include "core/EventBus.h"
 #include "core/CommandBus.h"
 #include "core/SystemStateMachine.h"
+#include "HubAckBuilder.h"
 #include "modules/wave/WaveModule.h"
 #include "modules/laser/LaserModule.h"
 #include "transport/ble/BleTransport.h"
@@ -58,41 +59,6 @@ static const char* resetReasonName(esp_reset_reason_t reason) {
   }
 }
 
-static void appendKeyValue(String& out, const char* key, const char* value) {
-  out += key;
-  out += value ? value : "";
-}
-
-static void appendKeyIntValue(String& out, const char* key, int value) {
-  out += key;
-  out += value;
-}
-
-static void appendKeyUnsignedLongValue(String& out, const char* key, unsigned long value) {
-  out += key;
-  out += value;
-}
-
-static void appendKeyFloatValue(String& out, const char* key, float value, unsigned char decimals) {
-  out += key;
-  out += String(value, static_cast<unsigned int>(decimals));
-}
-
-static void buildSimpleNack(String& out, const String& reason) {
-  out = "NACK:";
-  out += reason;
-}
-
-static const char* calibrationModelTypeName(uint8_t type) {
-  switch (type) {
-    case static_cast<uint8_t>(CalibrationModelType::LINEAR):
-      return "LINEAR";
-    case static_cast<uint8_t>(CalibrationModelType::QUADRATIC):
-      return "QUADRATIC";
-  }
-  return "UNKNOWN";
-}
-
 class HubHandler : public CommandHandler, public BleDisconnectSink {
 public:
   HubHandler(SystemStateMachine* fsm, WaveModule* wave, LaserModule* laser)
@@ -114,18 +80,11 @@ public:
             snapshot.startReady ? 1 : 0,
             snapshot.baselineReady ? 1 : 0,
             topStateName(snapshot.topState));
-        outAck = "";
-        outAck.reserve(96);
-        appendKeyValue(outAck, "ACK:CAP fw=", FW_VER);
-        appendKeyIntValue(outAck, " proto=", PROTO_VER);
-        appendKeyValue(outAck, " platform_model=", platformModelName(l->platformModel()));
-        appendKeyIntValue(outAck, " laser_installed=", l->laserInstalled() ? 1 : 0);
-        appendKeyIntValue(outAck, " leave_stop_supported=", 1);
-        ProtocolCodec::logTruthPayloadBudgetWarningIfNeeded(
-            "bootstrap_truth",
-            outAck.length() + 1,
-            ProtocolCodec::kCapTruthPayloadBudgetBytes,
-            outAck);
+        outAck = HubAckBuilder::cap(
+            FW_VER,
+            PROTO_VER,
+            l->platformModel(),
+            l->laserInstalled());
         return true;
       }
 
@@ -139,14 +98,11 @@ public:
                 c.deviceConfig.platformModel,
                 c.deviceConfig.laserInstalled,
                 reason)) {
-          buildSimpleNack(outAck, reason);
+          outAck = HubAckBuilder::simpleNack(reason);
           return false;
         }
 
-        outAck = "";
-        outAck.reserve(80);
-        appendKeyValue(outAck, "ACK:DEVICE_CONFIG platform_model=", platformModelName(l->platformModel()));
-        appendKeyIntValue(outAck, " laser_installed=", l->laserInstalled() ? 1 : 0);
+        outAck = HubAckBuilder::deviceConfig(l->platformModel(), l->laserInstalled());
         g_bleDeviceName = buildBleDeviceName(l->platformModel());
         g_ble.updateAdvertisingIdentity(
             g_bleDeviceName.c_str(),
@@ -170,10 +126,7 @@ public:
       case CmdType::DEGRADED_START_SET: {
         sm->setDegradedStartAuthorized(c.degradedStart.enabled);
         const PlatformSnapshot snapshot = sm->snapshot();
-        outAck = "";
-        outAck.reserve(56);
-        appendKeyIntValue(outAck, "ACK:DEGRADED_START enabled=", snapshot.degradedStartEnabled ? 1 : 0);
-        appendKeyIntValue(outAck, " available=", snapshot.degradedStartAvailable ? 1 : 0);
+        outAck = HubAckBuilder::degradedStart(snapshot);
         return true;
       }
 
@@ -192,7 +145,7 @@ public:
             debug.targetIntensity,
             debug.runRequested ? 1 : 0,
             debug.runState ? 1 : 0);
-        outAck = "ACK:OK";
+        outAck = HubAckBuilder::ok();
         return true;
       }
 
@@ -212,10 +165,10 @@ public:
             snapshot.degradedStartEnabled ? 1 : 0);
         FaultCode reason = FaultCode::NONE;
         if (!sm->requestStart(reason)) {
-          outAck = (reason == FaultCode::FAULT_LOCKED) ? "NACK:FAULT_LOCKED" : "NACK:NOT_ARMED";
+          outAck = HubAckBuilder::startRejected(reason);
           return false;
         }
-        outAck = "ACK:OK";
+        outAck = HubAckBuilder::ok();
         return true;
       }
 
@@ -223,48 +176,41 @@ public:
         Serial.println("[CMD] WAVE_STOP received");
         Serial.println("[LAYER:COMMAND_DISPATCH] cmd=WAVE:STOP owner=SystemStateMachine::requestStop");
         sm->requestStop();
-        outAck = "ACK:OK";
+        outAck = HubAckBuilder::ok();
         return true;
 
       case CmdType::SCALE_ZERO:
         l->triggerZero();
-        outAck = "ACK:OK";
+        outAck = HubAckBuilder::ok();
         return true;
 
       case CmdType::SCALE_CAL:
         l->setParams(c.p1, c.p2);
-        outAck = "ACK:OK";
+        outAck = HubAckBuilder::ok();
         return true;
 
       case CmdType::CAL_CAPTURE: {
         CalibrationCapture capture{};
         String reason;
         if (!l->captureCalibrationPoint(c.capture.referenceWeightKg, capture, reason)) {
-          buildSimpleNack(outAck, reason);
+          outAck = HubAckBuilder::simpleNack(reason);
           return false;
         }
-        outAck = "";
-        outAck.reserve(128);
-        appendKeyUnsignedLongValue(outAck, "ACK:CAL_POINT idx=", static_cast<unsigned long>(capture.index));
-        appendKeyUnsignedLongValue(outAck, " ts=", static_cast<unsigned long>(capture.ts_ms));
-        appendKeyFloatValue(outAck, " d_mm=", capture.distanceMm, 2);
-        appendKeyFloatValue(outAck, " ref_kg=", capture.referenceWeightKg, 2);
-        appendKeyFloatValue(outAck, " pred_kg=", capture.predictedWeightKg, 2);
-        appendKeyIntValue(outAck, " stable=", capture.stableFlag ? 1 : 0);
-        appendKeyIntValue(outAck, " valid=", capture.validFlag ? 1 : 0);
+        outAck = HubAckBuilder::calibrationPoint(
+            capture.index,
+            capture.ts_ms,
+            capture.distanceMm,
+            capture.referenceWeightKg,
+            capture.predictedWeightKg,
+            capture.stableFlag,
+            capture.validFlag);
         return true;
       }
 
       case CmdType::CAL_GET_MODEL: {
         CalibrationModel model{};
         l->getCalibrationModel(model);
-        outAck = "";
-        outAck.reserve(104);
-        appendKeyValue(outAck, "ACK:CAL_MODEL type=", calibrationModelTypeName(static_cast<uint8_t>(model.type)));
-        appendKeyFloatValue(outAck, " ref=", model.referenceDistance, 4);
-        appendKeyFloatValue(outAck, " c0=", model.coefficients[0], 6);
-        appendKeyFloatValue(outAck, " c1=", model.coefficients[1], 6);
-        appendKeyFloatValue(outAck, " c2=", model.coefficients[2], 6);
+        outAck = HubAckBuilder::calibrationModel(model);
         return true;
       }
 
@@ -279,54 +225,37 @@ public:
         String reason;
         if (!l->setCalibrationModel(model, reason)) {
           Serial.printf("[CAL] SET_MODEL result=failure type=%s reason=%s\n",
-              calibrationModelTypeName(static_cast<uint8_t>(model.type)),
+              HubAckBuilder::calibrationModelTypeName(model.type),
               reason.c_str());
-          outAck = "";
-          outAck.reserve(96);
-          appendKeyValue(outAck, "NACK:CAL_SET_MODEL type=", calibrationModelTypeName(static_cast<uint8_t>(model.type)));
-          appendKeyValue(outAck, " reason=", reason.c_str());
+          outAck = HubAckBuilder::calibrationSetModelRejected(model.type, reason);
           return false;
         }
 
         Serial.printf("[CAL] SET_MODEL result=success type=%s ref=%.4f c0=%.6f c1=%.6f c2=%.6f\n",
-            calibrationModelTypeName(static_cast<uint8_t>(model.type)),
+            HubAckBuilder::calibrationModelTypeName(model.type),
             model.referenceDistance,
             model.coefficients[0],
             model.coefficients[1],
             model.coefficients[2]);
-        outAck = "";
-        outAck.reserve(112);
-        appendKeyValue(outAck, "ACK:CAL_SET_MODEL type=", calibrationModelTypeName(static_cast<uint8_t>(model.type)));
-        appendKeyFloatValue(outAck, " ref=", model.referenceDistance, 4);
-        appendKeyFloatValue(outAck, " c0=", model.coefficients[0], 6);
-        appendKeyFloatValue(outAck, " c1=", model.coefficients[1], 6);
-        appendKeyFloatValue(outAck, " c2=", model.coefficients[2], 6);
+        outAck = HubAckBuilder::calibrationSetModel(model);
         return true;
       }
 
       case CmdType::FALL_STOP_SET:
         sm->setFallStopEnabled(c.fallStop.enabled);
-        outAck = "";
-        outAck.reserve(56);
-        appendKeyIntValue(outAck, "ACK:FALL_STOP enabled=", c.fallStop.enabled ? 1 : 0);
-        appendKeyValue(outAck, " mode=", sm->fallStopModeName());
+        outAck = HubAckBuilder::fallStop(c.fallStop.enabled, sm->fallStopModeName());
         return true;
 
       case CmdType::LEAVE_PROTECTION_SET:
         sm->setLeaveStopEnabled(c.leaveProtection.enabled);
-        outAck = "";
-        outAck.reserve(80);
-        appendKeyIntValue(outAck, "ACK:LEAVE_PROTECTION enabled=", sm->leaveStopEnabled() ? 1 : 0);
-        appendKeyIntValue(outAck, " supported=", 1);
-        appendKeyValue(outAck, " effect=", sm->leaveStopModeName());
+        outAck = HubAckBuilder::leaveProtection(sm->leaveStopEnabled(), sm->leaveStopModeName());
         return true;
 
       case CmdType::MOTION_SAMPLING_MODE_SET:
         sm->setMotionSamplingMode(c.motionSamplingMode.enabled);
-        outAck = "";
-        outAck.reserve(72);
-        appendKeyIntValue(outAck, "ACK:MOTION_SAMPLING enabled=", c.motionSamplingMode.enabled ? 1 : 0);
-        appendKeyIntValue(outAck, " fall_action_suppressed=", sm->fallStopEnabled() ? 0 : 1);
+        outAck = HubAckBuilder::motionSampling(
+            c.motionSamplingMode.enabled,
+            !sm->fallStopEnabled());
         return true;
 
       case CmdType::LEGACY_FIE: {
@@ -340,7 +269,7 @@ public:
           if (c.wave.enable) {
             FaultCode reason = FaultCode::NONE;
             if (!sm->requestStart(reason)) {
-              outAck = (reason == FaultCode::FAULT_LOCKED) ? "NACK:FAULT_LOCKED" : "NACK:NOT_ARMED";
+              outAck = HubAckBuilder::startRejected(reason);
               return false;
             }
           } else {
@@ -349,11 +278,11 @@ public:
           }
         }
 
-        outAck = "ACK:OK";
+        outAck = HubAckBuilder::ok();
         return true;
       }
     }
-    outAck = "NACK:UNSUPPORTED";
+    outAck = HubAckBuilder::unsupported();
     return false;
   }
 

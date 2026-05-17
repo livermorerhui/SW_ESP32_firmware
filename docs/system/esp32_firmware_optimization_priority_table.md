@@ -28,7 +28,7 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | FW-OPT-001 | 同步固件剩余事项真相源 | 文档收口 / 防误导 | 已完成 | 否 | P1 | ESP32 固件文档治理 | `reports/task_20260517_measurement_availability_probe_policy.md`；本文件 | 已更新 `esp32_firmware_remaining_work_and_lessons.md`，后续只需保持本总表为优先级入口 |
 | FW-OPT-002 | 固件协议合同 host-side 测试 | 协议防漂移 / 工程门禁 | 已完成 | 否 | P2 | ESP32 固件低风险工程质量包 | `src/core/ProtocolCodec.h`；`tools/run_evaluator_unit_tests.py`；BLE freeze 文档 | 已覆盖 `CAP? / SNAPSHOT / WAVE:* / EVT:STREAM / EVT:STOP / EVT:SAFETY` 和 legacy parser；后续触碰协议时继续扩展 |
-| FW-OPT-003 | `HubHandler` 命令分发责任矩阵 | Command owner 审计 | 审计已完成 / 拆分待决策 | 否 | P2 | ESP32 固件审计包 | `src/main.cpp`；`docs/system/esp32_firmware_owner_boundary_audit.md` | 如继续实现，优先只抽 ACK builder，不改 action owner 和 ACK 线格式 |
+| FW-OPT-003 | `HubHandler` 命令分发责任矩阵 / ACK builder 抽取 | Command owner 审计 / 低风险内部重构 | ACK builder 已完成 | 否 | P2 | ESP32 固件审计包 | `src/main.cpp`；`src/HubAckBuilder.h`；`docs/system/esp32_firmware_owner_boundary_audit.md` | 后续如继续拆，只允许继续按窄 helper 推进，不改 action owner 和 ACK 线格式 |
 | FW-OPT-004 | `BleTransport` owner 边界审计 | BLE transport 结构债 | 审计已完成 / 拆分待决策 | 否 | P3 | ESP32 BLE 安全重构预研 | `src/transport/ble/BleTransport.cpp`；`docs/system/esp32_ble_safe_refactor_freeze_checklist.md`；`docs/system/esp32_firmware_owner_boundary_audit.md` | 暂不直接拆；进入实现前先跑 BLE freeze checklist 和真机 capture 计划 |
 | FW-OPT-005 | `LaserModule` 深层 owner 拆分预研 | Laser measurement / start gate 结构债 | 审计已完成 / 拆分待决策 | 否 | P3 | ESP32 Laser 结构审计 | `src/modules/laser/LaserModule.cpp`；已抽取 pure evaluators；`docs/system/esp32_firmware_owner_boundary_audit.md` | 如继续实现，优先抽日志 / evidence helper；不迁移 safety / stop action |
 | FW-OPT-006 | 固件日志 facade / release log level 评估 | 可观测性 / 发布噪声治理 | 待评估 | 否 | P3 | ESP32 日志治理 | `docs/system/firmware_log_policy.md`；现有 capture 依赖 | 仅当 release 串口噪声影响采集或用户使用时再做；禁止全仓替换 `Serial.printf` |
@@ -94,11 +94,21 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 - 已输出 owner 矩阵、可安全抽取项、禁止迁移项、验证矩阵。
 - 未在审计包里拆 BLE 合同或 action timing。
 
-### 下一包：可选低风险实现
+### 已完成：HubHandler ACK builder 最小抽取
 
 建议：
 
-- 如果继续工程质量优化，优先做 `HubHandler` ACK builder 内部抽取。
+- 已完成 `HubHandler` ACK builder 内部抽取。
+- `HubHandler` 仍负责 action owner 调用和命令时机。
+- `HubAckBuilder` 只负责稳定 `ACK:* / NACK:*` 文本。
+- 不默认进入 `BleTransport` 实际拆分。
+- 不默认进入 `LaserModule` start gate / safety timing 拆分。
+
+### 下一包：待决策
+
+建议：
+
+- 继续低风险工程质量时，可只做 ACK 文本测试覆盖补强或旧文档状态标注。
 - 不默认进入 `BleTransport` 实际拆分。
 - 不默认进入 `LaserModule` start gate / safety timing 拆分。
 

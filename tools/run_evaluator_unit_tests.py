@@ -148,6 +148,11 @@ public:
     return *this;
   }
 
+  String& operator+=(unsigned long value) {
+    data += std::to_string(value);
+    return *this;
+  }
+
 private:
   std::string data;
 };
@@ -166,6 +171,13 @@ static SerialStub Serial;
 """
 
 
+PREFERENCES_STUB = r"""
+#pragma once
+
+class Preferences {};
+"""
+
+
 TEST_MAIN = r"""
 #include <cassert>
 #include <cstdio>
@@ -173,6 +185,7 @@ TEST_MAIN = r"""
 #include <iostream>
 
 #include "core/ProtocolCodec.h"
+#include "HubAckBuilder.h"
 #include "modules/laser/BaselineEvidenceEvaluator.h"
 #include "modules/laser/MeasurementAvailabilityProbePolicy.h"
 #include "modules/laser/MeasurementHealthStateMachine.h"
@@ -865,6 +878,48 @@ void test_protocol_encode_snapshot_contract() {
   expect_contains(encoded, "degraded_start_available=1");
   expect_contains(encoded, "degraded_start_enabled=1");
   expect_contains(encoded, "leave_stop_enabled=0");
+  assert(encoded.length() + 1 <= ProtocolCodec::kConnectSnapshotPayloadBudgetBytes);
+  expect_not_contains(encoded, "platform_model=");
+  expect_not_contains(encoded, "laser_installed=");
+  expect_not_contains(encoded, "runtime_ready=");
+  expect_not_contains(encoded, "baseline_ready=");
+}
+
+void test_protocol_snapshot_contract_spec_required_slim_fields() {
+  PlatformSnapshot snapshot{};
+  snapshot.topState = TopState::FAULT_STOP;
+  snapshot.startReady = false;
+  snapshot.laserAvailable = false;
+  snapshot.measurementHealth = MeasurementHealthState::TRANSIENT_UNAVAILABLE;
+  snapshot.degradedStartAvailable = true;
+  snapshot.degradedStartEnabled = false;
+  snapshot.leaveStopEnabled = true;
+
+  const String encoded = ProtocolCodec::encodeSnapshot(snapshot);
+  expect_contains(encoded, "SNAPSHOT:");
+  expect_contains(encoded, "top_state=FAULT_STOP");
+  expect_contains(encoded, "start_ready=0");
+  expect_contains(encoded, "laser_available=0");
+  expect_contains(encoded, "measurement_health=TRANSIENT_UNAVAILABLE");
+  expect_contains(encoded, "degraded_start_available=1");
+  expect_contains(encoded, "degraded_start_enabled=0");
+  expect_contains(encoded, "leave_stop_enabled=1");
+  assert(encoded.length() + 1 <= ProtocolCodec::kConnectSnapshotPayloadBudgetBytes);
+}
+
+void test_protocol_ack_cap_contract_stays_bootstrap_truth() {
+  const String encoded = HubAckBuilder::cap("SW-HUB-1.0.0", 1, PlatformModel::PLUS, true);
+
+  expect_contains(encoded, "ACK:CAP ");
+  expect_contains(encoded, "fw=SW-HUB-1.0.0");
+  expect_contains(encoded, "proto=1");
+  expect_contains(encoded, "platform_model=PLUS");
+  expect_contains(encoded, "laser_installed=1");
+  expect_contains(encoded, "leave_stop_supported=1");
+  expect_not_contains(encoded, "measurement_health=");
+  expect_not_contains(encoded, "degraded_start_available=");
+  expect_not_contains(encoded, "degraded_start_enabled=");
+  assert(encoded.length() + 1 <= ProtocolCodec::kCapTruthPayloadBudgetBytes);
 }
 
 void test_protocol_encode_stream_contract() {
@@ -931,6 +986,73 @@ void test_protocol_encode_stop_and_safety_contract() {
   expect_contains(encoded, "state=FAULT_STOP");
 }
 
+void test_hub_ack_builder_core_contracts() {
+  String encoded = HubAckBuilder::cap("1.2.3", 1, PlatformModel::PLUS, true);
+  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 proto=1 platform_model=PLUS laser_installed=1 leave_stop_supported=1");
+
+  encoded = HubAckBuilder::deviceConfig(PlatformModel::BASE, false);
+  expect_reason(encoded.c_str(), "ACK:DEVICE_CONFIG platform_model=BASE laser_installed=0");
+
+  PlatformSnapshot snapshot{};
+  snapshot.degradedStartEnabled = true;
+  snapshot.degradedStartAvailable = true;
+  encoded = HubAckBuilder::degradedStart(snapshot);
+  expect_reason(encoded.c_str(), "ACK:DEGRADED_START enabled=1 available=1");
+
+  expect_reason(HubAckBuilder::ok().c_str(), "ACK:OK");
+  expect_reason(HubAckBuilder::unsupported().c_str(), "NACK:UNSUPPORTED");
+  expect_reason(HubAckBuilder::simpleNack("INVALID_PARAM").c_str(), "NACK:INVALID_PARAM");
+  expect_reason(HubAckBuilder::startRejected(FaultCode::FAULT_LOCKED).c_str(), "NACK:FAULT_LOCKED");
+  expect_reason(HubAckBuilder::startRejected(FaultCode::NOT_ARMED).c_str(), "NACK:NOT_ARMED");
+}
+
+void test_hub_ack_builder_calibration_contracts() {
+  String encoded = HubAckBuilder::calibrationPoint(
+      3,
+      1234,
+      12.345f,
+      67.891f,
+      66.543f,
+      true,
+      false);
+  expect_reason(
+      encoded.c_str(),
+      "ACK:CAL_POINT idx=3 ts=1234 d_mm=12.35 ref_kg=67.89 pred_kg=66.54 stable=1 valid=0");
+
+  CalibrationModel model{};
+  model.type = CalibrationModelType::QUADRATIC;
+  model.referenceDistance = 10.12345f;
+  model.coefficients[0] = 1.234567f;
+  model.coefficients[1] = 2.345678f;
+  model.coefficients[2] = 3.456789f;
+
+  encoded = HubAckBuilder::calibrationModel(model);
+  expect_reason(
+      encoded.c_str(),
+      "ACK:CAL_MODEL type=QUADRATIC ref=10.1235 c0=1.234567 c1=2.345678 c2=3.456789");
+
+  encoded = HubAckBuilder::calibrationSetModel(model);
+  expect_reason(
+      encoded.c_str(),
+      "ACK:CAL_SET_MODEL type=QUADRATIC ref=10.1235 c0=1.234567 c1=2.345678 c2=3.456789");
+
+  encoded = HubAckBuilder::calibrationSetModelRejected(CalibrationModelType::LINEAR, "NON_MONOTONIC");
+  expect_reason(encoded.c_str(), "NACK:CAL_SET_MODEL type=LINEAR reason=NON_MONOTONIC");
+}
+
+void test_hub_ack_builder_safety_contracts() {
+  String encoded = HubAckBuilder::fallStop(false, "WARNING_ONLY");
+  expect_reason(encoded.c_str(), "ACK:FALL_STOP enabled=0 mode=WARNING_ONLY");
+
+  encoded = HubAckBuilder::leaveProtection(true, "RECOVERABLE_PAUSE");
+  expect_reason(
+      encoded.c_str(),
+      "ACK:LEAVE_PROTECTION enabled=1 supported=1 effect=RECOVERABLE_PAUSE");
+
+  encoded = HubAckBuilder::motionSampling(true, true);
+  expect_reason(encoded.c_str(), "ACK:MOTION_SAMPLING enabled=1 fall_action_suppressed=1");
+}
+
 }  // namespace
 
 int main() {
@@ -958,8 +1080,13 @@ int main() {
   test_protocol_parse_config_and_safety_commands();
   test_protocol_parse_legacy_commands();
   test_protocol_encode_snapshot_contract();
+  test_protocol_snapshot_contract_spec_required_slim_fields();
+  test_protocol_ack_cap_contract_stays_bootstrap_truth();
   test_protocol_encode_stream_contract();
   test_protocol_encode_stop_and_safety_contract();
+  test_hub_ack_builder_core_contracts();
+  test_hub_ack_builder_calibration_contracts();
+  test_hub_ack_builder_safety_contracts();
   std::cout << "evaluator unit tests passed\n";
   return 0;
 }
@@ -970,6 +1097,7 @@ def run() -> None:
   with tempfile.TemporaryDirectory(prefix="sw_eval_tests_") as temp_dir:
     temp = Path(temp_dir)
     (temp / "Arduino.h").write_text(ARDUINO_STUB, encoding="utf-8")
+    (temp / "Preferences.h").write_text(PREFERENCES_STUB, encoding="utf-8")
     main_cpp = temp / "evaluator_tests.cpp"
     main_cpp.write_text(TEST_MAIN, encoding="utf-8")
     binary = temp / "evaluator_tests"
