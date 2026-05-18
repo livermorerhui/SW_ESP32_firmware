@@ -1,6 +1,6 @@
 # ESP32 Firmware Optimization Priority Table
 
-最后更新时间：2026-05-17
+最后更新时间：2026-05-18
 
 ## 1. 当前结论
 
@@ -27,7 +27,7 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 | ID | 事项 | 类型 | 当前状态 | Blocker | 推荐优先级 | 推荐窗口 / 主线 | 证据来源 | 下一步动作 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | FW-OPT-001 | 同步固件剩余事项真相源 | 文档收口 / 防误导 | 已完成 | 否 | P1 | ESP32 固件文档治理 | `reports/task_20260517_measurement_availability_probe_policy.md`；本文件 | 已更新 `esp32_firmware_remaining_work_and_lessons.md`，后续只需保持本总表为优先级入口 |
-| FW-OPT-002 | 固件协议合同 host-side 测试 | 协议防漂移 / 工程门禁 | 已完成 | 否 | P2 | ESP32 固件低风险工程质量包 | `src/core/ProtocolCodec.h`；`tools/run_evaluator_unit_tests.py`；BLE freeze 文档 | 已覆盖 `CAP? / SNAPSHOT / WAVE:* / EVT:STREAM / EVT:STOP / EVT:SAFETY` 和 legacy parser；后续触碰协议时继续扩展 |
+| FW-OPT-002 | 固件协议合同 host-side 测试 / golden frame canonical fixture | 协议防漂移 / 工程门禁 | 已完成 | 否 | P2 | ESP32 固件低风险工程质量包 | `src/core/ProtocolCodec.h`；`src/HubAckBuilder.h`；`tools/run_evaluator_unit_tests.py`；`docs/protocol/golden_frames/sonicwave_ble_frames_v1.jsonl`；BLE freeze 文档 | 已覆盖 `CAP? / SNAPSHOT / WAVE:* / EVT:STREAM / EVT:STOP / EVT:SAFETY` 和 legacy parser；2026-05-18 已新增 canonical golden frame fixture，并让 host evaluator 读取 fixture 校验 schema、payload budget、`ACK:CAP` 和 slim `SNAPSHOT` 当前生成输出；未改 BLE 线格式或固件 command 行为 |
 | FW-OPT-003 | `HubHandler` 命令分发责任矩阵 / ACK builder 抽取 | Command owner 审计 / 低风险内部重构 | ACK builder 已完成 | 否 | P2 | ESP32 固件审计包 | `src/main.cpp`；`src/HubAckBuilder.h`；`docs/system/esp32_firmware_owner_boundary_audit.md` | 后续如继续拆，只允许继续按窄 helper 推进，不改 action owner 和 ACK 线格式 |
 | FW-OPT-004 | `BleTransport` owner 边界审计 | BLE transport 结构债 | 审计已完成 / 拆分待决策 | 否 | P3 | ESP32 BLE 安全重构预研 | `src/transport/ble/BleTransport.cpp`；`docs/system/esp32_ble_safe_refactor_freeze_checklist.md`；`docs/system/esp32_firmware_owner_boundary_audit.md` | 暂不直接拆；进入实现前先跑 BLE freeze checklist 和真机 capture 计划 |
 | FW-OPT-005 | `LaserModule` 深层 owner 拆分预研 | Laser measurement / start gate 结构债 | 审计已完成 / 拆分待决策 | 否 | P3 | ESP32 Laser 结构审计 | `src/modules/laser/LaserModule.cpp`；已抽取 pure evaluators；`docs/system/esp32_firmware_owner_boundary_audit.md` | 如继续实现，优先抽日志 / evidence helper；不迁移 safety / stop action |
@@ -67,6 +67,7 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 
 - 已在 host-side evaluator test 入口补 `ProtocolCodec` focused tests。
 - 已覆盖命令解析和关键输出字段，不改协议实现语义。
+- 已新增 canonical golden frame fixture，并由 host-side evaluator 读取。
 
 建议覆盖：
 

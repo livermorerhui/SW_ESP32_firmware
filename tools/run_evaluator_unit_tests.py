@@ -8,12 +8,14 @@ the evaluator sources with a tiny Arduino.h stub and runs focused assertions.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+GOLDEN_FRAME_FIXTURE = ROOT / "docs/protocol/golden_frames/sonicwave_ble_frames_v1.jsonl"
 
 
 ARDUINO_STUB = r"""
@@ -185,6 +187,7 @@ TEST_MAIN = r"""
 #include <iostream>
 
 #include "core/ProtocolCodec.h"
+#include "GoldenFrames.h"
 #include "HubAckBuilder.h"
 #include "modules/laser/BaselineEvidenceEvaluator.h"
 #include "modules/laser/MeasurementAvailabilityProbePolicy.h"
@@ -910,6 +913,7 @@ void test_protocol_snapshot_contract_spec_required_slim_fields() {
 void test_protocol_ack_cap_contract_stays_bootstrap_truth() {
   const String encoded = HubAckBuilder::cap("SW-HUB-1.0.0", 1, PlatformModel::PLUS, true);
 
+  expect_reason(encoded.c_str(), GoldenFrames::ack_cap_plus_v1);
   expect_contains(encoded, "ACK:CAP ");
   expect_contains(encoded, "fw=SW-HUB-1.0.0");
   expect_contains(encoded, "proto=1");
@@ -920,6 +924,39 @@ void test_protocol_ack_cap_contract_stays_bootstrap_truth() {
   expect_not_contains(encoded, "degraded_start_available=");
   expect_not_contains(encoded, "degraded_start_enabled=");
   assert(encoded.length() + 1 <= ProtocolCodec::kCapTruthPayloadBudgetBytes);
+}
+
+void test_protocol_golden_frame_fixture_core_cases() {
+  {
+    const String encoded = HubAckBuilder::cap("SW-HUB-1.0.0", 1, PlatformModel::PLUS, true);
+    expect_reason(encoded.c_str(), GoldenFrames::ack_cap_plus_v1);
+  }
+
+  {
+    PlatformSnapshot snapshot{};
+    snapshot.topState = TopState::ARMED;
+    snapshot.startReady = true;
+    snapshot.laserAvailable = true;
+    snapshot.measurementHealth = MeasurementHealthState::READY;
+    snapshot.degradedStartAvailable = false;
+    snapshot.degradedStartEnabled = false;
+    snapshot.leaveStopEnabled = true;
+    const String encoded = ProtocolCodec::encodeSnapshot(snapshot);
+    expect_reason(encoded.c_str(), GoldenFrames::snapshot_slim_ready_v1);
+  }
+
+  {
+    PlatformSnapshot snapshot{};
+    snapshot.topState = TopState::FAULT_STOP;
+    snapshot.startReady = false;
+    snapshot.laserAvailable = false;
+    snapshot.measurementHealth = MeasurementHealthState::FAULT;
+    snapshot.degradedStartAvailable = true;
+    snapshot.degradedStartEnabled = false;
+    snapshot.leaveStopEnabled = true;
+    const String encoded = ProtocolCodec::encodeSnapshot(snapshot);
+    expect_reason(encoded.c_str(), GoldenFrames::snapshot_slim_fault_v1);
+  }
 }
 
 void test_protocol_encode_stream_contract() {
@@ -1082,6 +1119,7 @@ int main() {
   test_protocol_encode_snapshot_contract();
   test_protocol_snapshot_contract_spec_required_slim_fields();
   test_protocol_ack_cap_contract_stays_bootstrap_truth();
+  test_protocol_golden_frame_fixture_core_cases();
   test_protocol_encode_stream_contract();
   test_protocol_encode_stop_and_safety_contract();
   test_hub_ack_builder_core_contracts();
@@ -1093,11 +1131,101 @@ int main() {
 """
 
 
+def load_golden_frames() -> list[dict[str, object]]:
+  if not GOLDEN_FRAME_FIXTURE.exists():
+    raise FileNotFoundError(f"golden frame fixture not found: {GOLDEN_FRAME_FIXTURE}")
+
+  cases: list[dict[str, object]] = []
+  seen_ids: set[str] = set()
+  for line_number, raw_line in enumerate(GOLDEN_FRAME_FIXTURE.read_text(encoding="utf-8").splitlines(), start=1):
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+      continue
+    case = json.loads(line)
+    case_id = required_string(case, "id", line_number)
+    if case_id in seen_ids:
+      raise AssertionError(f"duplicate golden frame id: {case_id}")
+    seen_ids.add(case_id)
+
+    frame = required_string(case, "frame", line_number)
+    direction = required_string(case, "direction", line_number)
+    required_string(case, "kind", line_number)
+    required_int(case, "budget_bytes", line_number)
+    required_string_list(case, "required", line_number)
+    required_string_list(case, "forbidden", line_number)
+
+    if direction != "device_to_app":
+      raise AssertionError(f"{case_id}: Phase 2 only validates device_to_app frames")
+    if len(frame) + 1 > required_int(case, "budget_bytes", line_number):
+      raise AssertionError(f"{case_id}: frame exceeds payload budget")
+    for field in required_string_list(case, "required", line_number):
+      if f"{field}=" not in frame:
+        raise AssertionError(f"{case_id}: missing required field {field}")
+    for field in required_string_list(case, "forbidden", line_number):
+      if f"{field}=" in frame:
+        raise AssertionError(f"{case_id}: forbidden field present {field}")
+    cases.append(case)
+
+  if not cases:
+    raise AssertionError("golden frame fixture is empty")
+  return cases
+
+
+def required_string(case: dict[str, object], field: str, line_number: int) -> str:
+  value = case.get(field)
+  if not isinstance(value, str) or not value:
+    raise AssertionError(f"line {line_number}: missing string field {field}")
+  return value
+
+
+def required_int(case: dict[str, object], field: str, line_number: int) -> int:
+  value = case.get(field)
+  if not isinstance(value, int):
+    raise AssertionError(f"line {line_number}: missing int field {field}")
+  return value
+
+
+def required_string_list(case: dict[str, object], field: str, line_number: int) -> list[str]:
+  value = case.get(field)
+  if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+    raise AssertionError(f"line {line_number}: missing string list field {field}")
+  return value
+
+
+def golden_frame_constants(cases: list[dict[str, object]]) -> str:
+  by_id = {required_string(case, "id", 0): required_string(case, "frame", 0) for case in cases}
+  required_ids = [
+    "ack_cap_plus_v1",
+    "snapshot_slim_ready_v1",
+    "snapshot_slim_fault_v1",
+  ]
+  missing = [case_id for case_id in required_ids if case_id not in by_id]
+  if missing:
+    raise AssertionError(f"missing golden frame ids: {', '.join(missing)}")
+
+  lines = [
+    "#pragma once",
+    "",
+    "namespace GoldenFrames {",
+  ]
+  for case_id in required_ids:
+    lines.append(f'constexpr const char* {case_id} = "{escape_cpp_string(by_id[case_id])}";')
+  lines.append("}  // namespace GoldenFrames")
+  lines.append("")
+  return "\n".join(lines)
+
+
+def escape_cpp_string(value: str) -> str:
+  return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def run() -> None:
+  golden_frames = load_golden_frames()
   with tempfile.TemporaryDirectory(prefix="sw_eval_tests_") as temp_dir:
     temp = Path(temp_dir)
     (temp / "Arduino.h").write_text(ARDUINO_STUB, encoding="utf-8")
     (temp / "Preferences.h").write_text(PREFERENCES_STUB, encoding="utf-8")
+    (temp / "GoldenFrames.h").write_text(golden_frame_constants(golden_frames), encoding="utf-8")
     main_cpp = temp / "evaluator_tests.cpp"
     main_cpp.write_text(TEST_MAIN, encoding="utf-8")
     binary = temp / "evaluator_tests"
