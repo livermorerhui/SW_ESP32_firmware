@@ -656,10 +656,7 @@ float LaserModule::evaluateCalibrationWeight(
     const CalibrationModel& model,
     float distance,
     float zeroReferenceDistance) const {
-  const float x = distance - zeroReferenceDistance;
-  return model.coefficients[0] * x * x +
-      model.coefficients[1] * x +
-      model.coefficients[2];
+  return CalibrationRuntime::evaluateWeight(model, distance, zeroReferenceDistance);
 }
 
 float LaserModule::evaluateCalibrationWeight(const CalibrationModel& model, float distance) const {
@@ -667,43 +664,38 @@ float LaserModule::evaluateCalibrationWeight(const CalibrationModel& model, floa
 }
 
 float LaserModule::evaluateCalibrationWeight(float distance) const {
-  float weight = evaluateCalibrationWeight(calibrationModel, distance, dualZero.effectiveZeroDistance);
-  if (!isfinite(weight)) return NAN;
-  if (weight < 0.0f) return 0.0f;
-  return weight;
+  return CalibrationRuntime::evaluateClampedWeight(
+      calibrationModel,
+      distance,
+      dualZero.effectiveZeroDistance);
 }
 
 float LaserModule::computeUnlockedEffectiveZeroDistance() const {
-  float calibrationZero = dualZero.calibrationZeroDistance;
-  if (!isfinite(calibrationZero)) {
-    calibrationZero = calibrationModel.referenceDistance;
-  }
-  if (!isfinite(calibrationZero)) {
-    calibrationZero = zeroDistance;
-  }
-
-  float effectiveZero = calibrationZero;
-  if (phase2Thresholds.runtimeZero.applyToWeightConversion &&
-      dualZero.runtimeZeroValid &&
-      isfinite(dualZero.runtimeZeroDistance)) {
-    float runtimeDelta = dualZero.runtimeZeroDistance - calibrationZero;
-    const float clamp = phase2Thresholds.runtimeZero.clampMaxOffsetFromCalibration;
-    if (runtimeDelta > clamp) runtimeDelta = clamp;
-    if (runtimeDelta < -clamp) runtimeDelta = -clamp;
-    effectiveZero = calibrationZero + runtimeDelta;
-  }
-
-  if (!isfinite(effectiveZero)) {
-    return 0.0f;
-  }
-  return effectiveZero;
+  EffectiveZeroInput input{};
+  input.calibrationZeroDistance = dualZero.calibrationZeroDistance;
+  input.calibrationModelReferenceDistance = calibrationModel.referenceDistance;
+  input.legacyZeroDistance = zeroDistance;
+  input.applyRuntimeZero = phase2Thresholds.runtimeZero.applyToWeightConversion;
+  input.runtimeZeroValid = dualZero.runtimeZeroValid;
+  input.runtimeZeroDistance = dualZero.runtimeZeroDistance;
+  input.clampMaxOffsetFromCalibration =
+      phase2Thresholds.runtimeZero.clampMaxOffsetFromCalibration;
+  return CalibrationRuntime::computeUnlockedEffectiveZero(input).effectiveZeroDistance;
 }
 
 float LaserModule::computeEffectiveZeroDistance() const {
-  if (dualZero.effectiveZeroLocked) {
-    return isfinite(dualZero.effectiveZeroDistance) ? dualZero.effectiveZeroDistance : 0.0f;
-  }
-  return computeUnlockedEffectiveZeroDistance();
+  EffectiveZeroInput input{};
+  input.calibrationZeroDistance = dualZero.calibrationZeroDistance;
+  input.calibrationModelReferenceDistance = calibrationModel.referenceDistance;
+  input.legacyZeroDistance = zeroDistance;
+  input.applyRuntimeZero = phase2Thresholds.runtimeZero.applyToWeightConversion;
+  input.runtimeZeroValid = dualZero.runtimeZeroValid;
+  input.runtimeZeroDistance = dualZero.runtimeZeroDistance;
+  input.clampMaxOffsetFromCalibration =
+      phase2Thresholds.runtimeZero.clampMaxOffsetFromCalibration;
+  input.effectiveZeroLocked = dualZero.effectiveZeroLocked;
+  input.lockedEffectiveZeroDistance = dualZero.effectiveZeroDistance;
+  return CalibrationRuntime::computeEffectiveZero(input).effectiveZeroDistance;
 }
 
 void LaserModule::refreshEffectiveZero() {

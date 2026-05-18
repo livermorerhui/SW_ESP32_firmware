@@ -6,6 +6,7 @@
 #include "core/EventBus.h"
 #include "core/SystemStateMachine.h"
 #include "modules/laser/BaselineEvidenceEvaluator.h"
+#include "modules/laser/CalibrationRuntime.h"
 #include "modules/laser/CalibrationModelStore.h"
 #include "modules/laser/DeviceConfigStore.h"
 #include "modules/laser/LaserDiagnostics.h"

@@ -190,6 +190,7 @@ TEST_MAIN = r"""
 #include "GoldenFrames.h"
 #include "HubAckBuilder.h"
 #include "modules/laser/BaselineEvidenceEvaluator.h"
+#include "modules/laser/CalibrationRuntime.h"
 #include "modules/laser/MeasurementAvailabilityProbePolicy.h"
 #include "modules/laser/MeasurementHealthStateMachine.h"
 #include "modules/laser/PresenceContractEvaluator.h"
@@ -358,6 +359,72 @@ void test_baseline_invalid_and_saturation() {
   assert(result.baselineEligible);
   assert(result.nextStableConfirmCount == 0xFF);
   expect_reason(result.reason, "baseline_eligible");
+}
+
+void test_calibration_runtime_weight_and_clamp() {
+  CalibrationModel model{};
+  model.type = CalibrationModelType::QUADRATIC;
+  model.referenceDistance = 10.0f;
+  model.coefficients[0] = 0.5f;
+  model.coefficients[1] = 2.0f;
+  model.coefficients[2] = 1.0f;
+
+  const float raw = CalibrationRuntime::evaluateWeight(model, 14.0f, 10.0f);
+  assert(std::fabs(raw - 17.0f) < 0.0001f);
+
+  model.coefficients[0] = 0.0f;
+  model.coefficients[1] = -2.0f;
+  model.coefficients[2] = -1.0f;
+  const float clamped = CalibrationRuntime::evaluateClampedWeight(model, 14.0f, 10.0f);
+  assert(clamped == 0.0f);
+}
+
+void test_calibration_runtime_effective_zero() {
+  EffectiveZeroInput input{};
+  input.calibrationZeroDistance = 100.0f;
+  input.calibrationModelReferenceDistance = 90.0f;
+  input.legacyZeroDistance = 80.0f;
+  input.applyRuntimeZero = true;
+  input.runtimeZeroValid = true;
+  input.runtimeZeroDistance = 106.0f;
+  input.clampMaxOffsetFromCalibration = 3.0f;
+
+  EffectiveZeroResult result = CalibrationRuntime::computeUnlockedEffectiveZero(input);
+  assert(result.calibrationZeroDistance == 100.0f);
+  assert(result.effectiveZeroDistance == 103.0f);
+  assert(result.usesRuntimeZero);
+
+  input.runtimeZeroDistance = 101.0f;
+  result = CalibrationRuntime::computeUnlockedEffectiveZero(input);
+  assert(result.effectiveZeroDistance == 101.0f);
+  assert(result.usesRuntimeZero);
+
+  input.applyRuntimeZero = false;
+  result = CalibrationRuntime::computeUnlockedEffectiveZero(input);
+  assert(result.effectiveZeroDistance == 100.0f);
+  assert(!result.usesRuntimeZero);
+}
+
+void test_calibration_runtime_effective_zero_fallback_and_lock() {
+  EffectiveZeroInput input{};
+  input.calibrationZeroDistance = NAN;
+  input.calibrationModelReferenceDistance = 90.0f;
+  input.legacyZeroDistance = 80.0f;
+  input.applyRuntimeZero = true;
+  input.runtimeZeroValid = true;
+  input.runtimeZeroDistance = 91.0f;
+  input.clampMaxOffsetFromCalibration = 3.0f;
+
+  EffectiveZeroResult result = CalibrationRuntime::computeUnlockedEffectiveZero(input);
+  assert(result.calibrationZeroDistance == 90.0f);
+  assert(result.effectiveZeroDistance == 91.0f);
+
+  input.effectiveZeroLocked = true;
+  input.lockedEffectiveZeroDistance = 88.0f;
+  result = CalibrationRuntime::computeEffectiveZero(input);
+  assert(result.calibrationZeroDistance == 90.0f);
+  assert(result.effectiveZeroDistance == 88.0f);
+  assert(result.usesRuntimeZero);
 }
 
 void test_fall_stop_action_decision() {
@@ -1128,6 +1195,9 @@ int main() {
   test_baseline_window_hold();
   test_baseline_confirm_and_latch();
   test_baseline_invalid_and_saturation();
+  test_calibration_runtime_weight_and_clamp();
+  test_calibration_runtime_effective_zero();
+  test_calibration_runtime_effective_zero_fallback_and_lock();
   test_fall_stop_action_decision();
   test_stop_reason_and_source_fallbacks();
   test_stop_outcome_summary_evaluator();
@@ -1273,6 +1343,7 @@ def run() -> None:
       str(main_cpp),
       str(ROOT / "src/modules/laser/PresenceContractEvaluator.cpp"),
       str(ROOT / "src/modules/laser/BaselineEvidenceEvaluator.cpp"),
+      str(ROOT / "src/modules/laser/CalibrationRuntime.cpp"),
       str(ROOT / "src/modules/laser/MeasurementAvailabilityProbePolicy.cpp"),
       str(ROOT / "src/modules/laser/MeasurementHealthStateMachine.cpp"),
       str(ROOT / "src/modules/laser/StopOutcomeSummaryEvaluator.cpp"),

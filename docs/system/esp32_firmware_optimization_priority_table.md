@@ -30,7 +30,7 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 | FW-OPT-002 | 固件协议合同 host-side 测试 / golden frame canonical fixture | 协议防漂移 / 工程门禁 | 已完成 | 否 | P2 | ESP32 固件低风险工程质量包 | `src/core/ProtocolCodec.h`；`src/HubAckBuilder.h`；`tools/run_evaluator_unit_tests.py`；`docs/protocol/golden_frames/sonicwave_ble_frames_v1.jsonl`；BLE freeze 文档 | 已覆盖 `CAP? / SNAPSHOT / WAVE:* / EVT:STREAM / EVT:STOP / EVT:SAFETY`、legacy parser 和 `HubAckBuilder` focused ACK/NACK 文本；2026-05-18 已新增 canonical golden frame fixture，并让 host evaluator 读取 fixture 校验 schema、payload budget、`ACK:CAP` 和 slim `SNAPSHOT` 当前生成输出；未改 BLE 线格式或固件 command 行为 |
 | FW-OPT-003 | `HubHandler` 命令分发责任矩阵 / ACK builder 抽取 | Command owner 审计 / 低风险内部重构 | ACK builder 已完成 | 否 | P2 | ESP32 固件审计包 | `src/main.cpp`；`src/HubAckBuilder.h`；`docs/system/esp32_firmware_owner_boundary_audit.md` | 后续如继续拆，只允许继续按窄 helper 推进，不改 action owner 和 ACK 线格式 |
 | FW-OPT-004 | `BleTransport` owner 边界审计 | BLE transport 结构债 | 审计已完成 / 拆分待决策 | 否 | P3 | ESP32 BLE 安全重构预研 | `src/transport/ble/BleTransport.cpp`；`docs/system/esp32_ble_safe_refactor_freeze_checklist.md`；`docs/system/esp32_firmware_owner_boundary_audit.md` | 暂不直接拆；进入实现前先跑 BLE freeze checklist 和真机 capture 计划 |
-| FW-OPT-005 | `LaserModule` 深层 owner 拆分预研 | Laser measurement / start gate 结构债 | diagnostics helper 第一刀已完成 | 否 | P3 | ESP32 Laser 结构审计 | `src/modules/laser/LaserModule.cpp`；`src/modules/laser/LaserDiagnostics.*`；已抽取 pure evaluators；`docs/system/esp32_firmware_owner_boundary_audit.md` | 已将 measurement probe / distance validity 串口 evidence 抽到 `LaserDiagnostics`；后续如继续，只允许继续抽日志 / evidence helper，不迁移 stable/start-ready/safety/stop action |
+| FW-OPT-005 | `LaserModule` 深层 owner 拆分预研 | Laser measurement / start gate 结构债 | diagnostics + calibration runtime 第一轮已完成 | 否 | P3 | ESP32 Laser 结构审计 | `src/modules/laser/LaserModule.cpp`；`src/modules/laser/LaserDiagnostics.*`；`src/modules/laser/CalibrationRuntime.*`；已抽取 pure evaluators；`docs/system/esp32_firmware_owner_boundary_audit.md` | 已将 measurement probe / distance validity 串口 evidence 抽到 `LaserDiagnostics`，将校准模型算重和 effective-zero 选择/夹紧抽到 `CalibrationRuntime`；后续如继续，只允许继续抽日志 / evidence / pure helper，不迁移 stable/start-ready/safety/stop action |
 | FW-OPT-006 | 固件日志 facade / release log level 评估 | 可观测性 / 发布噪声治理 | 待评估 | 否 | P3 | ESP32 日志治理 | `docs/system/firmware_log_policy.md`；现有 capture 依赖 | 仅当 release 串口噪声影响采集或用户使用时再做；禁止全仓替换 `Serial.printf` |
 | FW-OPT-007 | motion safety shadow 是否进入 runtime action | 高风险行为决策 | 待数据审计 | 否 | P3 | Motion safety 专项 | `docs/system/motion_safety_*`；replay 工具 | 先审样本分布和 action gate，禁止直接把 shadow 接停波 |
 | FW-OPT-008 | 旧协议 / 旧开发文档状态标注 | 文档过期治理 | 已完成第一轮 | 否 | P4 | ESP32 文档治理 | `docs/protocol.md`；`docs/firmware_developer_guide.md`；`docs/safety_design.md` | 已在旧入口标注 current / legacy / historical 状态和当前真相源；后续只在具体旧文档被继续使用时增量清理 |
@@ -136,6 +136,28 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 - 不改 `EVT:STREAM` 发布语义。
 - 不改 stable / baseline / start-ready 时机。
 - 不改 safety / stop action。
+
+验证：
+
+- `git diff --check`
+- `python3 tools/run_evaluator_unit_tests.py`
+- `python3 -m platformio run -e esp32s3`
+
+### 已完成：A5 CalibrationRuntime / runtime-zero pure helper
+
+目标：
+
+- 新增 `src/modules/laser/CalibrationRuntime.h/.cpp`。
+- 将 calibration weight 计算、negative clamp、effective-zero fallback / runtime-zero clamp / locked zero 选择从 `LaserModule` 迁到纯 helper。
+- `LaserModule` 仍负责校准模型存储、何时 reset runtime-zero、何时 observe runtime-zero、何时 refresh effective-zero。
+
+边界：
+
+- 不改 `Preferences` 存储 key。
+- 不改 calibration model validation。
+- 不改 runtime-zero refresh eligibility / window 判定。
+- 不改 stable / baseline / start-ready 时机。
+- 不改 BLE 线格式和 APP 消费语义。
 
 验证：
 
