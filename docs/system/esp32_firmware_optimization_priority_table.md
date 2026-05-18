@@ -37,6 +37,7 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 | FW-OPT-007 | motion safety shadow 是否进入 runtime action | 高风险行为决策 | 待数据审计 | 否 | P3 | Motion safety 专项 | `docs/system/motion_safety_*`；replay 工具 | 先审样本分布和 action gate，禁止直接把 shadow 接停波 |
 | FW-OPT-008 | 旧协议 / 旧开发文档状态标注 | 文档过期治理 | 已完成第一轮 | 否 | P4 | ESP32 文档治理 | `docs/protocol.md`；`docs/firmware_developer_guide.md`；`docs/safety_design.md` | 已在旧入口标注 current / legacy / historical 状态和当前真相源；后续只在具体旧文档被继续使用时增量清理 |
 | FW-OPT-009 | release hardening / minimum soak validation | 发布硬化 | 已完成当前基线 | 否 | P4 | 跨仓 release hardening | SW capture `20260518_103916...minimum_soak_release_esp32_plus`；SW release hardening 文档；本总表 | 当前 SW `52f782f` + ESP32 `5bb7e0c` 组合已通过 ESP32-plus minimum soak，audit `PASS_CANDIDATE`，无 hard failure / evidence gap；如固件或 APP commit 变化需重新跑最小 capture |
+| FW-OPT-010 | 固件大 owner 受控技术债记录 | 长期结构债 / 后续治理 | 观察项 | 否 | P3 | ESP32 固件结构审计窗口 | `src/modules/laser/LaserModule.cpp`；`src/transport/ble/BleTransport.cpp`；`src/core/SystemStateMachine.cpp`；SW 报告 `reports/task_20260518_sw_app_esp32_controlled_tech_debt_record.md`；本总表 | 当前已确认 `LaserModule`、`BleTransport`、`SystemStateMachine` 仍是大 owner，但不是当前 blocker；后续只按真实问题或窄 helper 继续治理。允许优先做 diagnostics、纯计算、ACK / payload builder、host-side tests、日志证据 helper；暂不因“文件大”直接拆 BLE 生命周期、start / stop action owner、stable / baseline / presence 动作时序、motion safety runtime action 或 wave ramp / I2S 输出时序 |
 
 ## 4. 重构收口与真机测试原则
 
