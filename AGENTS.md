@@ -86,6 +86,14 @@
   - 验证
   - 文档/报告
   再由用户决定是否提交、如何分组提交、是否推送
+- 后续固件开发默认采用短生命周期分支，避免长期分支堆积：
+  - 开新工作前必须从最新 `main` 创建分支：`git switch main`、`git pull --ff-only origin main`、`git switch -c <type>/<short-topic>`
+  - 分支类型默认使用 `feature/`、`fix/`、`docs/`、`audit/`、`release/`、`backup/`
+  - 一个分支只承载一个主题；跨仓联调时与 SW 仓使用同一个短主题后缀
+  - 合并回 `main` 前必须先跑固件 focused gate，例如 `git diff --check`、`python3 tools/run_evaluator_unit_tests.py`、`python3 -m platformio run -e esp32s3`
+  - 合并优先使用 `--no-ff` 保留交付边界；高风险合并前可创建 `backup/main-before-<topic>-YYYYMMDD`
+  - `backup/*` 只作短期保险，不作为长期开发入口；合并并确认 `main` 正常后，应清理已合并的本地功能分支，远端功能分支确认不再用于 PR / 回溯后再删除
+  - 禁止从过期功能分支继续开新长期分支，禁止把多个无关主题堆进同一个分支，禁止把 `backup/*` 当作日常主线
 - 只要开发进入“需要真机测试”的阶段，AI 必须明确提出已经进入真机验证阶段，并先准备好自己后续分析需要的自动采集脚本或命令
 - 真机测试阶段的默认分工固定为：
   - AI 负责准备日志采集、标记、停止、回收证据的脚本或命令
