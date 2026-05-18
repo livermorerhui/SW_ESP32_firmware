@@ -784,34 +784,21 @@ void LaserModule::pushStableSample(float distance, float weight) {
 bool LaserModule::updatePresenceState(float weight) {
   const LaserPresenceThresholdConfig& presence = phase2Thresholds.presence;
 
-  if (weight >= presence.enterThresholdKg) {
-    if (presenceEnterConfirmCount < 0xFF) {
-      presenceEnterConfirmCount++;
-    }
-    presenceExitConfirmCount = 0;
-  } else if (weight <= presence.exitThresholdKg) {
-    if (presenceExitConfirmCount < 0xFF) {
-      presenceExitConfirmCount++;
-    }
-    presenceEnterConfirmCount = 0;
-  } else {
-    presenceEnterConfirmCount = 0;
-    presenceExitConfirmCount = 0;
-  }
-
-  PresenceContractInput input{};
+  PresenceCounterInput input{};
   input.weightKg = weight;
   input.currentUserPresent = stableContract.userPresent;
-  input.enterConfirmCount = presenceEnterConfirmCount;
-  input.exitConfirmCount = presenceExitConfirmCount;
-  const PresenceContractResult result =
-      PresenceContractEvaluator::evaluate(presence, input);
+  input.currentEnterConfirmCount = presenceEnterConfirmCount;
+  input.currentExitConfirmCount = presenceExitConfirmCount;
+  const PresenceCounterResult result =
+      PresenceContractEvaluator::evaluateWithCounters(presence, input);
 
-  stableContract.userPresent = result.nextUserPresent;
-  if (result.changed && stableContract.userPresent) {
+  presenceEnterConfirmCount = result.nextEnterConfirmCount;
+  presenceExitConfirmCount = result.nextExitConfirmCount;
+  stableContract.userPresent = result.decision.nextUserPresent;
+  if (result.decision.changed && stableContract.userPresent) {
     invalidPresenceSamples = 0;
   }
-  return result.changed;
+  return result.decision.changed;
 }
 
 void LaserModule::noteInvalidPresenceSample(uint32_t now, const char* reason) {

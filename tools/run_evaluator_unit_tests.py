@@ -279,6 +279,81 @@ void test_presence_deadband_and_zero_confirm() {
   expect_reason(result.reason, "enter_confirmed");
 }
 
+void test_presence_counter_wrapper_enter_exit() {
+  LaserPresenceThresholdConfig config{};
+  config.enterThresholdKg = 5.0f;
+  config.exitThresholdKg = 3.0f;
+  config.confirmSamples = 2;
+
+  PresenceCounterInput input{};
+  input.weightKg = 6.0f;
+  input.currentUserPresent = false;
+  PresenceCounterResult result = PresenceContractEvaluator::evaluateWithCounters(config, input);
+  assert(result.nextEnterConfirmCount == 1);
+  assert(result.nextExitConfirmCount == 0);
+  assert(!result.decision.nextUserPresent);
+  assert(!result.decision.changed);
+  expect_reason(result.decision.reason, "enter_pending");
+
+  input.currentEnterConfirmCount = result.nextEnterConfirmCount;
+  result = PresenceContractEvaluator::evaluateWithCounters(config, input);
+  assert(result.nextEnterConfirmCount == 2);
+  assert(result.nextExitConfirmCount == 0);
+  assert(result.decision.nextUserPresent);
+  assert(result.decision.changed);
+  expect_reason(result.decision.reason, "enter_confirmed");
+
+  input.weightKg = 2.0f;
+  input.currentUserPresent = true;
+  input.currentEnterConfirmCount = result.nextEnterConfirmCount;
+  input.currentExitConfirmCount = result.nextExitConfirmCount;
+  result = PresenceContractEvaluator::evaluateWithCounters(config, input);
+  assert(result.nextEnterConfirmCount == 0);
+  assert(result.nextExitConfirmCount == 1);
+  assert(result.decision.nextUserPresent);
+  assert(!result.decision.changed);
+  expect_reason(result.decision.reason, "exit_pending");
+
+  input.currentEnterConfirmCount = result.nextEnterConfirmCount;
+  input.currentExitConfirmCount = result.nextExitConfirmCount;
+  result = PresenceContractEvaluator::evaluateWithCounters(config, input);
+  assert(result.nextEnterConfirmCount == 0);
+  assert(result.nextExitConfirmCount == 2);
+  assert(!result.decision.nextUserPresent);
+  assert(result.decision.changed);
+  expect_reason(result.decision.reason, "exit_confirmed");
+}
+
+void test_presence_counter_wrapper_deadband_reset_and_saturation() {
+  LaserPresenceThresholdConfig config{};
+  config.enterThresholdKg = 5.0f;
+  config.exitThresholdKg = 3.0f;
+  config.confirmSamples = 2;
+
+  PresenceCounterInput input{};
+  input.weightKg = 4.0f;
+  input.currentUserPresent = true;
+  input.currentEnterConfirmCount = 4;
+  input.currentExitConfirmCount = 3;
+  PresenceCounterResult result = PresenceContractEvaluator::evaluateWithCounters(config, input);
+  assert(result.nextEnterConfirmCount == 0);
+  assert(result.nextExitConfirmCount == 0);
+  assert(result.decision.nextUserPresent);
+  assert(!result.decision.changed);
+  expect_reason(result.decision.reason, "threshold_deadband");
+
+  input.weightKg = 6.0f;
+  input.currentUserPresent = false;
+  input.currentEnterConfirmCount = 0xFF;
+  input.currentExitConfirmCount = 7;
+  result = PresenceContractEvaluator::evaluateWithCounters(config, input);
+  assert(result.nextEnterConfirmCount == 0xFF);
+  assert(result.nextExitConfirmCount == 0);
+  assert(result.decision.nextUserPresent);
+  assert(result.decision.changed);
+  expect_reason(result.decision.reason, "enter_confirmed");
+}
+
 void test_baseline_window_hold() {
   LaserStableThresholdConfig config{};
   config.enterStdDevKg = 0.20f;
@@ -1245,6 +1320,8 @@ void test_hub_ack_builder_safety_contracts() {
 int main() {
   test_presence_enter_exit();
   test_presence_deadband_and_zero_confirm();
+  test_presence_counter_wrapper_enter_exit();
+  test_presence_counter_wrapper_deadband_reset_and_saturation();
   test_baseline_window_hold();
   test_baseline_confirm_and_latch();
   test_baseline_invalid_and_saturation();
