@@ -1,5 +1,9 @@
 # SonicWave Safety Design
 
+> 状态：历史安全设计入口 / 需要对照当前合同阅读。
+>
+> 当前正式安全语义以 `docs/system/firmware_safety_behavior.md`、`docs/start-readiness-contract.md`、`docs/system/esp32_app_communication_semantics.md` 和 `SystemStateMachine` 现行实现为准。本文中关于 `FAULT_STOP`、sensor fault、user off、BLE disconnect 的早期描述只作为历史背景；不得据此把 `MEASUREMENT_UNAVAILABLE` 从 `WARNING_ONLY` 升级为 blocking fault，也不得改变当前 `RECOVERABLE_PAUSE / ABNORMAL_STOP / WARNING_ONLY` owner 边界。
+
 ## 1. 安全设计原则
 
 1. App 不能直接控制振动输出硬件。

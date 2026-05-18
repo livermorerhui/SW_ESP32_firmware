@@ -1,5 +1,9 @@
 # SonicWave 固件维护与开发指南
 
+> 状态：维护指南 / 部分章节含历史架构描述。
+>
+> 当前 owner 边界和后续重构优先级以 `docs/system/esp32_firmware_optimization_priority_table.md`、`docs/system/esp32_firmware_owner_boundary_audit.md`、`docs/system/esp32_app_communication_semantics.md` 为准。本文仍可作为项目入门和操作参考，但涉及 safety、measurement、legacy protocol、BLE truth source 的章节必须对照当前 system 文档确认。
+
 ## 1. 项目概览
 
 ### 1.1 SonicWave 设备作用

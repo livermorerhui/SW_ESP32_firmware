@@ -1027,8 +1027,18 @@ void test_hub_ack_builder_core_contracts() {
   String encoded = HubAckBuilder::cap("1.2.3", 1, PlatformModel::PLUS, true);
   expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 proto=1 platform_model=PLUS laser_installed=1 leave_stop_supported=1");
 
+  encoded = HubAckBuilder::cap("1.2.3", 1, PlatformModel::BASE, false);
+  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 proto=1 platform_model=BASE laser_installed=0 leave_stop_supported=1");
+  expect_not_contains(encoded, "measurement_health=");
+  expect_not_contains(encoded, "degraded_start_available=");
+  expect_not_contains(encoded, "degraded_start_enabled=");
+  assert(encoded.length() + 1 <= ProtocolCodec::kCapTruthPayloadBudgetBytes);
+
   encoded = HubAckBuilder::deviceConfig(PlatformModel::BASE, false);
   expect_reason(encoded.c_str(), "ACK:DEVICE_CONFIG platform_model=BASE laser_installed=0");
+
+  encoded = HubAckBuilder::deviceConfig(PlatformModel::PLUS, true);
+  expect_reason(encoded.c_str(), "ACK:DEVICE_CONFIG platform_model=PLUS laser_installed=1");
 
   PlatformSnapshot snapshot{};
   snapshot.degradedStartEnabled = true;
@@ -1036,9 +1046,15 @@ void test_hub_ack_builder_core_contracts() {
   encoded = HubAckBuilder::degradedStart(snapshot);
   expect_reason(encoded.c_str(), "ACK:DEGRADED_START enabled=1 available=1");
 
+  snapshot.degradedStartEnabled = false;
+  snapshot.degradedStartAvailable = false;
+  encoded = HubAckBuilder::degradedStart(snapshot);
+  expect_reason(encoded.c_str(), "ACK:DEGRADED_START enabled=0 available=0");
+
   expect_reason(HubAckBuilder::ok().c_str(), "ACK:OK");
   expect_reason(HubAckBuilder::unsupported().c_str(), "NACK:UNSUPPORTED");
   expect_reason(HubAckBuilder::simpleNack("INVALID_PARAM").c_str(), "NACK:INVALID_PARAM");
+  expect_reason(HubAckBuilder::simpleNack("").c_str(), "NACK:");
   expect_reason(HubAckBuilder::startRejected(FaultCode::FAULT_LOCKED).c_str(), "NACK:FAULT_LOCKED");
   expect_reason(HubAckBuilder::startRejected(FaultCode::NOT_ARMED).c_str(), "NACK:NOT_ARMED");
 }
@@ -1075,19 +1091,33 @@ void test_hub_ack_builder_calibration_contracts() {
 
   encoded = HubAckBuilder::calibrationSetModelRejected(CalibrationModelType::LINEAR, "NON_MONOTONIC");
   expect_reason(encoded.c_str(), "NACK:CAL_SET_MODEL type=LINEAR reason=NON_MONOTONIC");
+
+  encoded = HubAckBuilder::calibrationSetModelRejected(CalibrationModelType::QUADRATIC, "");
+  expect_reason(encoded.c_str(), "NACK:CAL_SET_MODEL type=QUADRATIC reason=");
 }
 
 void test_hub_ack_builder_safety_contracts() {
   String encoded = HubAckBuilder::fallStop(false, "WARNING_ONLY");
   expect_reason(encoded.c_str(), "ACK:FALL_STOP enabled=0 mode=WARNING_ONLY");
 
+  encoded = HubAckBuilder::fallStop(true, "ABNORMAL_STOP");
+  expect_reason(encoded.c_str(), "ACK:FALL_STOP enabled=1 mode=ABNORMAL_STOP");
+
   encoded = HubAckBuilder::leaveProtection(true, "RECOVERABLE_PAUSE");
   expect_reason(
       encoded.c_str(),
       "ACK:LEAVE_PROTECTION enabled=1 supported=1 effect=RECOVERABLE_PAUSE");
 
+  encoded = HubAckBuilder::leaveProtection(false, "WARNING_ONLY");
+  expect_reason(
+      encoded.c_str(),
+      "ACK:LEAVE_PROTECTION enabled=0 supported=1 effect=WARNING_ONLY");
+
   encoded = HubAckBuilder::motionSampling(true, true);
   expect_reason(encoded.c_str(), "ACK:MOTION_SAMPLING enabled=1 fall_action_suppressed=1");
+
+  encoded = HubAckBuilder::motionSampling(false, false);
+  expect_reason(encoded.c_str(), "ACK:MOTION_SAMPLING enabled=0 fall_action_suppressed=0");
 }
 
 }  // namespace

@@ -6,7 +6,7 @@
 
 ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + laser_installed=1 + measurement unavailable` 下的 degraded measurement circuit-breaker / low-frequency probe 已完成实现、本地验证和真机 capture 复核。
 
-按成熟工程标准看，当前剩余工作主要是协议防漂移、owner 边界审计、文档真相源收口和发布硬化；没有新的必须立刻阻断联调的固件 blocker。
+按成熟工程标准看，当前剩余工作主要是协议防漂移、owner 边界审计、文档真相源收口和发布硬化；没有新的必须立刻阻断联调的固件 blocker。2026-05-18 SW release hardening 窗口已完成 ESP32-plus minimum soak 真机 capture 复核，当前 SW `52f782f` + ESP32 `5bb7e0c` 组合可作为本轮 release hardening 基线。
 
 本总表是 ESP32 固件后续优化的长期入口。一次性报告只作为证据来源，不作为 backlog 真相源。
 
@@ -27,14 +27,14 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 | ID | 事项 | 类型 | 当前状态 | Blocker | 推荐优先级 | 推荐窗口 / 主线 | 证据来源 | 下一步动作 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | FW-OPT-001 | 同步固件剩余事项真相源 | 文档收口 / 防误导 | 已完成 | 否 | P1 | ESP32 固件文档治理 | `reports/task_20260517_measurement_availability_probe_policy.md`；本文件 | 已更新 `esp32_firmware_remaining_work_and_lessons.md`，后续只需保持本总表为优先级入口 |
-| FW-OPT-002 | 固件协议合同 host-side 测试 / golden frame canonical fixture | 协议防漂移 / 工程门禁 | 已完成 | 否 | P2 | ESP32 固件低风险工程质量包 | `src/core/ProtocolCodec.h`；`src/HubAckBuilder.h`；`tools/run_evaluator_unit_tests.py`；`docs/protocol/golden_frames/sonicwave_ble_frames_v1.jsonl`；BLE freeze 文档 | 已覆盖 `CAP? / SNAPSHOT / WAVE:* / EVT:STREAM / EVT:STOP / EVT:SAFETY` 和 legacy parser；2026-05-18 已新增 canonical golden frame fixture，并让 host evaluator 读取 fixture 校验 schema、payload budget、`ACK:CAP` 和 slim `SNAPSHOT` 当前生成输出；未改 BLE 线格式或固件 command 行为 |
+| FW-OPT-002 | 固件协议合同 host-side 测试 / golden frame canonical fixture | 协议防漂移 / 工程门禁 | 已完成 | 否 | P2 | ESP32 固件低风险工程质量包 | `src/core/ProtocolCodec.h`；`src/HubAckBuilder.h`；`tools/run_evaluator_unit_tests.py`；`docs/protocol/golden_frames/sonicwave_ble_frames_v1.jsonl`；BLE freeze 文档 | 已覆盖 `CAP? / SNAPSHOT / WAVE:* / EVT:STREAM / EVT:STOP / EVT:SAFETY`、legacy parser 和 `HubAckBuilder` focused ACK/NACK 文本；2026-05-18 已新增 canonical golden frame fixture，并让 host evaluator 读取 fixture 校验 schema、payload budget、`ACK:CAP` 和 slim `SNAPSHOT` 当前生成输出；未改 BLE 线格式或固件 command 行为 |
 | FW-OPT-003 | `HubHandler` 命令分发责任矩阵 / ACK builder 抽取 | Command owner 审计 / 低风险内部重构 | ACK builder 已完成 | 否 | P2 | ESP32 固件审计包 | `src/main.cpp`；`src/HubAckBuilder.h`；`docs/system/esp32_firmware_owner_boundary_audit.md` | 后续如继续拆，只允许继续按窄 helper 推进，不改 action owner 和 ACK 线格式 |
 | FW-OPT-004 | `BleTransport` owner 边界审计 | BLE transport 结构债 | 审计已完成 / 拆分待决策 | 否 | P3 | ESP32 BLE 安全重构预研 | `src/transport/ble/BleTransport.cpp`；`docs/system/esp32_ble_safe_refactor_freeze_checklist.md`；`docs/system/esp32_firmware_owner_boundary_audit.md` | 暂不直接拆；进入实现前先跑 BLE freeze checklist 和真机 capture 计划 |
-| FW-OPT-005 | `LaserModule` 深层 owner 拆分预研 | Laser measurement / start gate 结构债 | 审计已完成 / 拆分待决策 | 否 | P3 | ESP32 Laser 结构审计 | `src/modules/laser/LaserModule.cpp`；已抽取 pure evaluators；`docs/system/esp32_firmware_owner_boundary_audit.md` | 如继续实现，优先抽日志 / evidence helper；不迁移 safety / stop action |
+| FW-OPT-005 | `LaserModule` 深层 owner 拆分预研 | Laser measurement / start gate 结构债 | diagnostics helper 第一刀已完成 | 否 | P3 | ESP32 Laser 结构审计 | `src/modules/laser/LaserModule.cpp`；`src/modules/laser/LaserDiagnostics.*`；已抽取 pure evaluators；`docs/system/esp32_firmware_owner_boundary_audit.md` | 已将 measurement probe / distance validity 串口 evidence 抽到 `LaserDiagnostics`；后续如继续，只允许继续抽日志 / evidence helper，不迁移 stable/start-ready/safety/stop action |
 | FW-OPT-006 | 固件日志 facade / release log level 评估 | 可观测性 / 发布噪声治理 | 待评估 | 否 | P3 | ESP32 日志治理 | `docs/system/firmware_log_policy.md`；现有 capture 依赖 | 仅当 release 串口噪声影响采集或用户使用时再做；禁止全仓替换 `Serial.printf` |
 | FW-OPT-007 | motion safety shadow 是否进入 runtime action | 高风险行为决策 | 待数据审计 | 否 | P3 | Motion safety 专项 | `docs/system/motion_safety_*`；replay 工具 | 先审样本分布和 action gate，禁止直接把 shadow 接停波 |
-| FW-OPT-008 | 旧协议 / 旧开发文档状态标注 | 文档过期治理 | 待处理 | 否 | P4 | ESP32 文档治理 | `docs/protocol.md`；`docs/firmware_developer_guide.md`；`docs/safety_design.md` | 标注 legacy / historical / current truth source，避免后续 AI 误读旧文档 |
-| FW-OPT-009 | release hardening / minimum soak validation | 发布硬化 | 待规划 | 否 | P4 | 跨仓 release hardening | 真机 capture 报告；SW 优先级总表 | 固定 Android + ESP32 组合、capture profile、最小 soak 入口 |
+| FW-OPT-008 | 旧协议 / 旧开发文档状态标注 | 文档过期治理 | 已完成第一轮 | 否 | P4 | ESP32 文档治理 | `docs/protocol.md`；`docs/firmware_developer_guide.md`；`docs/safety_design.md` | 已在旧入口标注 current / legacy / historical 状态和当前真相源；后续只在具体旧文档被继续使用时增量清理 |
+| FW-OPT-009 | release hardening / minimum soak validation | 发布硬化 | 已完成当前基线 | 否 | P4 | 跨仓 release hardening | SW capture `20260518_103916...minimum_soak_release_esp32_plus`；SW release hardening 文档；本总表 | 当前 SW `52f782f` + ESP32 `5bb7e0c` 组合已通过 ESP32-plus minimum soak，audit `PASS_CANDIDATE`，无 hard failure / evidence gap；如固件或 APP commit 变化需重新跑最小 capture |
 
 ## 4. 已完成但仍需留证的事项
 
@@ -45,7 +45,7 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 | ESP32-base 整机 smoke 与串口补证据 | 已完成 | `esp32_base_platformio_serial_evidence` capture 记录 | base 当前不是 blocker |
 | PLUS degraded-start 合同链路 | 已通过 | `esp32_plus_degraded_start_smoke` capture 记录 | 不代表 measurement unavailable 已自动健康 |
 | Wave output startup observability | 已完成 | `reports/task_20260430_plus_degraded_wave_output_observability.md` | `WAVE_OUTPUT_STARTUP` 是串口 evidence，不改 BLE 合同 |
-| MeasurementAvailabilityProbePolicy | 已完成 | commit `9fab932`；`reports/task_20260517_measurement_availability_probe_policy.md`；真机 capture | `MEASUREMENT_PROBE` 只作为串口 evidence，不进入 BLE 正式合同 |
+| MeasurementAvailabilityProbePolicy | 已完成 | commit `9fab932`；`reports/task_20260517_measurement_availability_probe_policy.md`；真机 capture；SW release hardening capture `20260518_103916...minimum_soak_release_esp32_plus` | `MEASUREMENT_PROBE` 只作为串口 evidence，不进入 BLE 正式合同 |
 
 ## 5. 推荐执行顺序
 
@@ -105,13 +105,43 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 - 不默认进入 `BleTransport` 实际拆分。
 - 不默认进入 `LaserModule` start gate / safety timing 拆分。
 
-### 下一包：待决策
+### 已完成：A1-A3 低风险工程标准化收口
 
 建议：
 
-- 继续低风险工程质量时，可只做 ACK 文本测试覆盖补强或旧文档状态标注。
+- 已同步 minimum soak 通过状态到固件长期优先级入口。
+- 已补强 `HubAckBuilder` focused tests，锁住 ACK/NACK 文本。
+- 已标注旧协议 / 旧开发文档入口的 current / legacy / historical 状态。
 - 不默认进入 `BleTransport` 实际拆分。
 - 不默认进入 `LaserModule` start gate / safety timing 拆分。
+
+验证：
+
+- `git diff --check`
+- `python3 tools/run_evaluator_unit_tests.py`
+- `python3 -m platformio run -e esp32s3`
+
+### 已完成：A4 Laser diagnostics / evidence helper
+
+目标：
+
+- 新增 `src/modules/laser/LaserDiagnostics.h/.cpp`。
+- 将 `MEASUREMENT_PROBE` 串口 evidence 和 distance valid / invalid diagnostics 从 `LaserModule` 迁到 helper。
+- `LaserModule` 仍负责何时调用、节流状态、measurement/probe/runtime 行为。
+
+边界：
+
+- 不改 measurement 读取节奏。
+- 不改 `MeasurementAvailabilityProbePolicy` 状态机。
+- 不改 `EVT:STREAM` 发布语义。
+- 不改 stable / baseline / start-ready 时机。
+- 不改 safety / stop action。
+
+验证：
+
+- `git diff --check`
+- `python3 tools/run_evaluator_unit_tests.py`
+- `python3 -m platformio run -e esp32s3`
 
 ## 6. 后续协作默认读取顺序
 

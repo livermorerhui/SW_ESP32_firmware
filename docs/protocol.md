@@ -1,5 +1,11 @@
 # SonicWave BLE 协议文档
 
+> 状态：历史协议入口 / 兼容参考。
+>
+> 当前 BLE 正式合同优先以 `docs/system/esp32_app_communication_semantics.md`、`docs/system/esp32_ble_safe_refactor_freeze_checklist.md`、`docs/protocol/golden_frames/sonicwave_ble_frames_v1.jsonl` 和 host-side protocol tests 为准。本文仍保留 GATT、legacy 命令和历史说明，但旧 `STATE / FAULT / STABLE / PARAM / STREAM` 兼容链不得被误读为新的 canonical 合同。
+>
+> 若后续修改 `CAP? / SNAPSHOT / WAVE:* / EVT:* / ACK:* / NACK:*` 字段或语义，必须先更新 canonical golden frame fixture，再同步 SW APP mirror fixture。
+
 ## 1. GATT 服务结构
 
 - Service UUID
