@@ -12,9 +12,9 @@
 #define WAVE_I2S_SAMPLE_BITS 16
 #define WAVE_INTENSITY_MAX 120
 
-#define I2S_BCLK_PIN    4
-#define I2S_LRCK_PIN    5
-#define I2S_DOUT_PIN    6
+#define I2S_BCLK_PIN    1
+#define I2S_LRCK_PIN    21
+#define I2S_DOUT_PIN    2
 
 // ===== Wave Ramp =====
 static constexpr uint32_t RAMP_START_TIME_MS = 800UL;
@@ -23,11 +23,21 @@ static constexpr uint32_t RAMP_UPDATE_INTERVAL_MS = 10UL;
 static constexpr float RAMP_FREQ_STEP_HZ = 0.5f;
 
 // ===== Laser / Modbus =====
-#define RX_PIN 15
-#define TX_PIN 14
+#define RX_PIN 17
+#define TX_PIN 18
 #define MODBUS_BAUD 9600
 #define MODBUS_SLAVE_ID 1
 #define REG_DISTANCE 0x0064
+
+// ===== Board indicators =====
+static constexpr uint8_t BOARD_RGB_LED_PIN = 48;
+// Continuous measurement plane now polls independently from the slower
+// baseline/rhythm-state evaluation path. This keeps live distance/weight/MA12
+// samples flowing without forcing the legacy stable/baseline semantics to run
+// at the same cadence.
+static constexpr uint32_t LASER_MEASUREMENT_READ_INTERVAL_MS = 20UL;
+static constexpr uint32_t LASER_STATE_EVAL_INTERVAL_DEFAULT_MS = 100UL;
+static constexpr uint32_t LASER_STATE_EVAL_INTERVAL_STABLE_BUILD_MS = 80UL;
 // The sensor register is currently treated as a signed fixed-point value with
 // two decimal places of displayed distance/displacement resolution.
 static constexpr int16_t LASER_VALID_MEASUREMENT_MIN_RAW = -3570;
@@ -37,12 +47,43 @@ static constexpr float LASER_DISTANCE_RUNTIME_DIVISOR = 100.0f;
 static constexpr float LASER_DISTANCE_MM_TO_RUNTIME_UNITS =
     1.0f / LASER_DISTANCE_RUNTIME_DIVISOR;
 static constexpr uint32_t LASER_INVALID_LOG_INTERVAL_MS = 1000UL;
+static constexpr uint32_t LASER_STARTUP_GRACE_MS = 10000UL;
+static constexpr uint32_t BLE_STARTUP_MEASUREMENT_READY_WAIT_MS = 12000UL;
+static constexpr uint32_t BLE_STARTUP_MEASUREMENT_READY_POLL_MS = 100UL;
+static constexpr uint32_t LASER_HEALTH_TRANSIENT_GRACE_MS = 3000UL;
+static constexpr uint32_t LASER_HEALTH_RUNTIME_FAULT_GRACE_MS = 1000UL;
+static constexpr uint8_t LASER_HEALTH_READY_SUCCESS_SAMPLES = 2;
+static constexpr uint8_t LASER_HEALTH_FAULT_FAILURE_SAMPLES = 3;
+static constexpr uint8_t LASER_HEALTH_RUNTIME_FAULT_FAILURE_SAMPLES = 2;
 
 // ===== Scale Algo =====
 #define WINDOW_N 10
 #define MIN_WEIGHT 5.0f
 #define LEAVE_TH 3.0f
 #define STD_TH 0.20f
+static constexpr float STABLE_FILTER_DISTANCE_ALPHA = 0.18f;
+static constexpr float STABLE_RANGE_TH = 0.40f;
+static constexpr float STABLE_DRIFT_TH = 0.16f;
+static constexpr uint8_t STABLE_CONFIRM_WINDOWS = 2;
+static constexpr uint8_t STABLE_TRIMMED_MEAN_DROP_SAMPLES = 1;
+// 不能简单粗暴把所有窗口统一缩短。
+// 因此保留 legacy 满窗 10 样本 + STD_TH 的兜底路径，只额外增加一个更保守的
+// “9 样本提前锁定”分支：只有离散度更小、且最新样本没有明显偏离均值时才允许提前 latch。
+// 这些值是把体感从约 3 秒压到约 2 秒级的当前参数，不代表最终全局最优。
+// 当前 baseline build 时延点位只做小范围兜底：
+// 主问题不是 fallback 缺失，而是 early_strict 现场命中率仍然偏低。
+// 因此这里只补一个“整窗略松、尾段更严”的 guarded 条件，专门兜住
+// “整体已接近 legacy 合格，但 recent tail 明显已经站稳”的 case。
+// 如果现场之后仍主要落在 legacy_full_window，就应视为本点位收益不足并停止继续投入。
+static constexpr uint8_t STABLE_EARLY_LATCH_SAMPLES = 9;
+static constexpr float STABLE_EARLY_STRICT_STD_TH = 0.16f;
+static constexpr float STABLE_EARLY_STRICT_LATEST_DELTA_TH = 0.18f;
+static constexpr float STABLE_EARLY_GUARDED_STD_TH = STD_TH;
+static constexpr float STABLE_EARLY_GUARDED_LATEST_DELTA_TH = 0.24f;
+static constexpr uint8_t STABLE_EARLY_GUARDED_RECENT_SAMPLES = 4;
+static constexpr float STABLE_EARLY_GUARDED_RECENT_STD_TH = 0.10f;
+static constexpr float STABLE_EARLY_GUARDED_RECENT_RANGE_TH = 0.22f;
+static constexpr float STABLE_EARLY_GUARDED_RECENT_MEAN_DELTA_TH = 0.12f;
 #define STABLE_REARM_DISTANCE_DELTA_TH 1.0f
 #define STABLE_REARM_WEIGHT_DELTA_TH 0.5f
 #define STABLE_INVALID_GRACE_SAMPLES 2
@@ -56,6 +97,14 @@ static constexpr float CALIBRATION_QUADRATIC_RMSE_IMPROVEMENT_RATIO = 0.15f;
 #define STREAM_KEEPALIVE_MS 500UL
 #define STREAM_DISTANCE_DELTA_TH 1.0f
 #define STREAM_WEIGHT_DELTA_TH 0.2f
+#define MEASUREMENT_MA12_WINDOW 12
+static constexpr uint32_t MEASUREMENT_INVALID_KEEPALIVE_MS = 250UL;
+static constexpr uint32_t MEASUREMENT_PLANE_LOG_INTERVAL_MS = 2000UL;
+static constexpr uint32_t MEASUREMENT_NO_LASER_BYPASS_LOG_INTERVAL_MS = 5000UL;
+static constexpr bool DEBUG_MEASUREMENT_PLANE_VERBOSE = false;
+static constexpr bool START_GATE_DIAG_ENABLED = true;
+static constexpr uint32_t START_GATE_DIAG_LOG_INTERVAL_MS = 5000UL;
+static constexpr bool BASELINE_CONTRACT_DIAG_ENABLED = true;
 #define DEBUG_LASER_STREAM 0
 #define DEBUG_BLE_TX_VERBOSE 0
 
@@ -67,14 +116,31 @@ static constexpr float CALIBRATION_QUADRATIC_RMSE_IMPROVEMENT_RATIO = 0.15f;
 #define FALL_DW_DT_SUSPECT_TH 25.0f   // kg/s（先用保守默认，后续真机调）
 #define FAULT_COOLDOWN_MS     3000
 #define CLEAR_CONFIRM_MS      1000
+static constexpr uint32_t MOTION_SAMPLING_SUPPRESSED_FALL_NOTICE_INTERVAL_MS = 1000UL;
+static constexpr bool MOTION_SAFETY_SHADOW_RUNTIME_ENABLED = true;
+static constexpr uint32_t MOTION_SAFETY_SHADOW_LOG_INTERVAL_MS = 2000UL;
+static constexpr bool MOTION_SAFETY_SHADOW_VERBOSE_RESET_LOG = false;
+// 摔倒停波保护默认开启：达到跌倒危险停波候选时执行真实停波动作。
+static constexpr bool FALL_STOP_ENABLED_DEFAULT = true;
+// 律动离开保护默认开启：用户离开平台时执行可恢复暂停 / 停波动作。
+static constexpr bool LEAVE_STOP_ENABLED_DEFAULT = true;
 
 // ===== Safety Policy（Task-4 对齐）=====
 // 用户离台默认走“可恢复暂停”风格：停波，但不进入异常停机。
 static constexpr bool SAFETY_POLICY_USER_LEFT_RECOVERABLE_PAUSE = true;
 // 跌倒疑似默认走“异常停机”风格：停波并进入 FAULT_STOP。
 static constexpr bool SAFETY_POLICY_FALL_ABNORMAL_STOP = true;
-// BLE 断连默认仅提醒，不强制停波；产品策略可按需改为 true。
-static constexpr bool SAFETY_POLICY_DISCONNECT_STOPS_WAVE = false;
+// BLE 断连策略需要显式区分：
+// - WARNING_ONLY：仅提醒，不主动停波（更接近未来 device-owned session 方向）
+// - RECOVERABLE_PAUSE：断连即停波，但不进入 fault cooldown（当前 APP-driven 默认）
+// - BLOCKING_FAULT：断连即停波，并进入 fault cooldown
+enum class BleDisconnectWavePolicy : uint8_t {
+  WARNING_ONLY = 0,
+  RECOVERABLE_PAUSE = 1,
+  BLOCKING_FAULT = 2,
+};
+static constexpr BleDisconnectWavePolicy SAFETY_POLICY_BLE_DISCONNECT_WAVE_POLICY =
+    BleDisconnectWavePolicy::RECOVERABLE_PAUSE;
 // 测量不可用默认仅告警，不强制停波；产品策略可按需改为 true。
 static constexpr bool SAFETY_POLICY_MEASUREMENT_UNAVAILABLE_STOPS_WAVE = false;
 

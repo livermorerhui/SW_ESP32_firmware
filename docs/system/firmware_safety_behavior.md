@@ -10,6 +10,13 @@
   - wave stops
   - state leaves `RUNNING`
   - no abnormal-stop latch by default
+- configurable protection switch:
+  - command: `SAFETY:LEAVE_PROTECTION enabled=0/1`
+  - compatibility alias: `DEBUG:LEAVE_STOP enabled=0/1`
+  - ACK: `ACK:LEAVE_PROTECTION enabled=<0/1> supported=1 effect=<ENABLED_PAUSE|WARNING_ONLY>`
+  - `enabled=1`: keep the default `USER_LEFT_PLATFORM -> RECOVERABLE_PAUSE` action.
+  - `enabled=0`: keep detection and logs, emit `EVT:SAFETY reason=USER_LEFT_PLATFORM effect=WARNING_ONLY`, and do not enter recoverable pause only because of this leave event.
+  - default value after boot is enabled.
 
 ### Fall Suspected
 
@@ -39,11 +46,80 @@
   - no accidental start block by default
   - behavior remains configurable through firmware policy
 
+### Measurement Health Startup Semantics
+
+`LaserModule` owns the measurement-chain health state exposed through
+`SNAPSHOT measurement_health=<BOOTING|PROBING|READY|TRANSIENT_UNAVAILABLE|FAULT>`.
+
+- `BOOTING` / `PROBING`: ESP32 has not yet confirmed the laser measurement chain ready. Modbus read failures during the startup grace window are diagnostic evidence only and must not be reported as a confirmed laser fault.
+- `READY`: consecutive valid measurement samples have confirmed the measurement chain.
+- `TRANSIENT_UNAVAILABLE`: the chain was ready and then briefly lost valid measurement. This is a warning/readiness state, not confirmed fault.
+- `FAULT`: startup grace or post-ready failure threshold has been exceeded. Only this state may drive confirmed measurement unavailable / degraded-start UI.
+- Runtime `TRANSIENT_UNAVAILABLE` must not publish the formal `MEASUREMENT_UNAVAILABLE` safety/fault truth ahead of `FAULT`. The firmware publishes a snapshot when the confirmed `FAULT` or recovered `READY` truth changes so clients can reconcile their mirrors.
+
+`ACK:CAP` must not include `measurement_health`; it remains runtime truth in
+`SNAPSHOT`. APPs must not synthesize this state from local timers.
+
 ## APP-Facing Signals
 
 - `EVT:STATE`
 - `EVT:FAULT`
 - `EVT:SAFETY`
+- `ACK:CAP ... leave_stop_supported=1`
+- `SNAPSHOT: ... measurement_health=<...> leave_stop_enabled=<0/1>`
+
+`leave_stop_enabled` is firmware-owned runtime truth. APPs must not cache or invent the switch state after reconnect; they must consume `ACK:LEAVE_PROTECTION`, `SNAPSHOT`, or capability evidence.
+
+## SafetyAction / StopReason Owner Boundary
+
+Current owner split:
+
+- `LaserModule` owns presence / baseline / rhythm danger evidence and may only raise candidates.
+- `SystemStateMachine` owns final safety action, stop action, `stop_reason`, `stop_source`, visible reason, and `EVT:STOP / EVT:SAFETY / EVT:FAULT` emission.
+- `ProtocolCodec` owns the existing BLE line encoding only.
+- `BleTransport` owns critical-event delivery classification only.
+
+Frozen rule:
+
+- A detector or measurement owner must not directly stop the wave or publish final BLE safety semantics.
+- `USER_LEFT_PLATFORM` and `FALL_SUSPECTED` must remain separate product reasons.
+- Disabling `FALL_STOP` only suppresses the `FALL_SUSPECTED` automatic stop action; it does not suppress `USER_LEFT_PLATFORM`.
+- Disabling `LEAVE_PROTECTION` only suppresses the `USER_LEFT_PLATFORM` automatic recoverable-pause action; it does not suppress `FALL_SUSPECTED`.
+- A `WARNING_ONLY` safety event is observable evidence, not a final stop action.
+- Any future extraction must first move pure reason/effect/source evaluation only, while leaving action timing in `SystemStateMachine`.
+
+2026-04-28 implementation boundary:
+
+- `SafetyActionContractEvaluator` owns only pure `FALL_SUSPECTED` action decision and stop reason/source fallback evaluation.
+- `FallStopActionDecision` is a DTO for the decision result; executing the result remains in `SystemStateMachine::applyFallSuspectedAction`.
+- `SystemStateMachine` still owns `enterBlockingFault`, `enterRecoverablePause`, `requestStop`, `emitStopEvent`, `emitSafety`, `emitFault`, `WaveModule::stopSoft`, `onUserOff`, `onBleDisconnected`, and `setSensorHealthy`.
+- BLE line formats and `SystemStateMachine` action timing are unchanged.
+
+2026-04-28 BLE diagnostic guard:
+
+- `send_skipped` logs for non-critical frames are time-throttled by `FirmwareLogPolicy` when BLE is not connected.
+- `BLE_TX_PRESSURE` is no longer forced by every non-critical skipped frame and is time-throttled by `FirmwareLogPolicy`.
+- Critical events still mark reconnect snapshot dirty; this preserves reconnect truth without flooding serial logs.
+
+2026-04-28 smoke evidence:
+
+- `safety_action_log_policy_smoke_retry` passed on ESP32-plus normal hardware with SW APP.
+- Android evidence: `CONNECT_SUCCESS=2`, `DEVICE_SNAPSHOT_SYNCED=20`, `CONNECT_SNAPSHOT_REFRESH_FAILED=0`, `start_confirmed_by_device=2`, `stop_confirmed_by_device=1`.
+- ESP32 evidence: `START ALLOW=1`, `STOP_SUMMARY=1`, `reconnect_snapshot_compensated=2`, no reset/panic/Brownout/Guru, no `MEASUREMENT_TRANSIENT`, no Modbus read fail.
+- Disconnected `send_skipped` logs were reduced to the `FirmwareLogPolicy` cadence; `BLE_TX_PRESSURE` remains a periodic diagnostic summary.
+
+2026-04-28 StopOutcome summary boundary:
+
+- `EVT:STOP` remains the final stop-context truth source for BLE consumers.
+- `STOP_SUMMARY / ABORT_SUMMARY` remains serial evidence only.
+- `StopOutcomeSummaryEvaluator` owns only summary classification from already-published stop context; it does not stop the wave and does not publish BLE events.
+- Summary field names are unchanged.
+- Recoverable stops must not be reported as abnormal summary only because `FaultCode != NONE`.
+- Current classification:
+  - `NONE` -> `STOP_SUMMARY result=NORMAL`
+  - `RECOVERABLE_PAUSE` -> `STOP_SUMMARY result=RECOVERABLE_PAUSE`
+  - `WARNING_ONLY` -> `STOP_SUMMARY result=WARNING_ONLY`
+  - `ABNORMAL_STOP` -> `ABORT_SUMMARY result=ABNORMAL_STOP`
 
 Recommended APP mapping:
 

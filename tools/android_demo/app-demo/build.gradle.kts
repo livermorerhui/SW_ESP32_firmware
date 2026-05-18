@@ -63,5 +63,7 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.google.material)
 
+    testImplementation(kotlin("test"))
+
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

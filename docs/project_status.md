@@ -1,5 +1,367 @@
 # Project Status
 
+## 2026-04-09 Phase 4 Current Progress: Low-Risk Power Pass Advanced
+
+The current Phase 4 pass has moved beyond planning and already completed a
+validated first batch of low-risk power-oriented changes on the current
+ESP32-S3-only bench.
+
+What is now considered completed in the current Phase 4 pass:
+
+- BLE transmit power was reduced from the previous maximum setting to a
+  moderate level.
+- BLE advertising now uses a staged profile:
+  - fast discovery immediately after boot/disconnect
+  - lower-power idle advertising after the fast-discovery window expires
+- idle low-power advertising also uses a lower advertising-only TX power tier
+  than the fast-discovery window
+- idle polling was reduced for `BASE` / no-laser delivery paths.
+- idle repeated Modbus read attempts now use backoff when the sensor path is
+  unavailable and the device is not running.
+- idle backoff windows now avoid unnecessary short-period task wakeups.
+- BLE control-task idle checks now relax further while disconnected and already
+  in the idle low-power advertising profile.
+
+What was observed on bench after these changes:
+
+- BLE discovery still works.
+- reconnect still works.
+- `PLUS` degraded-start still works.
+- `WAVE:SET / WAVE:START / WAVE:STOP` did not regress.
+- repeated unavailable-sensor logging became materially less frequent in idle
+  scenarios.
+- advertising profile transitions were observed and reconnect remained
+  possible after the low-power advertising profile became active.
+- reconnect remained possible after idle advertising TX power was lowered to
+  the current `N0` tier on the bench.
+
+What this means:
+
+- Phase 4 has started for real, not just on paper.
+- the current pass already achieved practical low-risk power reductions without
+  reopening protocol or transport risk.
+- within the current bench boundary, additional low-risk Phase 4 gains are now
+  entering diminishing-return territory.
+
+What it does **not** mean:
+
+- Phase 4 is fully complete
+- deep/light sleep strategy is validated
+- full-device current draw characterization is complete
+- measurement-capable hardware power behavior is validated
+
+## 2026-04-09 Phase 4 Low-Risk Power Pass Started
+
+Phase 4 has now started as a low-risk power pass on top of the completed
+Phase 3 efficiency baseline.
+
+Current Phase 4 scope is intentionally narrow:
+
+- reduce BLE transmit power to a moderate validated level
+- relax advertising intervals without changing the BLE protocol contract
+- reduce avoidable idle polling in delivery-subset firmware paths
+
+Current Phase 4 scope does **not** include:
+
+- aggressive sleep-state entry
+- deep/light sleep policy changes that may perturb BLE stability
+- large scheduling refactors
+- full-system power characterization under unavailable hardware
+
+## 2026-04-09 Phase 3 Low-Risk Efficiency Pass Completed
+
+The current low-risk Phase 3 efficiency pass is now considered complete for the
+current ESP32-S3-only bench boundary.
+
+This completion claim does **not** mean the full measurement-capable product is
+optimized. It means the currently deliverable subset has finished one bounded
+round of:
+
+- log-volume reduction
+- low-risk string/path cleanup
+- Demo APP background-noise cleanup
+- no-regression verification on `BASE` and `PLUS` degraded-start
+
+What was completed in this Phase 3 pass:
+
+- `LaserModule` read-fail logging was reduced from repeated paired noise to
+  periodic summary-style reporting.
+- `BleTransport` stream suppression logging now reports suppression bursts
+  instead of repetitive single-line spam.
+- `main.cpp` ACK/NACK builders were tightened to reduce chained temporary
+  `String` assembly.
+- Demo APP no longer keeps test-session automation hot for the current delivery
+  subset.
+- `WaveModule` output-driver logging was reduced to key start/stop and ramp
+  transitions.
+- `SystemStateMachine` start-ready logging no longer reprints on tiny weight
+  jitter.
+
+What this completion means:
+
+- the current delivery subset remains functionally stable
+- the main runtime logs are materially quieter and easier to inspect
+- Phase 3 no longer needs more broad low-risk cleanup before moving on
+
+What it does **not** mean:
+
+- real measurement throughput is optimized
+- full measurement-capable product performance is closed
+- Phase 4 power work is done
+
+Current recommended next step:
+
+- keep the current Phase 3 result frozen
+- move to Phase 4 low-risk power optimization
+- continue using `BASE` and `PLUS` degraded-start as the current regression
+  boundary
+
+## 2026-04-08 Current Mainline Status: Phase 2.5 Delivery Closure
+
+Current mainline should now be read as five segments rather than the older
+four-phase view:
+
+1. Phase 1: BLE stability repair
+2. Phase 2: transport/bootstrap truth hardening
+3. Phase 2.5: `BASE` / `PLUS degraded-start` delivery closure
+4. Phase 3: runtime efficiency optimization
+5. Phase 4: power optimization
+
+Current interpretation:
+
+- Phase 1 is complete.
+- Phase 2 core work is complete.
+- active work should remain on Phase 2.5 delivery closure.
+- Phase 3 and Phase 4 are not current priorities.
+
+What is already considered stable on the current ESP32-S3-only bench:
+
+- BLE connect / disconnect / reconnect
+- TX notify + RX write transport path
+- `CAP? -> ACK:CAP`
+- `SNAPSHOT? -> SNAPSHOT`
+- profile write + truth refresh
+- `WAVE:SET / WAVE:START / WAVE:STOP`
+- `BASE` immediate start path
+- `PLUS + laser installed + measurement unavailable` degraded-start path
+
+What is not yet a current completion claim:
+
+- real laser measurement validation
+- MAX485 real communication validation
+- PCM5102A output-path validation
+- sustained valid `EVT:STREAM` under real measurement load
+- full calibration closed loop
+- whole-device long-duration stability under full measurement conditions
+
+Current delivery boundary:
+
+- deliver a stable BLE-controlled subset for `BASE`
+- deliver a stable BLE-controlled subset for `PLUS` degraded-start under the
+  current bench constraint
+- do not present the current repo status as a completed full-measurement product
+
+Current document anchors:
+
+- `docs/system/base_plus_degraded_delivery_plan.md`
+- `docs/system/base_plus_degraded_regression_checklist.md`
+- `docs/system/current_delivery_release_boundary.md`
+- `docs/system/current_hardware_validation_boundary.md`
+- `docs/ble-init-contract.md`
+- `docs/start-readiness-contract.md`
+
+Immediate next-step guidance:
+
+- keep `ACK:CAP` / `SNAPSHOT` responsibilities frozen
+- keep BLE init sequencing frozen
+- continue removing Demo APP measurement-dependent assumptions from the current
+  delivery subset
+- expand focused regression only for `BASE` and `PLUS` degraded-start
+- do not start broad Phase 3 / Phase 4 optimization work yet
+
+## 2026-04-02 Freeze Decision: Phase 3 Script Experimental Line
+
+Decision recorded on April 2, 2026:
+
+- current mainline = Phase 2 stable firmware baseline + SW repo alignment development
+- current experimental line = Phase 3 firmware-owned script offload
+- Phase 3 is frozen as an experimental/history line and is not the current mainline
+
+Frozen scope:
+
+- firmware-owned script offload
+- heterogeneous step-list execution
+- `SCRIPT:SET script_steps=...`
+- `SCRIPT:START/STOP/ABORT` continued Phase 3 expansion
+- WP3a / WP3b / WP3c / WP3d follow-up development
+- Demo APP script runner as a current mainline feature
+
+Current repo interpretation:
+
+- active source should continue on the non-script Phase 2 path
+- historical Phase 3 reports are kept as experiment records only
+- SW normal development must not depend on any Phase 3 script surface unless the line is explicitly reopened under separate conditions
+
+## 2026-04-02 Phase 2 WP2 Behavior Migration Landed
+
+Phase 2 WP2 behavior migration is now in place on top of the WP1 skeleton.
+
+What changed:
+
+- `runtime zero` now participates in `effective zero`
+- `effective zero` now locks for an occupied cycle to prevent in-cycle zero switching
+- stable enter / live / exit now run on the explicit internal stable contract path
+- `start_ready` is now contract-computed and no longer a direct baseline latch mirror
+
+What is still pending:
+
+- real-device tuning of runtime-zero thresholds
+- real-device tuning of stable exit sensitivity
+- any external exposure of the new internal contract layers
+
+Current interpretation:
+
+- Phase 1 remains the regression baseline
+- Phase 2 behavior migration has started for real, not just structurally
+- next work should prioritize hardware validation and threshold tuning, not another structure pass
+
+## 2026-04-02 Phase 2 WP1 Skeleton Landed
+
+Phase 2 WP1 skeleton implementation is now in place on top of the validated Phase 1 baseline.
+
+What landed in firmware:
+
+- formal dual-zero data model:
+  - `calibration zero`
+  - `runtime zero`
+  - `effective zero`
+- centralized Phase 2 threshold landing zone in `src/config/LaserPhase2Config.h`
+- explicit internal stable contract layers:
+  - `user_present`
+  - `stable_candidate`
+  - `stable_ready_live`
+  - `baseline_ready_latched`
+  - `start_ready`
+
+What did not land yet:
+
+- full dual-zero behavior migration
+- full stable enter/exit migration
+- full `start_ready` semantic decoupling from `baseline_ready`
+- external snapshot/protocol expansion for the new internal layers
+
+Current interpretation:
+
+- Phase 1 remains the regression baseline
+- Phase 2 has started with WP1 structural scaffolding completed
+- current outward behavior is still intentionally bridge-preserved while WP2/WP3 migrate behavior on top of the new skeleton
+
+## 2026-04-02 Phase 1 Exit Decision
+
+Phase 1 exit is now `Passed` after the on-site validation pass completed on April 2, 2026.
+
+Confirmed exit decision:
+
+- `Phase 1 Exit Decision = Passed`
+- `Can Proceed to Phase 2 = Yes`
+
+What was validated in the accepted pass:
+
+- no stable weight: the Demo APP start button stayed gray and non-clickable
+- stable weight established: the start button turned green quickly and became clickable
+- Demo APP interaction behavior matched the intended Phase 1 contract
+
+Current stage:
+
+- Phase 1 is closed
+- Phase 2 can start immediately
+
+Next stage focus:
+
+- proceed with Phase 2 work on top of the validated firmware + Demo APP interaction baseline
+- keep Phase 1 validation behavior as the regression baseline for later changes
+
+## 2026-04-01 Phase 1 Real-Device Validation Status
+
+Historical note: this 2026-04-01 pending status was superseded by the 2026-04-02 Phase 1 exit pass.
+
+Phase 1 exit remained `Pending` after the 2026-04-01 real-device BLE + serial validation pass.
+
+What was confirmed:
+
+- the attached bench device is reachable over BLE as `SonicWave_Hub`
+- `CAP?`, `SNAPSHOT?`, `WAVE:SET`, `WAVE:START`, and `WAVE:STOP` all execute on real hardware
+- reconnect preserves `top_state` on the device side
+
+What blocked exit:
+
+- the attached real device did **not** expose `SNAPSHOT.wave_output_active`
+- the attached real device did **not** emit `EVT:WAVE_OUTPUT active=<0|1>`
+- the attached bench unit reported `platform_model=BASE` and `laser_installed=0`, so measurement-plane validation could not be completed
+- no Android Demo APP runtime session was executed in this environment, so UI/logging/export retention remain unvalidated
+
+Highest-confidence interpretation:
+
+- the checked-in source and protocol tests are ahead of the flashed bench firmware image
+- Phase 1 source closure therefore exists, but bench integration closure does not yet
+
+Required next steps before Phase 2 at that time:
+
+- flash the exact current firmware image that exports the control-confirmation contract
+- rerun validation on a measurement-capable `laser_installed=1` bench
+- run Android Demo APP real-device validation for reconnect/UI/logging/retention
+
+Artifacts:
+
+- `reports/tasks/phase1_real_device_validation/`
+
+## 2026-03-21 Task-MOTION-EXPORT-AUTOMATION 状态
+
+本任务在 Demo APP 的 Motion-Safety Sampling Tool 中落地了“导出会话自动化”MVP，目标是把采样标签、自动命名和 JSON metadata 写入标准化，降低高频采样阶段的人工整理成本。
+
+本次完成：
+
+- `导出会话` 现在会先弹出采样标签表单，而不是直接导出
+- 表单支持：
+  - 主标签：`NORMAL_USE` / `FALL_DURING_USE`
+  - 细分类标签：`NORMAL_VIBRATION`、`LEAVE_PLATFORM`、`PARTIAL_LEAVE`、`FALL_ON_PLATFORM`、`FALL_OFF_PLATFORM`、`LEFT_RIGHT_SWAY`、`SQUAT_STAND`、`RAPID_UNLOAD`、`OTHER_DISTURBANCE`
+  - 可选备注
+- CSV / JSON 自动共用统一基础文件名：
+  - `<主标签>_<细分类>_<频率>hz_<强度>_<时间戳>`
+- JSON metadata 自动新增：
+  - `primaryLabel`
+  - `subLabel`
+  - `notes`
+  - `frequencyHz`
+  - `intensity`
+  - `exportedAt`
+- 原有兼容字段继续保留：
+  - `scenarioLabel`
+  - `scenarioCategory`
+  - `waveFrequencyHz`
+  - `waveIntensity`
+  - `exportTimestampMs`
+
+明确未改动：
+
+- 固件运行时逻辑
+- leave / fall 判定逻辑
+- sampling mode 行为
+- stop / pause 执行逻辑
+- motion-safety 原始 session row 采样结构
+
+当前价值：
+
+- 导出后不再需要人工重命名
+- CSV / JSON 命名一致，便于成对交接
+- 样本标签不再依赖人工记忆
+- 后续脚本可直接读取标签和上下文做离线分析
+
+验证完成：
+
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+- `tools/android_demo ./gradlew :sonicwave-protocol:test`
+
 ## 2026-03-13 Task-4A Status
 
 Task-4A firmware safety alignment is implemented at the firmware layer.
@@ -625,3 +987,444 @@ Verification completed:
 Artifacts:
 
 - `reports/task_c4e_capture_layout_correction/`
+
+## 2026-03-20 Design-MOTION-SAFETY Status
+
+Design-MOTION-SAFETY defines the next-stage motion safety framework without rewriting firmware thresholds yet.
+
+Implementation outcomes:
+
+- confirmed the firmware source of truth in:
+  - `src/modules/laser/LaserModule.*`
+  - `src/core/SystemStateMachine.*`
+- confirmed the Demo APP source of truth in:
+  - `tools/android_demo/app-demo/`
+- documented the current baseline explicitly:
+  - leave-platform currently uses derived-weight hysteresis and a falling-edge `onUserOff()` trigger
+  - fall suspicion currently uses a single-frame derived-weight rate during `RUNNING`
+  - `SystemStateMachine` keeps the public runtime contract centered on `EVT:STATE`, `EVT:FAULT`, and `EVT:SAFETY`
+- defined a compatibility-preserving motion safety framework with:
+  - internal motion safety states
+  - modular leave detection architecture
+  - modular fall detection architecture
+  - parameterized firmware landing model
+- defined Demo APP debug sampling as the front end for:
+  - continuous time-series capture
+  - labeling and markers
+  - chart/table review
+  - CSV + JSON export
+- documented that direct measurement truth is distance / displacement, while weight is model-derived and still useful for runtime safety analysis
+- documented a staged path:
+  - extend debug sampling first
+  - collect and label real motion data
+  - derive compact runtime parameters
+  - then land modular leave/fall logic in firmware
+
+Implementation status:
+
+- design and documentation only
+- no runtime threshold rewrite applied in this task
+- no firmware or Demo APP behavior changed in this task
+
+Artifacts:
+
+- `reports/design_motion_safety_framework/`
+- `docs/system/motion_safety_framework.md`
+
+## 2026-03-20 Task-MOTION-1 Status
+
+Task-MOTION-1 delivers the first usable Demo APP Motion-Safety Sampling Tool MVP for engineering data capture.
+
+Implementation outcomes:
+
+- confirmed the Demo APP source-of-truth module under:
+  - `tools/android_demo/app-demo/`
+- kept firmware runtime responsibilities unchanged:
+  - live measurement streaming stays in firmware
+  - runtime state output stays in firmware
+  - safety output stays in firmware
+  - no leave/fall runtime redesign was applied in this task
+- added a dedicated engineering-facing `Motion-Safety Sampling Tool` section to the Demo APP main screen
+- added explicit session controls:
+  - `开始采样`
+  - `停止采样`
+  - `清空会话`
+  - `导出会话`
+- added an in-memory motion sampling session model with:
+  - unique `sessionId`
+  - `startedAtMs`
+  - `endedAtMs`
+  - app/device/protocol/model metadata snapshot
+  - structured per-row motion samples
+- recorded structured time-series rows from the live stream with:
+  - `timestampMs`
+  - `elapsedMs`
+  - `distanceMm`
+  - `liveWeightKg`
+  - nullable `stableWeightKg`
+  - `measurementValid`
+  - `stableVisible`
+  - `runtimeStateCode`
+  - `waveStateCode`
+  - `safetyStateCode`
+  - `safetyReasonCode`
+  - `safetyCode`
+  - `connectionStateCode`
+  - nullable model / marker / future motion-safety fields
+  - nullable `ddDt`
+  - nullable `dwDt`
+- added recorded-session review UI with:
+  - current live summary
+  - session summary
+  - recent row preview
+  - last recorded values
+- added basic recorded-session charts:
+  - distance vs time
+  - live weight vs time
+- added export support:
+  - CSV as the primary row export
+  - JSON sidecar for session metadata / schema / extensibility hints
+  - Android Downloads output under `Downloads/SonicWave/`
+- added bounded diagnostics:
+  - session started
+  - periodic row-count logging every 50 rows
+  - session stopped
+  - export destination
+
+Verification completed:
+
+- `tools/android_demo ./gradlew :sonicwave-protocol:test`
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+
+Artifacts:
+
+- `reports/task_motion_1_sampling_mvp/`
+- `docs/system/motion_sampling_tool.md`
+
+## 2026-03-20 Task-MOTION-1A Status
+
+Task-MOTION-1A adds a temporary engineering sampling mode so fall detections stay visible during motion-safety data collection without immediately stopping waveform output.
+
+Implementation outcomes:
+
+- confirmed the current runtime split:
+  - `src/modules/laser/LaserModule.cpp` still computes leave/fall triggers
+  - `src/core/SystemStateMachine.cpp` still owns pause/stop action decisions
+- added an explicit firmware/runtime engineering mode control:
+  - primary protocol command `DEBUG:MOTION_SAMPLING enabled=0|1`
+  - firmware capability reporting now exposes:
+    - `motion_sampling_mode`
+    - `fall_action_suppressed`
+- kept normal mode behavior unchanged:
+  - `FALL_SUSPECTED` still follows the original abnormal-stop path when the mode is off
+- added sampling-mode fall-only suppression:
+  - fall detection is still evaluated
+  - fall observability is still emitted through fault/safety events and serial diagnostics
+  - final fall-triggered stop/pause action is suppressed only while sampling mode is enabled
+- kept leave-platform behavior unchanged:
+  - `USER_LEFT_PLATFORM` still uses the original pause/stop path
+  - no leave suppression was added in this task
+- added bounded firmware diagnostics:
+  - `[MOTION_SAMPLE_MODE] enabled=true|false`
+  - `[FALL] detected but action suppressed dueToSamplingMode=true`
+- added Demo APP engineering visibility/control inside the motion-sampling tool:
+  - enable sampling mode
+  - disable sampling mode
+  - explicit on-screen state label showing whether fall stop suppression is active
+  - capability parsing updates so the app can reflect firmware mode state
+
+Verification completed:
+
+- `tools/android_demo ./gradlew :sonicwave-protocol:test`
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+
+Verification not completed in this environment:
+
+- `pio run`
+  - `pio` is not installed in the current shell environment
+
+Artifacts:
+
+- `reports/task_motion_1a_sampling_fall_suppression/`
+
+## 2026-03-20 Audit-MOTION-1C Status
+
+Audit-MOTION-1C verified and fixed the leave-platform action closure bug.
+
+Implementation outcomes:
+
+- confirmed that leave detection itself was already working:
+  - `LaserModule` was raising `USER_LEFT_PLATFORM`
+  - firmware was emitting `RECOVERABLE_PAUSE`
+  - the Demo APP was receiving the leave safety event
+- identified the closure bug in `SystemStateMachine`:
+  - `enterRecoverablePause(...)` latched the pause reason and emitted visibility
+  - but `syncReadyState()` intentionally refused to leave `RUNNING`
+  - so the system could remain `RUNNING` / `wave=RUNNING` until a later external `WAVE:STOP`
+- applied the minimal reliable fix:
+  - when `RECOVERABLE_PAUSE` is entered while the state machine is currently `RUNNING`, it now reuses the existing internal `requestStop()` path immediately
+  - this closes the running waveform path automatically instead of waiting for manual stop input
+- preserved leave semantics:
+  - `USER_LEFT_PLATFORM` still uses the recoverable-pause policy
+  - leave detection thresholds and detection logic were not changed
+- preserved sampling-mode behavior:
+  - sampling mode still suppresses fall-triggered stop only
+  - no leave suppression was introduced
+- added bounded closure diagnostics:
+  - `[LEAVE] confirmed action=RECOVERABLE_PAUSE`
+  - `[FSM] RECOVERABLE_PAUSE closing running path source=...`
+
+Verification completed:
+
+- `tools/android_demo ./gradlew :sonicwave-protocol:test`
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+
+Verification not completed in this environment:
+
+- `pio run`
+  - `pio` is not installed in the current shell environment
+
+Artifacts:
+
+- `reports/audit_motion_1c_leave_action_closure/`
+
+## 2026-03-20 Task-WAVE-UI-1 Status
+
+Task-WAVE-UI-1 implements the lightweight fixed bottom wave-control bar for the Demo APP engineering screen.
+
+Implementation outcomes:
+
+- confirmed the previous wave controls lived inside the scrollable `WaveSection`, which forced repeated upward scrolling during testing
+- added a reusable `WaveControlBottomBar` component and mounted it as the `Scaffold` bottom bar
+- moved the high-frequency wave controls out of the scroll area and into a fixed two-row layout:
+  - Row 1:
+    - frequency input
+    - `20`
+    - `30`
+    - `40`
+    - `START`
+  - Row 2:
+    - intensity input
+    - `60`
+    - `80`
+    - `100`
+    - `STOP`
+- kept the main page content scrollable above the fixed bottom bar
+- preserved manual input and added quick-fill helpers:
+  - frequency presets update the frequency input
+  - intensity presets update the intensity input
+- refined button-state clarity:
+  - start uses green when enabled
+  - stop uses red when enabled
+  - disabled states fall back to neutral gray
+  - start is disabled when disconnected, already running, or current wave values are invalid
+  - stop is enabled only while running
+- added a lightweight current-state hint above the bar:
+  - `待启动 / Ready to start`
+  - `运行中 / Running`
+  - `未连接 / Disconnected`
+  - `故障停止 / Fault stop`
+  - invalid-parameter or recoverable-pause hints when relevant
+- preserved command semantics:
+  - start still uses the existing `WAVE:SET` + `WAVE:START` path
+  - stop still uses the existing `WAVE:STOP` path
+- added bounded preset diagnostics:
+  - `[WAVE_UI] preset frequency=...`
+  - `[WAVE_UI] preset intensity=...`
+
+Verification completed:
+
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+
+Artifacts:
+
+- `reports/task_wave_ui_1_fixed_bottom_bar/`
+
+## 2026-03-20 Task-WAVE-UI-1A Status
+
+Task-WAVE-UI-1A applies a small visual/layout polish pass to the fixed bottom wave-control bar without changing its existing interaction behavior.
+
+Implementation outcomes:
+
+- kept the existing fixed-bottom two-row structure intact
+- preserved the current state hint behavior and connection-dependent enable/disable logic
+- reduced the visual dominance of the frequency and intensity input fields:
+  - narrowed their relative row weight
+  - reduced their perceived height and label emphasis
+  - kept both fields fully editable for manual values such as `25 Hz` or `75`
+- rebalanced row spacing so the presets and action buttons have more breathing room and the bar feels less left-heavy
+- strengthened preset selected-state visibility:
+  - selected frequency presets now use a stronger orange background
+  - selected intensity presets now use the same orange background
+  - unselected presets remain visually distinct
+- preserved the existing start/stop semantics:
+  - start still follows the current wave start command path
+  - stop still follows the current wave stop command path
+- preserved the existing status explanation behavior, including messages such as:
+  - `不可启动，用户离开平台`
+
+Verification completed:
+
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+
+Artifacts:
+
+- `reports/task_wave_ui_1a_bar_polish/`
+
+## 2026-03-20 Task-MOTION-1B Status
+
+Task-MOTION-1B refines the Motion-Safety Sampling Tool export flow so captured sessions are easier to label, trace, and protect from accidental loss.
+
+Implementation outcomes:
+
+- export now requires an explicit operator scenario choice instead of auto-guessing
+- the export dialog provides:
+  - `静止站立`
+  - `正常律动`
+  - `离开平台`
+  - `异常动作-快速减载`
+  - `异常动作-左右摇摆`
+  - `异常动作-下蹲站起`
+  - `异常动作-半离台`
+  - `自定义`
+- custom scenario text is required when `自定义` is selected
+- motion-sampling sessions now snapshot additional context at session start:
+  - wave frequency
+  - wave intensity
+  - sampling-mode flag
+  - whether wave output was already running at session start
+  - model type and coefficients
+- exported JSON metadata now includes:
+  - `scenarioLabel`
+  - `scenarioCategory`
+  - `waveFrequencyHz`
+  - `waveIntensity`
+  - `samplingModeEnabled`
+  - `waveWasRunningAtSessionStart`
+  - `modelType`
+  - `modelCoefficients`
+  - `exportTimestampMs`
+  - `originalSessionId`
+- export filenames now follow:
+  - `<场景>_<频率>hz_<强度>_<YYYYMMDDHHMM>.csv`
+  - `<场景>_<频率>hz_<强度>_<YYYYMMDDHHMM>.json`
+- the action row is now clearer:
+  - export is green and visually primary
+  - clear is red and visually destructive
+- stopped-but-unexported sessions now show an export recommendation
+- clearing an unexported session now requires explicit confirmation
+- sampling collection behavior remains unchanged:
+  - start/stop unchanged
+  - row recording unchanged
+  - charts unchanged
+  - runtime leave/fall logic unchanged
+
+Verification completed:
+
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+
+Verification not completed in this environment:
+
+- on-device export dialog flow
+- actual file creation check under `Downloads/SonicWave/`
+
+Artifacts:
+
+- `reports/task_motion_1b_session_export_polish/`
+
+## 2026-03-20 Task-STATE-UI-1 Status
+
+Task-STATE-UI-1 cleans up the Demo APP system-status hierarchy so the presentation better matches the fields that are most trustworthy during real runtime use.
+
+Implementation outcomes:
+
+- promoted the primary interpretation layer to:
+  - `状态`
+  - `安全原因`
+  - `影响`
+- made `状态` the most prominent status card in the section
+- kept `安全原因` and `影响` visually prominent as the main explanation layer for why the system is in its current condition
+- demoted `运行态` into a lower-priority engineering reference row
+- removed `波形态` from equal top-level prominence and kept it only in the lower-priority engineering reference row
+- removed the previous equal-weight competition between:
+  - 状态
+  - 故障
+  - 安全原因
+  - 影响
+  - 运行态
+  - 波形态
+- preserved engineering details below the primary layer:
+  - 故障参考
+  - 故障码
+  - 工程含义
+  - 信号来源
+  - 安全码
+- added small copy/layout grouping:
+  - `当前主状态`
+  - `工程参考状态`
+- preserved underlying protocol/firmware semantics
+
+Verification completed:
+
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+
+Verification not completed in this environment:
+
+- on-device visual validation across ready/running/leave/fall states
+
+Artifacts:
+
+- `reports/task_state_ui_1_hierarchy_cleanup/`
+
+## 2026-03-21 Task-MOTION-ANALYSIS-1 Status
+
+Task-MOTION-ANALYSIS-1 adds an in-app moving-average research overlay to the Demo APP Motion-Safety Sampling Tool while keeping runtime safety logic unchanged.
+
+Implementation outcomes:
+
+- confirmed the current Demo APP source-of-truth module under:
+  - `tools/android_demo/app-demo/`
+- kept implementation local to the motion-sampling review surface:
+  - `tools/android_demo/app-demo/src/main/java/com/sonicwave/demo/ui/components/MotionSamplingSection.kt`
+  - localized strings
+  - motion-sampling docs/report artifacts
+- added one shared moving-average point-count control in the motion-sampling section:
+  - default `5`
+  - presets `3 / 5 / 7`
+  - valid range `1..50`
+  - blank/invalid text preserves the last valid applied value
+- derived moving-average data only from captured session rows already stored in memory
+- kept the captured row model unchanged:
+  - no session schema expansion
+  - no export format change
+  - no mutation of raw captured rows
+- extended the captured-session chart so it now overlays:
+  - raw distance
+  - distance MA
+  - raw live weight
+  - live-weight MA
+- kept raw curves visible and made the MA overlay visually distinct through line weight/opacity instead of replacing the existing chart
+- extended the `Last recorded values` block with explicit latest `MA(n)` summaries for:
+  - distance
+  - live weight
+- added concise research-only guidance in the motion-sampling section so the overlay is not confused with current runtime safety behavior
+- intentionally excluded `stableWeightKg` from the MA overlay MVP:
+  - it remains visible in the raw latest-value summary
+  - it is not overlaid because it is nullable and only meaningful while stable visibility is active
+- preserved runtime ownership and behavior:
+  - `src/modules/laser/LaserModule.cpp` remains the leave/fall trigger source
+  - `src/core/SystemStateMachine.cpp` remains the stop/pause policy owner
+  - no leave/fall/sampling-mode runtime logic was changed in this task
+
+Verification completed:
+
+- `tools/android_demo ./gradlew :app-demo:compileDebugKotlin`
+- `tools/android_demo ./gradlew :sonicwave-protocol:test`
+
+Verification not completed in this environment:
+
+- on-device visual confirmation of MA controls and overlay readability during a real captured session
+
+Artifacts:
+
+- `reports/task_motion_analysis_1_ma_overlay/`

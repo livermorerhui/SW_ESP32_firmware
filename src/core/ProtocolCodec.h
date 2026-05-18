@@ -1,10 +1,115 @@
 #pragma once
+#include <errno.h>
+#include <math.h>
+#include <stdlib.h>
 #include "CommandBus.h"
 #include "EventBus.h"
+#include "PlatformSnapshot.h"
 #include "config/GlobalConfig.h"
 
 class ProtocolCodec {
 public:
+  static constexpr uint16_t kSingleNotifyBudgetMtu = 185;
+  static constexpr uint16_t kSingleNotifyPayloadBudget = kSingleNotifyBudgetMtu - 3;
+  static constexpr size_t kCapTruthPayloadBudgetBytes = 140;
+  static constexpr size_t kConnectSnapshotPayloadBudgetBytes = kSingleNotifyPayloadBudget;
+
+  static bool isSnapshotQuery(const String& in) {
+    String s = in;
+    s.trim();
+    return s.equalsIgnoreCase("SNAPSHOT?");
+  }
+
+  static void logTruthPayloadBudgetWarningIfNeeded(const char* frameKind,
+                                                   size_t framedLen,
+                                                   size_t budgetBytes,
+                                                   const String& payload) {
+    if (framedLen <= budgetBytes) return;
+    Serial.printf(
+        "[PROTO] warn=%s_budget_exceeded framed_len=%u budget=%u payload=%s\n",
+        frameKind,
+        static_cast<unsigned>(framedLen),
+        static_cast<unsigned>(budgetBytes),
+        payload.c_str());
+  }
+
+  static String encodeSnapshot(const PlatformSnapshot& snapshot) {
+    String s;
+    // Keep connect-time snapshot within a single BLE notify frame for the
+    // common MTU=185 path. Startup/start-button truth must not depend on a
+    // multi-fragment SNAPSHOT.
+    s.reserve(160);
+    s = "SNAPSHOT:";
+    s += "top_state=";
+    s += topStateName(snapshot.topState);
+    s += " start_ready=";
+    s += snapshot.startReady ? "1" : "0";
+    s += " laser_available=";
+    s += snapshot.laserAvailable ? "1" : "0";
+    s += " measurement_health=";
+    s += measurementHealthStateName(snapshot.measurementHealth);
+    s += " degraded_start_available=";
+    s += snapshot.degradedStartAvailable ? "1" : "0";
+    s += " degraded_start_enabled=";
+    s += snapshot.degradedStartEnabled ? "1" : "0";
+    s += " leave_stop_enabled=";
+    s += snapshot.leaveStopEnabled ? "1" : "0";
+    logTruthPayloadBudgetWarningIfNeeded(
+        "runtime_truth",
+        s.length() + 1,
+        kConnectSnapshotPayloadBudgetBytes,
+        s);
+    return s;
+  }
+
+  // 当前只做最小兼容增强，不改 stop/state owner，也不删 Demo 兼容链。
+  // formal current branch 仍通过 Event.Fault.reason 识别关键停波语义，
+  // 因此这里只在目标场景给 EVT:FAULT 追加 reason 文本，同时保留 numeric code
+  // 作为前缀，避免误伤 Demo / legacy parser 现有对数字 fault 的依赖。
+  // 这是一层兼容桥接，不代表最终 canonical 协议；后续统一治理应在
+  // formal 正式切到 STOP/SAFETY/BASELINE owner 后再做。
+  static const char* minimalCompatFaultReason(FaultCode code) {
+    switch (code) {
+      case FaultCode::USER_LEFT_PLATFORM:
+        return "USER_LEFT_PLATFORM";
+      case FaultCode::FALL_SUSPECTED:
+        return "FALL_SUSPECTED";
+      default:
+        return nullptr;
+    }
+  }
+
+  static bool parseStrictFloat(const String& raw, float& out) {
+    if (raw.length() == 0) return false;
+
+    char* end = nullptr;
+    errno = 0;
+    const float value = strtof(raw.c_str(), &end);
+    if (end == raw.c_str() || *end != '\0' || errno == ERANGE || !isfinite(value)) {
+      return false;
+    }
+
+    out = value;
+    return true;
+  }
+
+  static bool parseStrictInt(const String& raw, int& out) {
+    if (raw.length() == 0) return false;
+
+    char* end = nullptr;
+    errno = 0;
+    const long value = strtol(raw.c_str(), &end, 10);
+    if (end == raw.c_str() || *end != '\0' || errno == ERANGE) {
+      return false;
+    }
+    if (value < INT_MIN || value > INT_MAX) {
+      return false;
+    }
+
+    out = static_cast<int>(value);
+    return true;
+  }
+
   // 返回 true = 成功解析
   static bool parseCommand(const String& in, Command& out, String& err) {
     String s = in; s.trim();
@@ -26,8 +131,71 @@ public:
       return valueOut.length() > 0;
     };
 
+    auto parseBoolValue = [&](const String& raw, bool& valueOut) -> bool {
+      if (raw.equalsIgnoreCase("1") ||
+          raw.equalsIgnoreCase("true") ||
+          raw.equalsIgnoreCase("on") ||
+          raw.equalsIgnoreCase("enable") ||
+          raw.equalsIgnoreCase("enabled")) {
+        valueOut = true;
+        return true;
+      }
+      if (raw.equalsIgnoreCase("0") ||
+          raw.equalsIgnoreCase("false") ||
+          raw.equalsIgnoreCase("off") ||
+          raw.equalsIgnoreCase("disable") ||
+          raw.equalsIgnoreCase("disabled")) {
+        valueOut = false;
+        return true;
+      }
+      return false;
+    };
+
     // CAP
     if (s.equalsIgnoreCase("CAP?")) { out.type = CmdType::CAP_QUERY; return true; }
+    if (s.startsWith("DEVICE:SET_CONFIG")) {
+      out.type = CmdType::DEVICE_SET_CONFIG;
+
+      String modelStr, laserInstalledStr;
+      bool hasModel = readParam("platform_model=", modelStr) || readParam("model=", modelStr);
+      bool hasLaserInstalled =
+          readParam("laser_installed=", laserInstalledStr) || readParam("laser=", laserInstalledStr);
+      if (!hasModel || !hasLaserInstalled) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+
+      PlatformModel platformModel = PlatformModel::PLUS;
+      if (!parsePlatformModel(modelStr, platformModel)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+
+      bool laserInstalled = false;
+      if (!parseBoolValue(laserInstalledStr, laserInstalled)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+
+      out.deviceConfig.platformModel = platformModel;
+      out.deviceConfig.laserInstalled = laserInstalled;
+      return true;
+    }
+    if (s.startsWith("DEBUG:DEGRADED_START")) {
+      out.type = CmdType::DEGRADED_START_SET;
+
+      String enabledStr;
+      bool hasEnabled = readParam("enabled=", enabledStr) || readParam("mode=", enabledStr);
+      if (!hasEnabled) { err = "INVALID_PARAM"; return false; }
+
+      bool enabled = false;
+      if (!parseBoolValue(enabledStr, enabled)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+      out.degradedStart.enabled = enabled;
+      return true;
+    }
 
     // New protocol.
     // Accept both:
@@ -41,8 +209,12 @@ public:
       bool hasI = readParam("i=", iStr) || readParam("amp=", iStr);
       if (!hasF || !hasI) { err = "INVALID_PARAM"; return false; }
 
-      float f = fStr.toFloat();
-      int a = iStr.toInt();
+      float f = 0.0f;
+      int a = 0;
+      if (!parseStrictFloat(fStr, f) || !parseStrictInt(iStr, a)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
       if (f < 0 || f > 50.0f || a < 0 || a > 120) { err = "INVALID_PARAM"; return false; }
       out.wave.freqHz = f; out.wave.intensity = a;
       return true;
@@ -57,8 +229,10 @@ public:
       bool hasZ = readParam("z=", zStr);
       bool hasK = readParam("k=", kStr);
       if (!hasZ || !hasK) { err = "INVALID_PARAM"; return false; }
-      out.p1 = zStr.toFloat();
-      out.p2 = kStr.toFloat();
+      if (!parseStrictFloat(zStr, out.p1) || !parseStrictFloat(kStr, out.p2)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
       return true;
     }
     if (s.startsWith("CAL:CAPTURE")) {
@@ -66,7 +240,10 @@ public:
       String wStr;
       bool hasW = readParam("w=", wStr) || readParam("ref=", wStr);
       if (!hasW) { err = "INVALID_PARAM"; return false; }
-      out.capture.referenceWeightKg = wStr.toFloat();
+      if (!parseStrictFloat(wStr, out.capture.referenceWeightKg)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
       return true;
     }
     if (s.equalsIgnoreCase("CAL:GET_MODEL")) {
@@ -96,10 +273,58 @@ public:
         return false;
       }
 
-      out.model.referenceDistance = refStr.toFloat();
-      out.model.coefficients[0] = c0Str.toFloat();
-      out.model.coefficients[1] = c1Str.toFloat();
-      out.model.coefficients[2] = c2Str.toFloat();
+      if (!parseStrictFloat(refStr, out.model.referenceDistance) ||
+          !parseStrictFloat(c0Str, out.model.coefficients[0]) ||
+          !parseStrictFloat(c1Str, out.model.coefficients[1]) ||
+          !parseStrictFloat(c2Str, out.model.coefficients[2])) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+      return true;
+    }
+    if (s.startsWith("DEBUG:FALL_STOP")) {
+      out.type = CmdType::FALL_STOP_SET;
+
+      String enabledStr;
+      bool hasEnabled = readParam("enabled=", enabledStr) || readParam("mode=", enabledStr);
+      if (!hasEnabled) { err = "INVALID_PARAM"; return false; }
+
+      bool enabled = false;
+      if (!parseBoolValue(enabledStr, enabled)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+      out.fallStop.enabled = enabled;
+      return true;
+    }
+    if (s.startsWith("SAFETY:LEAVE_PROTECTION") || s.startsWith("DEBUG:LEAVE_STOP")) {
+      out.type = CmdType::LEAVE_PROTECTION_SET;
+
+      String enabledStr;
+      bool hasEnabled = readParam("enabled=", enabledStr) || readParam("mode=", enabledStr);
+      if (!hasEnabled) { err = "INVALID_PARAM"; return false; }
+
+      bool enabled = false;
+      if (!parseBoolValue(enabledStr, enabled)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+      out.leaveProtection.enabled = enabled;
+      return true;
+    }
+    if (s.startsWith("DEBUG:MOTION_SAMPLING")) {
+      out.type = CmdType::MOTION_SAMPLING_MODE_SET;
+
+      String enabledStr;
+      bool hasEnabled = readParam("enabled=", enabledStr) || readParam("mode=", enabledStr);
+      if (!hasEnabled) { err = "INVALID_PARAM"; return false; }
+
+      bool enabled = false;
+      if (!parseBoolValue(enabledStr, enabled)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+      out.motionSamplingMode.enabled = enabled;
       return true;
     }
 
@@ -110,8 +335,11 @@ public:
       String p = s.substring(7);
       int idx = p.indexOf(',');
       if (idx <= 0) { err = "INVALID_PARAM"; return false; }
-      out.p1 = p.substring(0, idx).toFloat();
-      out.p2 = p.substring(idx + 1).toFloat();
+      if (!parseStrictFloat(p.substring(0, idx), out.p1) ||
+          !parseStrictFloat(p.substring(idx + 1), out.p2)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
       return true;
     }
 
@@ -124,21 +352,32 @@ public:
       if (fIndex != -1) {
         int comma = s.indexOf(",", fIndex);
         String sub = (comma == -1) ? s.substring(fIndex + 2) : s.substring(fIndex + 2, comma);
-        out.wave.freqHz = sub.toFloat();
+        if (!parseStrictFloat(sub, out.wave.freqHz)) {
+          err = "INVALID_PARAM";
+          return false;
+        }
       } else out.wave.freqHz = -1; // 表示“未触碰”
       // intensity
       int iIndex = s.indexOf("I:");
       if (iIndex != -1) {
         int comma = s.indexOf(",", iIndex);
         String sub = (comma == -1) ? s.substring(iIndex + 2) : s.substring(iIndex + 2, comma);
-        out.wave.intensity = sub.toInt();
+        if (!parseStrictInt(sub, out.wave.intensity)) {
+          err = "INVALID_PARAM";
+          return false;
+        }
       } else out.wave.intensity = -1;
       // enable
       int eIndex = s.indexOf("E:");
       if (eIndex != -1) {
         int comma = s.indexOf(",", eIndex);
         String sub = (comma == -1) ? s.substring(eIndex + 2) : s.substring(eIndex + 2, comma);
-        out.wave.enable = (sub.toInt() != 0);
+        int enableInt = 0;
+        if (!parseStrictInt(sub, enableInt)) {
+          err = "INVALID_PARAM";
+          return false;
+        }
+        out.wave.enable = (enableInt != 0);
         out.wave.hasEnable = true;
       } else {
         out.wave.hasEnable = false;
@@ -159,9 +398,20 @@ public:
               e.state == TopState::ARMED ? "ARMED" :
               e.state == TopState::RUNNING ? "RUNNING" : "FAULT_STOP");
         return s;
+      case EventType::WAVE_OUTPUT:
+        s = "EVT:WAVE_OUTPUT active=";
+        s += e.waveOutputActive ? "1" : "0";
+        return s;
       case EventType::FAULT:
         s = "EVT:FAULT ";
         s += String((uint16_t)e.fault);
+        if (const char* compatReason = minimalCompatFaultReason(e.fault)) {
+          s += " reason=";
+          s += compatReason;
+          Serial.printf("[FAULT_COMPAT] export code=%u reason=%s route=EVT:FAULT\n",
+                        static_cast<unsigned>(e.fault),
+                        compatReason);
+        }
         return s;
       case EventType::SAFETY:
         s = "EVT:SAFETY reason=";
@@ -186,11 +436,70 @@ public:
         s += String(e.v2, 4);
         return s;
       case EventType::STREAM:
-        s = "EVT:STREAM:";
-        s += String(e.v1, 2);
-        s += ",";
-        s += String(e.v2, 2);
+        s = "EVT:STREAM ";
+        s += "seq=";
+        s += String(e.sampleSeq);
+        s += " ts_ms=";
+        s += String(e.ts_ms);
+        s += " valid=";
+        s += e.measurementValid ? "1" : "0";
+        s += " ma12_ready=";
+        s += e.ma12Ready ? "1" : "0";
+        if (e.measurementValid) {
+          s += " distance=";
+          s += String(e.distance, 2);
+          s += " weight=";
+          s += String(e.weightKg, 2);
+          if (e.ma12Ready) {
+            s += " ma12=";
+            s += String(e.ma12WeightKg, 2);
+          }
+        } else {
+          s += " reason=";
+          s += (e.measurementReason[0] != '\0') ? e.measurementReason : "INVALID";
+        }
         return s;
+      case EventType::BASELINE_MAIN:
+        s = "EVT:BASELINE ";
+        s += "start_ready=";
+        s += e.startReady ? "1" : "0";
+        s += " ";
+        s += "baseline_ready=";
+        s += e.baselineReady ? "1" : "0";
+        s += " stable_weight=";
+        s += String(e.stableWeightKg, 2);
+        s += " ma12=";
+        s += String(e.mainMa12WeightKg, 2);
+        s += " deviation=";
+        s += String(e.deviationKg, 2);
+        s += " ratio=";
+        s += String(e.ratio, 4);
+        s += " main_state=";
+        s += (e.mainState[0] != '\0') ? e.mainState : "BASELINE_PENDING";
+        s += " abnormal_duration_ms=";
+        s += String(e.abnormalDurationMs);
+        s += " danger_duration_ms=";
+        s += String(e.dangerDurationMs);
+        s += " stop_reason=";
+        s += (e.stopReasonText[0] != '\0') ? e.stopReasonText : "NONE";
+        s += " stop_source=";
+        s += (e.stopSourceText[0] != '\0') ? e.stopSourceText : "NONE";
+        return s;
+      case EventType::STOP:
+        s = "EVT:STOP ";
+        s += "stop_reason=";
+        s += (e.stopReasonText[0] != '\0') ? e.stopReasonText : "NONE";
+        s += " stop_source=";
+        s += (e.stopSourceText[0] != '\0') ? e.stopSourceText : "NONE";
+        s += " code=";
+        s += String((uint16_t)e.fault);
+        s += " effect=";
+        s += safetySignalName(e.safety);
+        s += " state=";
+        s += topStateName(e.state);
+        return s;
+      case EventType::SNAPSHOT:
+        return "EVT:UNKNOWN";
     }
     return "EVT:UNKNOWN";
   }

@@ -34,6 +34,23 @@ enum class FaultCode : uint16_t {
   FAULT_LOCKED = 401
 };
 
+// verification contract 对外区分“谁触发了停波”。
+// 这里不改变 final action owner，只提供统一的结构化来源标签。
+enum class VerificationStopSource : uint8_t {
+  NONE,
+  BASELINE_MAIN_LOGIC,
+  FORMAL_SAFETY_OTHER,
+  USER_MANUAL_OTHER
+};
+
+enum class MeasurementHealthState : uint8_t {
+  BOOTING,
+  PROBING,
+  READY,
+  TRANSIENT_UNAVAILABLE,
+  FAULT
+};
+
 inline const char* topStateName(TopState s) {
   switch (s) {
     case TopState::IDLE: return "IDLE";
@@ -64,6 +81,27 @@ inline const char* safetySignalName(SafetySignalKind signal) {
     case SafetySignalKind::WARNING_ONLY: return "WARNING_ONLY";
     case SafetySignalKind::RECOVERABLE_PAUSE: return "RECOVERABLE_PAUSE";
     case SafetySignalKind::ABNORMAL_STOP: return "ABNORMAL_STOP";
+  }
+  return "UNKNOWN";
+}
+
+inline const char* verificationStopSourceName(VerificationStopSource source) {
+  switch (source) {
+    case VerificationStopSource::NONE: return "NONE";
+    case VerificationStopSource::BASELINE_MAIN_LOGIC: return "BASELINE_MAIN_LOGIC";
+    case VerificationStopSource::FORMAL_SAFETY_OTHER: return "FORMAL_SAFETY_OTHER";
+    case VerificationStopSource::USER_MANUAL_OTHER: return "USER_MANUAL_OTHER";
+  }
+  return "UNKNOWN";
+}
+
+inline const char* measurementHealthStateName(MeasurementHealthState state) {
+  switch (state) {
+    case MeasurementHealthState::BOOTING: return "BOOTING";
+    case MeasurementHealthState::PROBING: return "PROBING";
+    case MeasurementHealthState::READY: return "READY";
+    case MeasurementHealthState::TRANSIENT_UNAVAILABLE: return "TRANSIENT_UNAVAILABLE";
+    case MeasurementHealthState::FAULT: return "FAULT";
   }
   return "UNKNOWN";
 }

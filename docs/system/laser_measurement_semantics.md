@@ -12,7 +12,11 @@ Current contract:
   - `int16_t signedDistanceRaw`
 - runtime distance is derived as `signedDistanceRaw / 100.0`
 - sentinel handling runs before generic range checks
-- only valid measurements can reach weight, stable, and stream logic
+- valid measurements feed the formal continuous measurement plane:
+  - `distance`
+  - `weight`
+  - `MA12`
+- invalid measurements clear the `MA12` window and emit a formal invalid carrier
 
 ## Evidence Levels
 
@@ -44,8 +48,10 @@ Modbus register read
 -> signed valid-range gate
 -> scaled runtime distance = signedDistanceRaw / 100.0
 -> calibration/weight evaluation
+-> MA12 rolling window (12 valid weight samples)
+-> EVT:STREAM seq/ts/valid/distance/weight/ma12
 -> stable-state update
--> EVT:STREAM / EVT:STABLE
+-> EVT:STABLE
 ```
 
 ## Corrected Semantics
@@ -58,9 +64,15 @@ The live fix made in Laser Audit-1 establishes these rules:
   - `-3570 .. +3570`
 - rate-limited diagnostics now expose raw, signed, scaled, and sentinel fields for bench confirmation
 
+## Measurement Plane Notes
+
+- `LaserModule` is the formal owner of the continuous measurement plane.
+- `RhythmStateJudge` remains the owner of baseline-main evidence, not `MA12`.
+- The firmware now publishes every formal measurement sample in order; BLE no longer uses latest-only stream overwrite.
+- The current internal poll interval is `20ms` in code, so the formal plane is continuous and ordered, but still below the frozen `200Hz` target. That gap remains explicit technical debt.
+
 ## Important Non-Changes
 
-- BLE framing was not redesigned
 - the weight model shape was not redesigned
 - stable-state logic was not redesigned
 - calibration workflow was not broadly redesigned

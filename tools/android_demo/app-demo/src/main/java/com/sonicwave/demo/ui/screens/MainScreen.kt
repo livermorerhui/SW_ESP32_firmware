@@ -19,6 +19,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
@@ -38,13 +39,18 @@ import com.sonicwave.demo.PermissionState
 import com.sonicwave.demo.R
 import com.sonicwave.demo.ScanState
 import com.sonicwave.demo.UiState
+import com.sonicwave.demo.isBaseDeliveryProfile
+import com.sonicwave.demo.isBaseOrPlusDegradedDeliveryProfile
+import com.sonicwave.demo.isPlusDegradedDeliveryProfile
 import com.sonicwave.demo.ui.components.CalibrationToolsSection
 import com.sonicwave.demo.ui.components.DeviceConnectSection
+import com.sonicwave.demo.ui.components.DeviceProfileSection
+import com.sonicwave.demo.ui.components.FallStopProtectionSection
 import com.sonicwave.demo.ui.components.RawConsoleSection
-import com.sonicwave.demo.ui.components.StableWeightSection
 import com.sonicwave.demo.ui.components.SystemStatusSection
 import com.sonicwave.demo.ui.components.TelemetryChartSection
-import com.sonicwave.demo.ui.components.WaveSection
+import com.sonicwave.demo.ui.components.TestSessionSection
+import com.sonicwave.demo.ui.components.WaveControlBottomBar
 import com.sonicwave.transport.BleScanResult
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -78,6 +84,19 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
                 },
             )
         },
+        bottomBar = {
+            WaveControlBottomBar(
+                uiState = uiState,
+                onFreqInputChange = viewModel::updateFreqInput,
+                onIntensityInputChange = viewModel::updateIntensityInput,
+                onFreqInputCommit = viewModel::commitFreqInput,
+                onIntensityInputCommit = viewModel::commitIntensityInput,
+                onFreqPresetSelected = viewModel::setPresetFrequency,
+                onIntensityPresetSelected = viewModel::setPresetIntensity,
+                onStart = viewModel::sendWaveStart,
+                onStop = viewModel::sendWaveStop,
+            )
+        },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -89,6 +108,13 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
         ) {
             DeviceConnectSection(uiState = uiState)
 
+            DeviceProfileSection(
+                uiState = uiState,
+                onPlatformModelSelected = viewModel::updateSelectedPlatformModel,
+                onLaserInstalledSelected = viewModel::updateSelectedLaserInstalled,
+                onWriteDeviceConfig = viewModel::sendDeviceConfig,
+            )
+
             if (uiState.permissionState is PermissionState.Missing) {
                 PermissionCard(
                     permissionState = uiState.permissionState,
@@ -96,47 +122,53 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
                 )
             }
 
-            WaveSection(
-                uiState = uiState,
-                onFreqInputChange = viewModel::updateFreqInput,
-                onIntensityInputChange = viewModel::updateIntensityInput,
-                onPresetSelected = viewModel::setPresetFrequency,
-                onStart = viewModel::sendWaveStart,
-                onStop = viewModel::sendWaveStop,
-            )
-
             SystemStatusSection(uiState = uiState)
 
-            StableWeightSection(uiState = uiState)
-
-            TelemetryChartSection(telemetryPoints = uiState.telemetryPoints)
-
-            CalibrationToolsSection(
+            FallStopProtectionSection(
                 uiState = uiState,
-                onZeroInputChange = viewModel::updateZeroInput,
-                onFactorInputChange = viewModel::updateFactorInput,
-                onCaptureReferenceChange = viewModel::updateCaptureReferenceInput,
-                onModelReferenceChange = viewModel::updateModelReferenceInput,
-                onModelC0Change = viewModel::updateModelC0Input,
-                onModelC1Change = viewModel::updateModelC1Input,
-                onModelC2Change = viewModel::updateModelC2Input,
-                onModelTypeChange = viewModel::updateModelType,
-                onZero = viewModel::sendZero,
-                onCalibrate = viewModel::sendCalibrate,
-                onCapturePoint = viewModel::sendCalibrationCapture,
-                onStartRecording = viewModel::startRecording,
-                onStopRecording = viewModel::stopRecording,
-                onGetModel = viewModel::sendCalibrationGetModel,
-                onSetModel = viewModel::sendCalibrationSetModel,
-                onCalibrationZero = viewModel::sendCalibrationZero,
-                onToggleEngineeringSection = viewModel::toggleEngineeringSection,
-                onToggleVerboseStreamLogs = viewModel::toggleVerboseStreamLogs,
+                onToggleEnabled = viewModel::setFallStopProtectionEnabled,
             )
 
-            RawConsoleSection(
-                rawLogLines = uiState.rawLogLines,
-                onClear = viewModel::clearRawLog,
-            )
+            val deliveryProfile = isBaseOrPlusDegradedDeliveryProfile(uiState)
+
+            if (deliveryProfile) {
+                DeliveryBoundarySection(uiState = uiState)
+            } else {
+                TelemetryChartSectionHost(
+                    viewModel = viewModel,
+                    stableWeight = uiState.stableWeight,
+                    stableWeightActive = uiState.stableWeightActive,
+                )
+            }
+            if (!deliveryProfile) {
+                TestSessionSectionHost(viewModel = viewModel)
+            }
+
+            if (!deliveryProfile) {
+                CalibrationToolsSection(
+                    uiState = uiState,
+                    onZeroInputChange = viewModel::updateZeroInput,
+                    onFactorInputChange = viewModel::updateFactorInput,
+                    onCaptureReferenceChange = viewModel::updateCaptureReferenceInput,
+                    onModelReferenceChange = viewModel::updateModelReferenceInput,
+                    onModelC0Change = viewModel::updateModelC0Input,
+                    onModelC1Change = viewModel::updateModelC1Input,
+                    onModelC2Change = viewModel::updateModelC2Input,
+                    onModelTypeChange = viewModel::updateModelType,
+                    onZero = viewModel::sendZero,
+                    onCalibrate = viewModel::sendCalibrate,
+                    onCapturePoint = viewModel::sendCalibrationCapture,
+                    onStartRecording = viewModel::startRecording,
+                    onStopRecording = viewModel::stopRecording,
+                    onGetModel = viewModel::sendCalibrationGetModel,
+                    onSetModel = viewModel::sendCalibrationSetModel,
+                    onCalibrationZero = viewModel::sendCalibrationZero,
+                    onToggleEngineeringSection = viewModel::toggleEngineeringSection,
+                    onToggleVerboseStreamLogs = viewModel::toggleVerboseStreamLogs,
+                )
+            }
+
+            RawConsoleSectionHost(viewModel = viewModel)
         }
     }
 
@@ -148,6 +180,108 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
             )
         }
     }
+
+    if (uiState.showDegradedStartDialog) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissDegradedStartDialog,
+            title = {
+                Text(stringResource(R.string.degraded_start_dialog_title))
+            },
+            text = {
+                Text(stringResource(R.string.degraded_start_dialog_message))
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = viewModel::confirmDegradedStart,
+                    enabled = !uiState.isDegradedStartWritePending,
+                ) {
+                    Text(
+                        if (uiState.isDegradedStartWritePending) {
+                            stringResource(R.string.degraded_start_pending_action)
+                        } else {
+                            stringResource(R.string.degraded_start_confirm_action)
+                        },
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = viewModel::dismissDegradedStartDialog,
+                    enabled = !uiState.isDegradedStartWritePending,
+                ) {
+                    Text(stringResource(R.string.degraded_start_cancel_action))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun DeliveryBoundarySection(
+    uiState: UiState,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(stringResource(R.string.section_delivery_boundary), style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = stringResource(
+                    if (isBaseDeliveryProfile(uiState)) {
+                        R.string.delivery_boundary_profile_base
+                    } else if (isPlusDegradedDeliveryProfile(uiState)) {
+                        R.string.delivery_boundary_profile_plus_degraded
+                    } else {
+                        R.string.delivery_boundary_profile_other
+                    },
+                ),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                text = stringResource(R.string.delivery_boundary_measurement_hidden),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TelemetryChartSectionHost(
+    viewModel: DemoViewModel,
+    stableWeight: Float?,
+    stableWeightActive: Boolean,
+) {
+    val measurementDisplayState by viewModel.measurementDisplayState.collectAsStateWithLifecycle()
+    TelemetryChartSection(
+        telemetryPoints = measurementDisplayState.telemetryPoints,
+        stableWeight = stableWeight,
+        stableWeightActive = stableWeightActive,
+    )
+}
+
+@Composable
+private fun TestSessionSectionHost(
+    viewModel: DemoViewModel,
+) {
+    val panelState by viewModel.testSessionPanelState.collectAsStateWithLifecycle()
+    TestSessionSection(
+        panelState = panelState,
+        onClearSession = viewModel::clearTestSession,
+        onExportSession = viewModel::exportTestSession,
+    )
+}
+
+@Composable
+private fun RawConsoleSectionHost(
+    viewModel: DemoViewModel,
+) {
+    val rawConsoleState by viewModel.rawConsoleState.collectAsStateWithLifecycle()
+    RawConsoleSection(
+        rawLogLines = rawConsoleState.rawLogLines,
+        onClear = viewModel::clearRawLog,
+    )
 }
 
 @Composable

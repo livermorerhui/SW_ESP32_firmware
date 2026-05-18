@@ -1,8 +1,11 @@
 #pragma once
+#include "DeviceConfig.h"
 #include "Types.h"
 
 enum class CmdType : uint8_t {
   CAP_QUERY,
+  DEVICE_SET_CONFIG,
+  DEGRADED_START_SET,
   WAVE_SET,      // set freq/intensity (not necessarily start)
   WAVE_START,
   WAVE_STOP,
@@ -11,6 +14,9 @@ enum class CmdType : uint8_t {
   CAL_CAPTURE,
   CAL_GET_MODEL,
   CAL_SET_MODEL,
+  FALL_STOP_SET,
+  LEAVE_PROTECTION_SET,
+  MOTION_SAMPLING_MODE_SET,
   LEGACY_FIE     // 兼容 F/I/E 组合命令
 };
 
@@ -24,6 +30,27 @@ struct CalibrationModelCommand {
   float coefficients[3] = {0.0f, 1.0f, 0.0f};
 };
 
+struct MotionSamplingModeCommand {
+  bool enabled = false;
+};
+
+struct FallStopCommand {
+  bool enabled = true;
+};
+
+struct LeaveProtectionCommand {
+  bool enabled = true;
+};
+
+struct DeviceConfigCommand {
+  PlatformModel platformModel = PlatformModel::PLUS;
+  bool laserInstalled = true;
+};
+
+struct DegradedStartCommand {
+  bool enabled = false;
+};
+
 struct Command {
   CmdType type = CmdType::CAP_QUERY;
   WaveParams wave{};
@@ -31,6 +58,11 @@ struct Command {
   float p2 = 0; // factor
   CalibrationCaptureRequest capture{};
   CalibrationModelCommand model{};
+  FallStopCommand fallStop{};
+  LeaveProtectionCommand leaveProtection{};
+  MotionSamplingModeCommand motionSamplingMode{};
+  DeviceConfigCommand deviceConfig{};
+  DegradedStartCommand degradedStart{};
 };
 
 class CommandHandler {

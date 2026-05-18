@@ -9,6 +9,16 @@ class ProtocolCodecTest {
     @Test
     fun encodeCoreCommandsUseFirmwareCanonicalFormat() {
         assertEquals("CAP?", ProtocolCodec.encode(Command.CapabilityQuery))
+        assertEquals("SNAPSHOT?", ProtocolCodec.encode(Command.SnapshotQuery))
+        assertEquals(
+            "DEVICE:SET_CONFIG platform_model=BASE,laser_installed=0",
+            ProtocolCodec.encode(
+                Command.DeviceSetConfig(
+                    platformModel = PlatformModel.BASE,
+                    laserInstalled = false,
+                ),
+            ),
+        )
         assertEquals("WAVE:SET f=20,i=80", ProtocolCodec.encode(Command.WaveSet(freqHz = 20, intensity = 80)))
         assertEquals("WAVE:START", ProtocolCodec.encode(Command.WaveStart))
         assertEquals("WAVE:STOP", ProtocolCodec.encode(Command.WaveStop))
@@ -29,6 +39,18 @@ class ProtocolCodecTest {
                 ),
             ),
         )
+        assertEquals(
+            "DEBUG:FALL_STOP enabled=0",
+            ProtocolCodec.encode(Command.FallStopProtectionSet(enabled = false)),
+        )
+        assertEquals(
+            "DEBUG:MOTION_SAMPLING enabled=1",
+            ProtocolCodec.encode(Command.MotionSamplingModeSet(enabled = true)),
+        )
+        assertEquals(
+            "DEBUG:DEGRADED_START enabled=1",
+            ProtocolCodec.encode(Command.DegradedStartSet(enabled = true)),
+        )
     }
 
     @Test
@@ -42,10 +64,77 @@ class ProtocolCodecTest {
 
     @Test
     fun decodeCapabilityAck() {
-        val event = ProtocolCodec.decode("ACK:CAP fw=SW-HUB-1.0.0 proto=1")
+        val event = ProtocolCodec.decode(
+            "ACK:CAP fw=SW-HUB-1.0.0 proto=2 platform_model=PRO laser_installed=1",
+        )
         val cap = assertIs<Event.Capabilities>(event)
         assertEquals("SW-HUB-1.0.0", cap.values["FW"])
-        assertEquals("1", cap.values["PROTO"])
+        assertEquals("2", cap.values["PROTO"])
+        assertEquals("PRO", cap.values["PLATFORM_MODEL"])
+        assertEquals("1", cap.values["LASER_INSTALLED"])
+    }
+
+    @Test
+    fun decodeCapabilityAckRetainsCompatibilityForExtraFields() {
+        val event = ProtocolCodec.decode(
+            "ACK:CAP fw=SW-HUB-1.0.0 proto=2 platform_model=PRO laser_installed=1 fall_stop_enabled=0 fall_stop_mode=DETECT_ONLY motion_sampling_mode=1 fall_action_suppressed=1",
+        )
+        val cap = assertIs<Event.Capabilities>(event)
+        assertEquals("0", cap.values["FALL_STOP_ENABLED"])
+        assertEquals("DETECT_ONLY", cap.values["FALL_STOP_MODE"])
+        assertEquals("1", cap.values["MOTION_SAMPLING_MODE"])
+        assertEquals("1", cap.values["FALL_ACTION_SUPPRESSED"])
+    }
+
+    @Test
+    fun decodeDeviceConfigAck() {
+        val event = ProtocolCodec.decode("ACK:DEVICE_CONFIG platform_model=BASE laser_installed=0")
+        val config = assertIs<Event.DeviceConfig>(event)
+        assertEquals(PlatformModel.BASE, config.platformModel)
+        assertEquals(false, config.laserInstalled)
+    }
+
+    @Test
+    fun decodeFallStopAckAsDedicatedEvent() {
+        val event = ProtocolCodec.decode("ACK:FALL_STOP enabled=0 mode=DETECT_ONLY")
+        val ack = assertIs<Event.FallStopProtection>(event)
+        assertEquals(false, ack.enabled)
+        assertEquals("DETECT_ONLY", ack.mode)
+        assertEquals("ACK:FALL_STOP enabled=0 mode=DETECT_ONLY", ack.raw)
+    }
+
+    @Test
+    fun decodeDegradedStartAckAsDedicatedEvent() {
+        val event = ProtocolCodec.decode("ACK:DEGRADED_START enabled=1 available=1")
+        val ack = assertIs<Event.DegradedStart>(event)
+        assertEquals(true, ack.enabled)
+        assertEquals(true, ack.available)
+        assertEquals("ACK:DEGRADED_START enabled=1 available=1", ack.raw)
+    }
+
+    @Test
+    fun decodeSnapshotTruth() {
+        val event = ProtocolCodec.decode(
+            "SNAPSHOT: top_state=ARMED user_present=0 runtime_ready=1 start_ready=1 baseline_ready=0 wave_output_active=0 current_reason_code=NONE current_safety_effect=NONE stable_weight=0.00 current_frequency=20.00 current_intensity=80 platform_model=BASE laser_installed=0 laser_available=0 protection_degraded=1 degraded_start_available=0 degraded_start_enabled=0",
+        )
+        val snapshot = assertIs<Event.Snapshot>(event)
+        assertEquals(DeviceState.ARMED, snapshot.topState)
+        assertEquals(false, snapshot.userPresent)
+        assertEquals(true, snapshot.runtimeReady)
+        assertEquals(true, snapshot.startReady)
+        assertEquals(false, snapshot.baselineReady)
+        assertEquals(false, snapshot.waveOutputActive)
+        assertEquals("NONE", snapshot.currentReasonCode)
+        assertEquals("NONE", snapshot.currentSafetyEffect)
+        assertEquals(0.0f, snapshot.stableWeightKg)
+        assertEquals(20.0f, snapshot.currentFrequencyHz)
+        assertEquals(80, snapshot.currentIntensity)
+        assertEquals(PlatformModel.BASE, snapshot.platformModel)
+        assertEquals(false, snapshot.laserInstalled)
+        assertEquals(false, snapshot.laserAvailable)
+        assertEquals(true, snapshot.protectionDegraded)
+        assertEquals(false, snapshot.degradedStartAvailable)
+        assertEquals(false, snapshot.degradedStartEnabled)
     }
 
     @Test
@@ -53,6 +142,14 @@ class ProtocolCodecTest {
         val event = ProtocolCodec.decode("EVT:STATE RUNNING")
         val state = assertIs<Event.State>(event)
         assertEquals(DeviceState.RUNNING, state.state)
+    }
+
+    @Test
+    fun decodeEvtWaveOutput() {
+        val event = ProtocolCodec.decode("EVT:WAVE_OUTPUT active=1")
+        val output = assertIs<Event.WaveOutput>(event)
+        assertEquals(true, output.active)
+        assertEquals("EVT:WAVE_OUTPUT active=1", output.raw)
     }
 
     @Test
@@ -84,6 +181,17 @@ class ProtocolCodecTest {
     }
 
     @Test
+    fun decodeEvtBaselineCarriesRecoverableStartReadyTruth() {
+        val event = ProtocolCodec.decode(
+            "EVT:BASELINE start_ready=1 baseline_ready=1 stable_weight=68.40 ma12=68.42 deviation=0.02 ratio=0.0003 main_state=NORMAL abnormal_duration_ms=0 danger_duration_ms=0 stop_reason=NONE stop_source=NONE",
+        )
+        val baseline = assertIs<Event.BaselineMain>(event)
+        assertEquals(true, baseline.startReady)
+        assertEquals(true, baseline.baselineReady)
+        assertEquals(68.4f, baseline.stableWeightKg)
+    }
+
+    @Test
     fun decodeEvtParam() {
         val event = ProtocolCodec.decode("EVT:PARAM:-22.00,1.0000")
         val param = assertIs<Event.Param>(event)
@@ -93,15 +201,36 @@ class ProtocolCodecTest {
 
     @Test
     fun decodeEvtStreamAndBareCsv() {
-        val evt = ProtocolCodec.decode("EVT:STREAM:120.35,66.80")
+        val evt = ProtocolCodec.decode("EVT:STREAM seq=42 ts_ms=1234 valid=1 ma12_ready=1 distance=120.35 weight=66.80 ma12=66.10")
         val streamEvt = assertIs<Event.StreamSample>(evt)
+        assertEquals(MeasurementCarrier.FORMAL_EVT_STREAM, streamEvt.carrier)
+        assertEquals(42L, streamEvt.sequence)
+        assertEquals(1234L, streamEvt.timestampMs)
         assertEquals(120.35f, streamEvt.distance)
         assertEquals(66.8f, streamEvt.weight)
+        assertEquals(66.1f, streamEvt.ma12)
+        assertEquals(true, streamEvt.ma12Ready)
+        assertEquals(true, streamEvt.valid)
 
         val bare = ProtocolCodec.decode("120.35,66.80")
         val streamBare = assertIs<Event.StreamSample>(bare)
+        assertEquals(MeasurementCarrier.LEGACY_CSV_FALLBACK, streamBare.carrier)
+        assertEquals(null, streamBare.sequence)
         assertEquals(120.35f, streamBare.distance)
         assertEquals(66.8f, streamBare.weight)
+        assertEquals(true, streamBare.valid)
+    }
+
+    @Test
+    fun decodeInvalidEvtStream() {
+        val evt = ProtocolCodec.decode("EVT:STREAM seq=43 ts_ms=1260 valid=0 ma12_ready=0 reason=READ_FAIL")
+        val streamEvt = assertIs<Event.StreamSample>(evt)
+        assertEquals(MeasurementCarrier.FORMAL_EVT_STREAM, streamEvt.carrier)
+        assertEquals(43L, streamEvt.sequence)
+        assertEquals(1260L, streamEvt.timestampMs)
+        assertEquals(false, streamEvt.valid)
+        assertEquals(false, streamEvt.ma12Ready)
+        assertEquals("READ_FAIL", streamEvt.reason)
     }
 
     @Test

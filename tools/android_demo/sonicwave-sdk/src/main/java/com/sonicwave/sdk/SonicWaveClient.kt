@@ -54,7 +54,7 @@ class SonicWaveClient(
             transport.incomingLines.collect { line ->
                 val event = ProtocolCodec.decode(line)
                 if (event != null) {
-                    if (event is Event.Capabilities) {
+                    if (event is Event.Capabilities || event is Event.FallStopProtection) {
                         _mode.value = ProtocolMode.PRIMARY
                     }
                     _events.emit(event)
@@ -106,8 +106,7 @@ class SonicWaveClient(
                     if (!semanticResult.isCompleted &&
                         (event is Event.Capabilities ||
                             event is Event.Nack ||
-                            event is Event.Error ||
-                            event is Event.Ack)
+                            event is Event.Error)
                     ) {
                         semanticResult.complete(event)
                     }
@@ -144,15 +143,6 @@ class SonicWaveClient(
                             reason = "CAP? 收到 ERR:${semanticEvent.reason}，连接可用但协议不匹配",
                         )
                     }
-
-                    is Event.Ack -> {
-                        _mode.value = ProtocolMode.UNKNOWN
-                        CapabilityResult(
-                            mode = ProtocolMode.UNKNOWN,
-                            reason = "CAP? 收到 ACK 但非能力回包: ${semanticEvent.raw}",
-                        )
-                    }
-
                     else -> {
                         if (rawObserved.get()) {
                             _mode.value = ProtocolMode.UNKNOWN
@@ -175,6 +165,92 @@ class SonicWaveClient(
         }
     }
 
+    suspend fun setFallStopProtectionAndAwaitAck(
+        enabled: Boolean,
+        timeoutMs: Long = 1_500,
+    ): Event.FallStopProtection = coroutineScope {
+        val semanticResult = CompletableDeferred<Event?>()
+        val collector = launch {
+            transport.incomingLines.collect { line ->
+                val event = ProtocolCodec.decode(line) ?: return@collect
+                if (!semanticResult.isCompleted &&
+                    (event is Event.FallStopProtection ||
+                        event is Event.Nack ||
+                        event is Event.Error)
+                ) {
+                    semanticResult.complete(event)
+                }
+            }
+        }
+
+        try {
+            send(Command.FallStopProtectionSet(enabled))
+            when (val event = withTimeoutOrNull(timeoutMs) { semanticResult.await() }) {
+                is Event.FallStopProtection -> {
+                    _mode.value = ProtocolMode.PRIMARY
+                    event
+                }
+
+                is Event.Nack -> {
+                    throw IllegalStateException("FALL_STOP 收到 NACK:${event.reason}")
+                }
+
+                is Event.Error -> {
+                    throw IllegalStateException("FALL_STOP 收到 ERR:${event.reason}")
+                }
+
+                else -> {
+                    throw IllegalStateException("FALL_STOP 在 ${timeoutMs}ms 内未收到设备确认")
+                }
+            }
+        } finally {
+            collector.cancel()
+        }
+    }
+
+    suspend fun setDegradedStartAndAwaitAck(
+        enabled: Boolean,
+        timeoutMs: Long = 1_500,
+    ): Event.DegradedStart = coroutineScope {
+        val semanticResult = CompletableDeferred<Event?>()
+        val collector = launch {
+            transport.incomingLines.collect { line ->
+                val event = ProtocolCodec.decode(line) ?: return@collect
+                if (!semanticResult.isCompleted &&
+                    (event is Event.DegradedStart ||
+                        event is Event.Nack ||
+                        event is Event.Error)
+                ) {
+                    semanticResult.complete(event)
+                }
+            }
+        }
+
+        try {
+            send(Command.DegradedStartSet(enabled))
+            when (val event = withTimeoutOrNull(timeoutMs) { semanticResult.await() }) {
+                is Event.DegradedStart -> {
+                    _mode.value = ProtocolMode.PRIMARY
+                    event
+                }
+
+                is Event.Nack -> {
+                    throw IllegalStateException("DEGRADED_START 收到 NACK:${event.reason}")
+                }
+
+                is Event.Error -> {
+                    throw IllegalStateException("DEGRADED_START 收到 ERR:${event.reason}")
+                }
+
+                else -> {
+                    throw IllegalStateException("DEGRADED_START 在 ${timeoutMs}ms 内未收到设备确认")
+                }
+            }
+        } finally {
+            collector.cancel()
+        }
+    }
+
     fun close() {
         transport.close()
         scope.cancel()
@@ -182,6 +258,8 @@ class SonicWaveClient(
 
     private fun Command.toLegacyFallback(): Command = when (this) {
         Command.CapabilityQuery -> Command.LegacyRaw("CAP?")
+        Command.SnapshotQuery -> Command.LegacyRaw("SNAPSHOT?")
+        is Command.DegradedStartSet -> this
         is Command.WaveSet -> Command.LegacyWaveFie(freqHz = freqHz, intensity = intensity)
         Command.WaveStart -> Command.LegacyWaveFie(enable = true)
         Command.WaveStop -> Command.LegacyWaveFie(enable = false)

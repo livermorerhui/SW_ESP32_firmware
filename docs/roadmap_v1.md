@@ -1,5 +1,27 @@
 # SonicWave Firmware v1.0 Roadmap
 
+## 0. Current Stage Update
+
+Status recorded on April 2, 2026:
+
+- `Phase 1 Exit Decision = Passed`
+- `Can Proceed to Phase 2 = Yes`
+- `Phase 2 WP1 Skeleton = Passed`
+- `Phase 2 WP2 Behavior Migration = Passed`
+- `Phase 3 Script Experimental Line = Frozen`
+
+Current stage:
+
+- Phase 1 is closed
+- Phase 2 stable baseline is the current firmware mainline
+- SW repo alignment should continue against the non-script Phase 2 surface
+
+Next stage:
+
+- proceed to real-device validation and Phase 2 threshold/state convergence on the stable path
+- proceed to SW repo aligned development without depending on Phase 3 script surfaces
+- keep the Phase 3 script offload line frozen unless reopen conditions are satisfied on a separate experiment track
+
 ## 1. v1.0 目标与范围（Scope Freeze）
 
 v1.0 的目标是交付一个可稳定运行、可追溯发布、具备基础安全联锁能力的固件版本。

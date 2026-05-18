@@ -28,4 +28,5 @@ dependencies {
     api(project(":sonicwave-protocol"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
+    testImplementation(kotlin("test"))
 }

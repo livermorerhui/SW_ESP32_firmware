@@ -51,25 +51,17 @@ fun SystemStatusSection(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Row(
+            Text(
+                text = stringResource(R.string.label_system_status_primary_group),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            PrimaryStatusBox(
+                label = stringResource(R.string.label_state),
+                value = uiState.deviceState.displayName(),
+                secondary = uiState.deviceState.name,
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                StatusBox(
-                    label = stringResource(R.string.label_state),
-                    value = uiState.deviceState.displayName(),
-                    secondary = uiState.deviceState.name,
-                    modifier = Modifier.weight(1f),
-                )
-                StatusBox(
-                    label = stringResource(R.string.label_fault),
-                    value = uiState.faultStatus.label,
-                    secondary = uiState.faultStatus.codeName,
-                    background = faultColor.copy(alpha = 0.14f),
-                    textColor = faultColor,
-                    modifier = Modifier.weight(1f),
-                )
-            }
+            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -91,23 +83,37 @@ fun SystemStatusSection(
                     modifier = Modifier.weight(1f),
                 )
             }
+            Text(
+                text = stringResource(R.string.label_system_status_secondary_group),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                StatusBox(
+                ReferenceStatusBox(
                     label = stringResource(R.string.label_safety_state),
                     value = uiState.safetyStatus.runtimeState,
                     secondary = uiState.safetyStatus.runtimeCode,
                     modifier = Modifier.weight(1f),
                 )
-                StatusBox(
+                ReferenceStatusBox(
                     label = stringResource(R.string.label_wave_state),
                     value = uiState.safetyStatus.waveState,
                     secondary = uiState.safetyStatus.waveCode,
                     modifier = Modifier.weight(1f),
                 )
             }
+            Text(
+                text = stringResource(
+                    R.string.label_fault_reference,
+                    uiState.faultStatus.label,
+                    uiState.faultStatus.codeName,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = faultColor,
+            )
             Text(
                 text = stringResource(R.string.label_fault_code, uiState.faultStatus.code),
                 style = MaterialTheme.typography.bodySmall,
@@ -143,6 +149,42 @@ fun SystemStatusSection(
 }
 
 @Composable
+private fun PrimaryStatusBox(
+    label: String,
+    value: String,
+    secondary: String? = null,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(18.dp))
+            .padding(horizontal = 14.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
+        secondary
+            ?.takeIf { it.isNotBlank() && it != value }
+            ?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
+                )
+            }
+    }
+}
+
+@Composable
 private fun StatusBox(
     label: String,
     value: String,
@@ -171,6 +213,42 @@ private fun StatusBox(
                     text = it,
                     style = MaterialTheme.typography.bodySmall,
                     color = textColor.copy(alpha = 0.85f),
+                )
+            }
+    }
+}
+
+@Composable
+private fun ReferenceStatusBox(
+    label: String,
+    value: String,
+    secondary: String? = null,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f), RoundedCornerShape(16.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        secondary
+            ?.takeIf { it.isNotBlank() && it != value }
+            ?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
     }

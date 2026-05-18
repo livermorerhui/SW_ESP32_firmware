@@ -79,7 +79,7 @@ class BluetoothGattTransport(
     private var writeDeferred: CompletableDeferred<Unit>? = null
 
     private var manualDisconnect = false
-    private val lineBuffer = StringBuilder()
+    private val lineFramer = NotifyLineFramer()
     private val notifySetupLock = Any()
 
     @Volatile
@@ -216,14 +216,23 @@ class BluetoothGattTransport(
             @SuppressLint("MissingPermission")
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 val device = result.device ?: return
+                val name = result.device.name ?: result.scanRecord?.deviceName
+                val advertisesUart = result.scanRecord?.serviceUuids
+                    ?.any { it.uuid == UART_SERVICE_UUID }
+                    ?: false
+                val matchesName = name?.startsWith("SonicWave", ignoreCase = true) == true
+                val scanAddr = device.address
+                val scanLabel = listOfNotNull(name, scanAddr).joinToString("/")
+                val scanFlags = "uart=${if (advertisesUart) 1 else 0} name_match=${if (matchesName) 1 else 0}"
+                emitSystemLog("SCAN_RESULT $scanLabel $scanFlags rssi=${result.rssi}")
+                // Require SonicWave name prefix to avoid listing unrelated UART devices.
+                if (!matchesName) return
                 val item = BleScanResult(
                     id = device.address,
                     address = device.address,
-                    name = result.device.name ?: result.scanRecord?.deviceName,
+                    name = name,
                     rssi = result.rssi,
-                    advertisesUartService = result.scanRecord?.serviceUuids
-                        ?.any { it.uuid == UART_SERVICE_UUID }
-                        ?: false,
+                    advertisesUartService = advertisesUart,
                 )
                 scanCache[item.address] = item
                 _scanResults.value = sortScanResults(scanCache.values.toList(), preferredNamePrefixes)
@@ -422,9 +431,7 @@ class BluetoothGattTransport(
         synchronized(notifySetupLock) {
             notifySetupStarted = false
         }
-        synchronized(lineBuffer) {
-            lineBuffer.clear()
-        }
+        lineFramer.clear()
     }
 
     private fun failConnection(message: String) {
@@ -440,21 +447,7 @@ class BluetoothGattTransport(
         Log.d(TAG, "RX chunk len=${bytes.size} payload=$chunkForLog")
         scope.launch { _incomingRawChunks.emit(chunkForLog) }
 
-        val completeLines = mutableListOf<String>()
-        synchronized(lineBuffer) {
-            lineBuffer.append(chunk)
-            while (true) {
-                val newlineIndex = lineBuffer.indexOf("\n")
-                if (newlineIndex < 0) break
-
-                val line = lineBuffer.substring(0, newlineIndex).trimEnd('\r')
-                lineBuffer.delete(0, newlineIndex + 1)
-                if (line.isNotEmpty()) {
-                    completeLines += line
-                }
-            }
-        }
-
+        val completeLines = lineFramer.append(chunk)
         completeLines.forEach { line ->
             Log.d(TAG, "RX line emitted=${escapeForLog(line)}")
             scope.launch { _incomingLines.emit(line) }

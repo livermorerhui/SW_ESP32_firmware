@@ -59,7 +59,11 @@ Use the demo app controls in this order:
 - `(Optional) observe EVT:STREAM / CSV`
 
 Disconnect note:
-- BLE disconnect may not always deliver a final `EVT` to app, but firmware still performs safety stop on disconnect.
+- BLE disconnect may not always deliver a final `EVT` to app.
+- In the current APP-driven delivery path, firmware default policy is:
+  - disconnect stops wave output
+  - reconnect does not auto-resume the previous session
+  - app/device should resync from the latest stopped snapshot before a new start
 
 ## 关键特性
 
