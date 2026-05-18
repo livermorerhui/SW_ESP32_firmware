@@ -8,6 +8,8 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 
 按成熟工程标准看，当前剩余工作主要是协议防漂移、owner 边界审计、文档真相源收口和发布硬化；没有新的必须立刻阻断联调的固件 blocker。2026-05-18 SW release hardening 窗口已完成 ESP32-plus minimum soak 真机 capture 复核，当前 SW `52f782f` + ESP32 `5bb7e0c` 组合可作为本轮 release hardening 基线。
 
+截至 2026-05-18 `1759a12`，ESP32 固件低风险工程标准化重构已经收口：protocol / ACK / measurement probe / laser diagnostics / calibration runtime / stable contract diagnostics / stable window / presence counter wrapper 均已完成本地验证。当前没有“必须继续重构后才能联调或发版”的固件结构项。剩余 `BleTransport` 拆分、stable candidate owner、baseline latch owner、presence owner state carrier、occupied-cycle owner、motion safety runtime action 等均属于可选预研或中高风险专项，不应按普通自动重构继续推进。
+
 本总表是 ESP32 固件后续优化的长期入口。一次性报告只作为证据来源，不作为 backlog 真相源。
 
 ## 2. 固定边界
@@ -36,7 +38,34 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 | FW-OPT-008 | 旧协议 / 旧开发文档状态标注 | 文档过期治理 | 已完成第一轮 | 否 | P4 | ESP32 文档治理 | `docs/protocol.md`；`docs/firmware_developer_guide.md`；`docs/safety_design.md` | 已在旧入口标注 current / legacy / historical 状态和当前真相源；后续只在具体旧文档被继续使用时增量清理 |
 | FW-OPT-009 | release hardening / minimum soak validation | 发布硬化 | 已完成当前基线 | 否 | P4 | 跨仓 release hardening | SW capture `20260518_103916...minimum_soak_release_esp32_plus`；SW release hardening 文档；本总表 | 当前 SW `52f782f` + ESP32 `5bb7e0c` 组合已通过 ESP32-plus minimum soak，audit `PASS_CANDIDATE`，无 hard failure / evidence gap；如固件或 APP commit 变化需重新跑最小 capture |
 
-## 4. 已完成但仍需留证的事项
+## 4. 重构收口与真机测试原则
+
+当前重构收口结论：
+
+- 没有必须继续重构的 ESP32 固件 blocker。
+- 不继续深拆不会阻断联调、release hardening 或 minimum soak。
+- 剩余偏重 owner 主要是动作编排 owner，保留比强拆更安全。
+- 后续只有在真机证据证明存在实际问题时，才提升对应专项优先级。
+
+下一轮真机测试是否需要收集日志：
+
+- 需要。只要烧录了 `1759a12` 或之后的新固件并要给出“通过 / 不通过”结论，就应使用 capture 收集日志。
+- 原因是本轮虽然主要是内部 helper 抽取，但已改变固件 commit 组合；真机测试目标不是证明代码逻辑 diff，而是证明现场行为没有回归。
+- 日志至少要覆盖 APP focus/runtime events、ESP32 串口、session meta、notes / marker。
+- 用户只需要按页面和设备真实流程操作；AI 负责复核 capture 产物后再给正式结论。
+
+建议下一轮真机测试关注：
+
+- BLE connect / reconnect / snapshot refresh。
+- `CAP? / SNAPSHOT / WAVE:START / WAVE:STOP` 主链。
+- PLUS normal / degraded measurement 行为。
+- `MEASUREMENT_PROBE` 串口 evidence 是否仍可读。
+- `BASELINE_CONTRACT` / start_ready / baseline_ready 是否无异常抖动。
+- Android `CONNECT_SNAPSHOT_REFRESH_FAILED=0`。
+
+不建议只做人工体感测试后直接写“通过”。如果 capture 文件为空、缺 ESP32 串口、缺 APP runtime events 或无法对齐 marker，只能写成“体感通过但证据不足”。
+
+## 5. 已完成但仍需留证的事项
 
 | 事项 | 当前状态 | 证据 | 后续注意 |
 | --- | --- | --- | --- |
@@ -47,7 +76,7 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 | Wave output startup observability | 已完成 | `reports/task_20260430_plus_degraded_wave_output_observability.md` | `WAVE_OUTPUT_STARTUP` 是串口 evidence，不改 BLE 合同 |
 | MeasurementAvailabilityProbePolicy | 已完成 | commit `9fab932`；`reports/task_20260517_measurement_availability_probe_policy.md`；真机 capture；SW release hardening capture `20260518_103916...minimum_soak_release_esp32_plus` | `MEASUREMENT_PROBE` 只作为串口 evidence，不进入 BLE 正式合同 |
 
-## 5. 推荐执行顺序
+## 6. 推荐执行顺序
 
 ### 已完成：P1 文档真相源收口
 
@@ -238,7 +267,7 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 - `python3 tools/run_evaluator_unit_tests.py`
 - `python3 -m platformio run -e esp32s3`
 
-## 6. 后续协作默认读取顺序
+## 7. 后续协作默认读取顺序
 
 1. `SW_ESP3_Firmware/AGENTS.md`
 2. `SW_ESP3_Firmware/docs/system/esp32_firmware_optimization_priority_table.md`
