@@ -191,6 +191,7 @@ TEST_MAIN = r"""
 #include "HubAckBuilder.h"
 #include "modules/laser/BaselineEvidenceEvaluator.h"
 #include "modules/laser/CalibrationRuntime.h"
+#include "modules/laser/LaserStableWindow.h"
 #include "modules/laser/MeasurementAvailabilityProbePolicy.h"
 #include "modules/laser/MeasurementHealthStateMachine.h"
 #include "modules/laser/PresenceContractEvaluator.h"
@@ -359,6 +360,58 @@ void test_baseline_invalid_and_saturation() {
   assert(result.baselineEligible);
   assert(result.nextStableConfirmCount == 0xFF);
   expect_reason(result.reason, "baseline_eligible");
+}
+
+void test_stable_window_metrics_current_window() {
+  const float values[10] = {
+      60.0f, 60.1f, 59.9f, 60.0f, 60.1f,
+      60.2f, 60.3f, 60.2f, 60.4f, 60.3f};
+
+  const LaserStableWindowMetrics metrics =
+      LaserStableWindow::computeMetrics(values, 0, 10, 10, 10);
+  assert(metrics.valid);
+  assert(std::fabs(metrics.mean - 60.15f) < 0.0001f);
+  assert(std::fabs(metrics.range - 0.5f) < 0.0001f);
+  assert(std::fabs(metrics.drift - 0.26f) < 0.0001f);
+  assert(metrics.stddev > 0.14f && metrics.stddev < 0.16f);
+}
+
+void test_stable_window_metrics_ring_head() {
+  const float values[10] = {
+      60.2f, 60.3f, 60.4f, 60.5f, 60.6f,
+      59.8f, 59.9f, 60.0f, 60.1f, 60.2f};
+
+  const LaserStableWindowMetrics metrics =
+      LaserStableWindow::computeMetrics(values, 5, 10, 10, 6);
+  assert(metrics.valid);
+  assert(std::fabs(metrics.mean - 60.36667f) < 0.0001f);
+  assert(std::fabs(metrics.range - 0.4f) < 0.0001f);
+  assert(std::fabs(metrics.drift - 0.26667f) < 0.0001f);
+}
+
+void test_stable_window_invalid_window() {
+  const float values[4] = {60.0f, 60.1f, 60.2f, 60.3f};
+
+  LaserStableWindowMetrics metrics =
+      LaserStableWindow::computeMetrics(values, 0, 4, 4, 5);
+  assert(!metrics.valid);
+
+  metrics = LaserStableWindow::computeMetrics(values, 0, 4, 4, 1);
+  assert(!metrics.valid);
+}
+
+void test_stable_window_trimmed_mean() {
+  const float values[10] = {
+      60.0f, 60.2f, 59.8f, 80.0f, 60.1f,
+      59.9f, 60.3f, 60.0f, 40.0f, 60.1f};
+
+  const float trimmed =
+      LaserStableWindow::computeTrimmedMean(values, 0, 10, 10, 10, 1);
+  assert(std::fabs(trimmed - 60.05f) < 0.0001f);
+
+  const float full =
+      LaserStableWindow::computeTrimmedMean(values, 0, 10, 10, 10, 5);
+  assert(std::fabs(full - 60.04f) < 0.0001f);
 }
 
 void test_calibration_runtime_weight_and_clamp() {
@@ -1195,6 +1248,10 @@ int main() {
   test_baseline_window_hold();
   test_baseline_confirm_and_latch();
   test_baseline_invalid_and_saturation();
+  test_stable_window_metrics_current_window();
+  test_stable_window_metrics_ring_head();
+  test_stable_window_invalid_window();
+  test_stable_window_trimmed_mean();
   test_calibration_runtime_weight_and_clamp();
   test_calibration_runtime_effective_zero();
   test_calibration_runtime_effective_zero_fallback_and_lock();
@@ -1343,6 +1400,7 @@ def run() -> None:
       str(main_cpp),
       str(ROOT / "src/modules/laser/PresenceContractEvaluator.cpp"),
       str(ROOT / "src/modules/laser/BaselineEvidenceEvaluator.cpp"),
+      str(ROOT / "src/modules/laser/LaserStableWindow.cpp"),
       str(ROOT / "src/modules/laser/CalibrationRuntime.cpp"),
       str(ROOT / "src/modules/laser/MeasurementAvailabilityProbePolicy.cpp"),
       str(ROOT / "src/modules/laser/MeasurementHealthStateMachine.cpp"),

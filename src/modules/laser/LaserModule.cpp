@@ -10,159 +10,6 @@ constexpr uint32_t kLaserLoopIntervalUnavailableIdleMs = 250UL;
 constexpr uint32_t kLaserUnavailableIdleReadBackoffMs = 3000UL;
 constexpr uint32_t kLaserRuntimeReadFailBackoffMs = 0UL;
 
-struct WindowStats {
-  float mean = NAN;
-  float stddev = NAN;
-  float range = NAN;
-};
-
-struct StableWindowMetrics {
-  bool valid = false;
-  float mean = NAN;
-  float stddev = NAN;
-  float range = NAN;
-  float drift = NAN;
-};
-
-WindowStats computeRingWindowStats(
-    const float* values,
-    int head,
-    int count,
-    int capacity,
-    int startOffset,
-    int sampleCount) {
-  WindowStats stats{};
-  if (!values || count <= 0 || sampleCount <= 0 || startOffset < 0 ||
-      startOffset + sampleCount > count) {
-    return stats;
-  }
-
-  const int oldestIndex = (count == capacity) ? head : 0;
-  float sum = 0.0f;
-  float minValue = INFINITY;
-  float maxValue = -INFINITY;
-  for (int i = 0; i < sampleCount; ++i) {
-    const int index = (oldestIndex + startOffset + i) % capacity;
-    const float value = values[index];
-    sum += value;
-    if (value < minValue) minValue = value;
-    if (value > maxValue) maxValue = value;
-  }
-
-  stats.mean = sum / sampleCount;
-  float sumSqDiff = 0.0f;
-  for (int i = 0; i < sampleCount; ++i) {
-    const int index = (oldestIndex + startOffset + i) % capacity;
-    const float diff = values[index] - stats.mean;
-    sumSqDiff += diff * diff;
-  }
-
-  stats.stddev = sqrtf(sumSqDiff / sampleCount);
-  stats.range = maxValue - minValue;
-  return stats;
-}
-
-StableWindowMetrics computeStableWindowMetrics(
-    const float* values,
-    int head,
-    int count,
-    int capacity,
-    int sampleCount) {
-  StableWindowMetrics metrics{};
-  if (!values || sampleCount <= 1 || count < sampleCount) {
-    return metrics;
-  }
-
-  const int startOffset = count - sampleCount;
-  const WindowStats full = computeRingWindowStats(
-      values,
-      head,
-      count,
-      capacity,
-      startOffset,
-      sampleCount);
-  if (!isfinite(full.mean) || !isfinite(full.stddev) || !isfinite(full.range)) {
-    return metrics;
-  }
-
-  const int firstHalfCount = sampleCount / 2;
-  const int secondHalfCount = sampleCount - firstHalfCount;
-  if (firstHalfCount <= 0 || secondHalfCount <= 0) {
-    return metrics;
-  }
-
-  const WindowStats firstHalf = computeRingWindowStats(
-      values,
-      head,
-      count,
-      capacity,
-      startOffset,
-      firstHalfCount);
-  const WindowStats secondHalf = computeRingWindowStats(
-      values,
-      head,
-      count,
-      capacity,
-      startOffset + firstHalfCount,
-      secondHalfCount);
-  if (!isfinite(firstHalf.mean) || !isfinite(secondHalf.mean)) {
-    return metrics;
-  }
-
-  metrics.valid = true;
-  metrics.mean = full.mean;
-  metrics.stddev = full.stddev;
-  metrics.range = full.range;
-  metrics.drift = fabsf(secondHalf.mean - firstHalf.mean);
-  return metrics;
-}
-
-float computeRingTrimmedMean(
-    const float* values,
-    int head,
-    int count,
-    int capacity,
-    int sampleCount,
-    int trimCount) {
-  if (!values || sampleCount <= 0 || count < sampleCount) {
-    return NAN;
-  }
-
-  const int startOffset = count - sampleCount;
-  const int oldestIndex = (count == capacity) ? head : 0;
-  float ordered[WINDOW_N]{};
-  for (int i = 0; i < sampleCount; ++i) {
-    const int index = (oldestIndex + startOffset + i) % capacity;
-    ordered[i] = values[index];
-  }
-
-  for (int i = 1; i < sampleCount; ++i) {
-    const float key = ordered[i];
-    int j = i - 1;
-    while (j >= 0 && ordered[j] > key) {
-      ordered[j + 1] = ordered[j];
-      --j;
-    }
-    ordered[j + 1] = key;
-  }
-
-  int keepStart = trimCount;
-  int keepEnd = sampleCount - trimCount;
-  if (keepStart >= keepEnd) {
-    keepStart = 0;
-    keepEnd = sampleCount;
-  }
-
-  float sum = 0.0f;
-  int kept = 0;
-  for (int i = keepStart; i < keepEnd; ++i) {
-    sum += ordered[i];
-    ++kept;
-  }
-
-  return kept > 0 ? (sum / kept) : NAN;
-}
-
 }  // namespace
 
 const char* LaserModule::calibrationModelTypeName(CalibrationModelType type) {
@@ -1173,75 +1020,18 @@ void LaserModule::clearStableContractBridge(const char* reason) {
   logBaselineContractClear(millis(), reason, before);
 }
 
-BaselineActionStateSnapshot LaserModule::captureBaselineActionSnapshot(
+BaselineContractStateView LaserModule::captureBaselineContractView(
     const StableContractState& state) const {
-  BaselineActionStateSnapshot snapshot{};
-  snapshot.userPresent = state.userPresent;
-  snapshot.stableCandidate = state.stableCandidate;
-  snapshot.stableReadyLive = state.stableReadyLive;
-  snapshot.baselineReadyLatched = state.baselineReadyLatched;
-  snapshot.startReady = state.startReady;
-  snapshot.baselineReadyWeightKg = state.baselineReadyWeightKg;
-  snapshot.startReadyWeightKg = state.startReadyWeightKg;
-  snapshot.startReadyBridge = state.startReadyBridge ? state.startReadyBridge : "unknown";
-  return snapshot;
-}
-
-bool LaserModule::baselineActionSnapshotHasState(
-    const BaselineActionStateSnapshot& snapshot) const {
-  return snapshot.stableCandidate ||
-      snapshot.stableReadyLive ||
-      snapshot.baselineReadyLatched ||
-      snapshot.startReady ||
-      snapshot.baselineReadyWeightKg > 0.0f ||
-      snapshot.startReadyWeightKg > 0.0f;
-}
-
-BaselineActionWritebackEvidence LaserModule::makeStartReadyWritebackEvidence(
-    uint32_t now,
-    const char* source,
-    TopState topState,
-    bool ready,
-    float stableWeightKg,
-    const char* reason) const {
-  BaselineActionWritebackEvidence evidence{};
-  evidence.now = now;
-  evidence.source = source ? source : "unknown";
-  evidence.topState = topState;
-  evidence.startReady = ready;
-  evidence.startReadyWeightKg = ready ? stableWeightKg : 0.0f;
-  evidence.reason = reason ? reason : "unknown";
-  evidence.state = captureBaselineActionSnapshot(stableContract);
-  return evidence;
-}
-
-bool LaserModule::shouldLogStartReadyWriteback(
-    const BaselineActionWritebackEvidence& evidence) const {
-  const bool sourceChanged =
-      !lastLoggedStartReadyWritebackSource ||
-      strcmp(lastLoggedStartReadyWritebackSource, evidence.source) != 0;
-  const bool reasonChanged =
-      !lastLoggedStartReadyWritebackReason ||
-      strcmp(lastLoggedStartReadyWritebackReason, evidence.reason) != 0;
-  const bool weightChanged =
-      evidence.startReady &&
-      fabsf(lastLoggedStartReadyWritebackWeightKg - evidence.startReadyWeightKg) >= 0.01f;
-  return !hasLoggedStartReadyWriteback ||
-      lastLoggedStartReadyWritebackReady != evidence.startReady ||
-      lastLoggedStartReadyWritebackTopState != evidence.topState ||
-      sourceChanged ||
-      reasonChanged ||
-      weightChanged;
-}
-
-void LaserModule::rememberStartReadyWriteback(
-    const BaselineActionWritebackEvidence& evidence) {
-  hasLoggedStartReadyWriteback = true;
-  lastLoggedStartReadyWritebackReady = evidence.startReady;
-  lastLoggedStartReadyWritebackTopState = evidence.topState;
-  lastLoggedStartReadyWritebackWeightKg = evidence.startReadyWeightKg;
-  lastLoggedStartReadyWritebackSource = evidence.source;
-  lastLoggedStartReadyWritebackReason = evidence.reason;
+  BaselineContractStateView view{};
+  view.userPresent = state.userPresent;
+  view.stableCandidate = state.stableCandidate;
+  view.stableReadyLive = state.stableReadyLive;
+  view.baselineReadyLatched = state.baselineReadyLatched;
+  view.startReady = state.startReady;
+  view.baselineReadyWeightKg = state.baselineReadyWeightKg;
+  view.startReadyWeightKg = state.startReadyWeightKg;
+  view.startReadyBridge = state.startReadyBridge ? state.startReadyBridge : "unknown";
+  return view;
 }
 
 void LaserModule::logBaselineContractLatch(
@@ -1249,48 +1039,22 @@ void LaserModule::logBaselineContractLatch(
     const char* source,
     float distance,
     float weight) const {
-  if (!BASELINE_CONTRACT_DIAG_ENABLED) {
-    return;
-  }
-
-  const BaselineActionStateSnapshot snapshot = captureBaselineActionSnapshot(stableContract);
-  Serial.printf(
-      "[BASELINE_CONTRACT] event=latch source=%s baseline_latched=1 weight=%.2f distance=%.2f captured_ms=%lu user_present=%d stable_live=%d start_ready=%d bridge=%s\n",
-      source ? source : "unknown",
-      weight,
+  baselineContractDiagnostics.logLatch(
+      now,
+      source,
       distance,
-      static_cast<unsigned long>(now),
-      snapshot.userPresent ? 1 : 0,
-      snapshot.stableReadyLive ? 1 : 0,
-      snapshot.startReady ? 1 : 0,
-      snapshot.startReadyBridge);
+      weight,
+      captureBaselineContractView(stableContract));
 }
 
 void LaserModule::logBaselineContractClear(
     uint32_t now,
     const char* reason,
     const StableContractState& before) const {
-  if (!BASELINE_CONTRACT_DIAG_ENABLED) {
-    return;
-  }
-
-  const BaselineActionStateSnapshot beforeSnapshot = captureBaselineActionSnapshot(before);
-  if (!baselineActionSnapshotHasState(beforeSnapshot)) {
-    return;
-  }
-
-  Serial.printf(
-      "[BASELINE_CONTRACT] event=clear reason=%s before_user_present=%d before_stable_candidate=%d before_stable_live=%d before_baseline_latched=%d before_start_ready=%d before_baseline_weight=%.2f before_start_weight=%.2f before_bridge=%s cleared_ms=%lu\n",
-      reason ? reason : "unspecified",
-      beforeSnapshot.userPresent ? 1 : 0,
-      beforeSnapshot.stableCandidate ? 1 : 0,
-      beforeSnapshot.stableReadyLive ? 1 : 0,
-      beforeSnapshot.baselineReadyLatched ? 1 : 0,
-      beforeSnapshot.startReady ? 1 : 0,
-      beforeSnapshot.baselineReadyWeightKg,
-      beforeSnapshot.startReadyWeightKg,
-      beforeSnapshot.startReadyBridge,
-      static_cast<unsigned long>(now));
+  baselineContractDiagnostics.logClear(
+      now,
+      reason,
+      captureBaselineContractView(before));
 }
 
 void LaserModule::logStartReadyWriteback(
@@ -1300,29 +1064,15 @@ void LaserModule::logStartReadyWriteback(
     bool ready,
     float stableWeightKg,
     const char* reason) {
-  if (!BASELINE_CONTRACT_DIAG_ENABLED) {
-    return;
-  }
-
-  const BaselineActionWritebackEvidence evidence =
-      makeStartReadyWritebackEvidence(now, source, topState, ready, stableWeightKg, reason);
-  if (!shouldLogStartReadyWriteback(evidence)) {
-    return;
-  }
-
-  Serial.printf(
-      "[BASELINE_CONTRACT] event=start_ready_writeback source=%s top_state=%s start_ready=%d start_weight=%.2f reason=%s user_present=%d baseline_latched=%d stable_live=%d baseline_weight=%.2f\n",
-      evidence.source,
-      topStateName(evidence.topState),
-      evidence.startReady ? 1 : 0,
-      evidence.startReadyWeightKg,
-      evidence.reason,
-      evidence.state.userPresent ? 1 : 0,
-      evidence.state.baselineReadyLatched ? 1 : 0,
-      evidence.state.stableReadyLive ? 1 : 0,
-      evidence.state.baselineReadyWeightKg);
-
-  rememberStartReadyWriteback(evidence);
+  BaselineContractWritebackInput input{};
+  input.now = now;
+  input.source = source ? source : "unknown";
+  input.topState = topState;
+  input.startReady = ready;
+  input.startReadyWeightKg = ready ? stableWeightKg : 0.0f;
+  input.reason = reason ? reason : "unknown";
+  input.state = captureBaselineContractView(stableContract);
+  baselineContractDiagnostics.logStartReadyWriteback(input);
 }
 
 void LaserModule::resetStableTracking(const char* reason, bool logIfActive) {
@@ -1404,14 +1154,14 @@ bool LaserModule::shouldUseFastStableBuildReadInterval() const {
 void LaserModule::latchStable(uint32_t now, const char* mode, float stddev) {
   const int sampleCount = min<int>(bufCount, phase2Thresholds.stable.enterWindowSamples);
   const int trimCount = min<int>(phase2Thresholds.stable.trimmedMeanDropSamples, sampleCount / 2);
-  float finalWeight = computeRingTrimmedMean(
+  float finalWeight = LaserStableWindow::computeTrimmedMean(
       weightBuffer,
       bufHead,
       bufCount,
       WINDOW_N,
       sampleCount,
       trimCount);
-  float finalDistance = computeRingTrimmedMean(
+  float finalDistance = LaserStableWindow::computeTrimmedMean(
       distanceBuffer,
       bufHead,
       bufCount,
@@ -1677,7 +1427,7 @@ void LaserModule::updateStableState(float distance, float weight, uint32_t now) 
   }
 
   beginStableCandidate(distance, weight);
-  const StableWindowMetrics metrics = computeStableWindowMetrics(
+  const LaserStableWindowMetrics metrics = LaserStableWindow::computeMetrics(
       weightBuffer,
       bufHead,
       bufCount,

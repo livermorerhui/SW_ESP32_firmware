@@ -5,12 +5,14 @@
 #include "core/DeviceConfig.h"
 #include "core/EventBus.h"
 #include "core/SystemStateMachine.h"
+#include "modules/laser/BaselineContractDiagnostics.h"
 #include "modules/laser/BaselineEvidenceEvaluator.h"
 #include "modules/laser/CalibrationRuntime.h"
 #include "modules/laser/CalibrationModelStore.h"
 #include "modules/laser/DeviceConfigStore.h"
 #include "modules/laser/LaserDiagnostics.h"
 #include "modules/laser/LaserMeasurementReader.h"
+#include "modules/laser/LaserStableWindow.h"
 #include "modules/laser/MeasurementAvailabilityProbePolicy.h"
 #include "modules/laser/MeasurementHealthStateMachine.h"
 #include "modules/laser/MeasurementPlane.h"
@@ -61,27 +63,6 @@ struct StableContractState {
   uint32_t stableReadyAtMs = 0;
   uint32_t baselineReadyAtMs = 0;
   const char* startReadyBridge = "not_ready";
-};
-
-struct BaselineActionStateSnapshot {
-  bool userPresent = false;
-  bool stableCandidate = false;
-  bool stableReadyLive = false;
-  bool baselineReadyLatched = false;
-  bool startReady = false;
-  float baselineReadyWeightKg = 0.0f;
-  float startReadyWeightKg = 0.0f;
-  const char* startReadyBridge = "not_ready";
-};
-
-struct BaselineActionWritebackEvidence {
-  uint32_t now = 0;
-  const char* source = "unknown";
-  TopState topState = TopState::IDLE;
-  bool startReady = false;
-  float startReadyWeightKg = 0.0f;
-  const char* reason = "unknown";
-  BaselineActionStateSnapshot state{};
 };
 
 class LaserModule {
@@ -178,17 +159,7 @@ private:
   void resetStartGateDiagnosticsWindow(uint32_t now);
   void syncStableContractBridge(uint32_t now, const RhythmStateUpdateResult& result);
   void clearStableContractBridge(const char* reason);
-  BaselineActionStateSnapshot captureBaselineActionSnapshot(const StableContractState& state) const;
-  bool baselineActionSnapshotHasState(const BaselineActionStateSnapshot& snapshot) const;
-  BaselineActionWritebackEvidence makeStartReadyWritebackEvidence(
-      uint32_t now,
-      const char* source,
-      TopState topState,
-      bool ready,
-      float stableWeightKg,
-      const char* reason) const;
-  bool shouldLogStartReadyWriteback(const BaselineActionWritebackEvidence& evidence) const;
-  void rememberStartReadyWriteback(const BaselineActionWritebackEvidence& evidence);
+  BaselineContractStateView captureBaselineContractView(const StableContractState& state) const;
   void logBaselineContractLatch(uint32_t now, const char* source, float distance, float weight) const;
   void logBaselineContractClear(
       uint32_t now,
@@ -311,6 +282,7 @@ private:
   MotionSafetyShadowEvaluator motionSafetyShadow{};
   RuntimeZeroObserver runtimeZeroObserver{};
   RunSummaryCollector runSummaryCollector{};
+  BaselineContractDiagnostics baselineContractDiagnostics{};
   TopState lastObservedTopState = TopState::IDLE;
   uint32_t startGateDiagWindowStartedAtMs = 0;
   uint32_t startGateDiagLastLogMs = 0;
@@ -322,10 +294,4 @@ private:
   uint32_t startGateDiagLiveStableNotReady = 0;
   uint32_t startGateDiagRunningHold = 0;
   uint32_t startGateDiagIdleReady = 0;
-  bool hasLoggedStartReadyWriteback = false;
-  bool lastLoggedStartReadyWritebackReady = false;
-  TopState lastLoggedStartReadyWritebackTopState = TopState::IDLE;
-  float lastLoggedStartReadyWritebackWeightKg = 0.0f;
-  const char* lastLoggedStartReadyWritebackSource = nullptr;
-  const char* lastLoggedStartReadyWritebackReason = nullptr;
 };
