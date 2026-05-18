@@ -163,15 +163,6 @@ float computeRingTrimmedMean(
   return kept > 0 ? (sum / kept) : NAN;
 }
 
-const char* measurementProbeStateName(MeasurementProbeState state) {
-  switch (state) {
-    case MeasurementProbeState::CLOSED:
-      return "closed";
-    case MeasurementProbeState::OPEN_UNAVAILABLE:
-      return "open";
-  }
-  return "unknown";
-}
 }  // namespace
 
 const char* LaserModule::calibrationModelTypeName(CalibrationModelType type) {
@@ -543,80 +534,6 @@ void LaserModule::logLatestMeasurementPlaneSummary(const char* trigger) {
   measurementPlane.logLatest(trigger);
 }
 
-void LaserModule::logMeasurementProbeDecision(
-    const MeasurementProbeDecision& decision,
-    TopState topState) const {
-  switch (decision.event) {
-    case MeasurementProbeEvent::NONE:
-    case MeasurementProbeEvent::OPEN:
-    case MeasurementProbeEvent::STILL_UNAVAILABLE:
-    case MeasurementProbeEvent::RECOVERED:
-      return;
-    case MeasurementProbeEvent::SKIP:
-      Serial.printf(
-          "[MEASUREMENT_PROBE] event=skip state=%s next_probe_in_ms=%lu outage_ms=%lu top_state=%s\n",
-          measurementProbeStateName(decision.state),
-          static_cast<unsigned long>(decision.nextProbeInMs),
-          static_cast<unsigned long>(decision.outageMs),
-          topStateName(topState));
-      return;
-    case MeasurementProbeEvent::PROBE:
-      Serial.printf(
-          "[MEASUREMENT_PROBE] event=probe state=%s top_state=%s outage_ms=%lu\n",
-          measurementProbeStateName(decision.state),
-          topStateName(topState),
-          static_cast<unsigned long>(decision.outageMs));
-      return;
-    case MeasurementProbeEvent::RESET:
-      Serial.printf(
-          "[MEASUREMENT_PROBE] event=reset state=%s top_state=%s\n",
-          measurementProbeStateName(decision.state),
-          topStateName(topState));
-      return;
-  }
-}
-
-void LaserModule::logMeasurementProbeObservation(
-    const MeasurementProbeObservation& observation,
-    TopState topState) const {
-  switch (observation.event) {
-    case MeasurementProbeEvent::NONE:
-    case MeasurementProbeEvent::SKIP:
-    case MeasurementProbeEvent::PROBE:
-      return;
-    case MeasurementProbeEvent::OPEN:
-      Serial.printf(
-          "[MEASUREMENT_PROBE] event=open reason=timeout code=0x%02X consecutive=%u top_state=%s probe_interval_ms=%lu\n",
-          static_cast<unsigned>(observation.code),
-          static_cast<unsigned>(observation.consecutiveTimeouts),
-          topStateName(topState),
-          static_cast<unsigned long>(observation.probeIntervalMs));
-      return;
-    case MeasurementProbeEvent::STILL_UNAVAILABLE:
-      Serial.printf(
-          "[MEASUREMENT_PROBE] event=still_unavailable code=0x%02X consecutive=%u top_state=%s outage_ms=%lu next_probe_in_ms=%lu\n",
-          static_cast<unsigned>(observation.code),
-          static_cast<unsigned>(observation.consecutiveTimeouts),
-          topStateName(topState),
-          static_cast<unsigned long>(observation.outageMs),
-          static_cast<unsigned long>(observation.probeIntervalMs));
-      return;
-    case MeasurementProbeEvent::RECOVERED:
-      Serial.printf(
-          "[MEASUREMENT_PROBE] event=recovered code=0x%02X top_state=%s outage_ms=%lu\n",
-          static_cast<unsigned>(observation.code),
-          topStateName(topState),
-          static_cast<unsigned long>(observation.outageMs));
-      return;
-    case MeasurementProbeEvent::RESET:
-      Serial.printf(
-          "[MEASUREMENT_PROBE] event=reset state=%s top_state=%s\n",
-          measurementProbeStateName(observation.state),
-          topStateName(topState));
-      return;
-  }
-}
-
 void LaserModule::loadDeviceConfig() {
   const DeviceConfigLoadResult result = deviceConfigStore.load(preferences);
   deviceConfig = result.config;
@@ -986,10 +903,7 @@ void LaserModule::noteDistanceValidity(
     uint32_t now) {
   if (valid) {
     if (!lastMeasurementValid) {
-      Serial.printf("[LASER] VALID raw_u16=%u raw_i16=%d scaled=%.2f\n",
-          (unsigned int)rawRegister,
-          (int)signedRaw,
-          scaledDistance);
+      LaserDiagnostics::logDistanceValid(rawRegister, signedRaw, scaledDistance);
     }
     lastMeasurementValid = true;
     lastInvalidReason = nullptr;
@@ -1008,18 +922,12 @@ void LaserModule::noteDistanceValidity(
       (now - lastValidityLogMs) >= LASER_INVALID_LOG_INTERVAL_MS;
 
   if (shouldLog) {
-    if (isfinite(scaledDistance)) {
-      Serial.printf("[LASER] INVALID raw_u16=%u raw_i16=%d scaled=%.2f sentinel=%d reason=%s\n",
-          (unsigned int)rawRegister,
-          (int)signedRaw,
-          scaledDistance,
-          sentinel ? 1 : 0,
-          reason ? reason : "UNKNOWN");
-    } else {
-      Serial.printf("[LASER] INVALID sentinel=%d reason=%s\n",
-          sentinel ? 1 : 0,
-          reason ? reason : "UNKNOWN");
-    }
+    LaserDiagnostics::logDistanceInvalid(
+        rawRegister,
+        signedRaw,
+        scaledDistance,
+        sentinel,
+        reason);
     lastValidityLogMs = now;
   }
 
@@ -2008,7 +1916,7 @@ void LaserModule::taskLoop() {
             deviceConfig.laserInstalled,
             measurementHealthMachine.faultConfirmed(),
             readAttemptTopState);
-    logMeasurementProbeDecision(probeDecision, readAttemptTopState);
+    LaserDiagnostics::logMeasurementProbeDecision(probeDecision, readAttemptTopState);
     if (!probeDecision.shouldRead) {
       nextReadEligibleAtMs = measurementProbePolicy.nextProbeAtMs();
       continue;
@@ -2032,7 +1940,7 @@ void LaserModule::taskLoop() {
               false,
               readResult.modbusResult,
               readAttemptTopState);
-      logMeasurementProbeObservation(probeObservation, readAttemptTopState);
+      LaserDiagnostics::logMeasurementProbeObservation(probeObservation, readAttemptTopState);
       const bool runtimeFaultPath = measurementHealthMachine.everReady();
       const uint32_t readFailBackoffMs = runtimeFaultPath
           ? kLaserRuntimeReadFailBackoffMs
@@ -2072,7 +1980,7 @@ void LaserModule::taskLoop() {
               true,
               readResult.modbusResult,
               readAttemptTopState);
-      logMeasurementProbeObservation(probeObservation, readAttemptTopState);
+      LaserDiagnostics::logMeasurementProbeObservation(probeObservation, readAttemptTopState);
       resetMeasurementPlane(readResult.sentinel ? "distance_sentinel" : "distance_out_of_range", false);
       handleInvalidMeasurement(readResult.sentinel ? "distance_sentinel" : "distance_out_of_range");
       publishMeasurementSample(now, false, 0.0f, 0.0f, validityReason);
@@ -2107,7 +2015,7 @@ void LaserModule::taskLoop() {
               true,
               readResult.modbusResult,
               readAttemptTopState);
-      logMeasurementProbeObservation(probeObservation, readAttemptTopState);
+      LaserDiagnostics::logMeasurementProbeObservation(probeObservation, readAttemptTopState);
       resetMeasurementPlane("distance_invalid", false);
       handleInvalidMeasurement("distance_invalid");
       publishMeasurementSample(now, false, 0.0f, 0.0f, "DISTANCE_NONFINITE");
@@ -2147,7 +2055,7 @@ void LaserModule::taskLoop() {
               true,
               readResult.modbusResult,
               readAttemptTopState);
-      logMeasurementProbeObservation(probeObservation, readAttemptTopState);
+      LaserDiagnostics::logMeasurementProbeObservation(probeObservation, readAttemptTopState);
       resetMeasurementPlane("weight_invalid", false);
       handleInvalidMeasurement("weight_invalid");
       publishMeasurementSample(now, false, dist, 0.0f, "WEIGHT_INVALID");
@@ -2162,7 +2070,7 @@ void LaserModule::taskLoop() {
             true,
             readResult.modbusResult,
             readAttemptTopState);
-    logMeasurementProbeObservation(probeObservation, readAttemptTopState);
+    LaserDiagnostics::logMeasurementProbeObservation(probeObservation, readAttemptTopState);
     latestWeightKg = weight;
     invalidPresenceSamples = 0;
     publishMeasurementSample(now, true, dist, weight, nullptr);

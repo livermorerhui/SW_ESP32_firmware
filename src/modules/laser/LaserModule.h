@@ -8,6 +8,7 @@
 #include "modules/laser/BaselineEvidenceEvaluator.h"
 #include "modules/laser/CalibrationModelStore.h"
 #include "modules/laser/DeviceConfigStore.h"
+#include "modules/laser/LaserDiagnostics.h"
 #include "modules/laser/LaserMeasurementReader.h"
 #include "modules/laser/MeasurementAvailabilityProbePolicy.h"
 #include "modules/laser/MeasurementHealthStateMachine.h"
@@ -231,12 +232,6 @@ private:
       float weight,
       const char* reason);
   void logLatestMeasurementPlaneSummary(const char* trigger);
-  void logMeasurementProbeDecision(
-      const MeasurementProbeDecision& decision,
-      TopState topState) const;
-  void logMeasurementProbeObservation(
-      const MeasurementProbeObservation& observation,
-      TopState topState) const;
 
   float getMean(const float* values) const;
   float getStdDev(const float* values) const;
