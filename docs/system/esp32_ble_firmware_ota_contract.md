@@ -1,8 +1,14 @@
-# ESP32 BLE Firmware OTA Contract Draft
+# ESP32 BLE Firmware OTA Contract
 
-Last updated: 2026-04-22
+状态：当前正式
+文档类型：合同
+适用范围：SW APP 通过 BLE 更新 SonicWave ESP32-S3 N16R8 固件
+Owner：SW_ESP3_Firmware OTA / SW Android 设备接入
+更新日期：2026-05-18
+真相源：本文件、`src/ota/FirmwareOtaManager.*`、`src/transport/ble/BleTransport.*`
+证据源：host-side evaluator tests、PlatformIO build、Android JVM tests、OTA capture 产物
 
-This document is the draft contract for updating SonicWave ESP32-S3 N16R8 firmware from the SW APP over BLE. It is a cross-repo contract between `SW_ESP3_Firmware` and `SW/apps/android`.
+This document is the formal v1 contract for updating SonicWave ESP32-S3 N16R8 firmware from the SW APP over BLE. It is a cross-repo contract between `SW_ESP3_Firmware` and `SW/apps/android`.
 
 ## Scope
 
@@ -35,6 +41,8 @@ Out of scope for this contract:
 - Training session semantic changes.
 - Changing existing `CAP? / SNAPSHOT? / WAVE:* / EVT:*` meanings.
 - App APK update flow.
+- Backend firmware manifest distribution and forced update policy.
+- Signed manifest and rollback confirmation hardening; these are reserved for v2.
 
 ## Mature Mechanism Baseline
 
@@ -68,7 +76,7 @@ The OTA feature must not send firmware binary bytes through this service. The cu
 
 OTA must use a separate GATT service.
 
-Draft UUIDs:
+Frozen v1 UUIDs:
 
 | Item | Direction | UUID |
 | --- | --- | --- |
@@ -85,7 +93,13 @@ Characteristic properties:
 | data | write with response in v1 | Binary chunks. Write-with-response keeps sequencing explicit. |
 | status | notify | Progress, error, and reboot-ready state. |
 
-The v1 contract uses write-with-response for data chunks. A later optimization may add write-without-response plus explicit window ACK, but only after v1 reliability is proven.
+The v1 contract uses write-with-response for data chunks. v2 may explicitly opt in to write-without-response via `transfer_mode=write_command`; v1 remains the default.
+
+v2 characteristic update:
+
+| Characteristic | Additional property | Compatibility |
+| --- | --- | --- |
+| data | write without response | Optional. Android must request `transfer_mode=write_command`; otherwise the data path behaves as v1 `write_request`. |
 
 ## Firmware OTA State Machine
 
@@ -128,6 +142,26 @@ Required requests:
 {"type":"ota_begin","protocol":1,"version":"1.0.1","build_id":"20260422.1","board":"sonicwave_esp32s3_n16r8","size":1016032,"sha256":"<64 hex>","chunk_size":244}
 ```
 
+v2 optional begin fields:
+
+```json
+{"type":"ota_begin","p":1,"v":"1.0.1","b":"20260422.1","bd":"sonicwave_esp32s3_n16r8","s":1016032,"h":"<64 hex>","c":234,"m":"wc","w":4,"i":4,"a":16,"ap":"wa","bp":"rsc"}
+```
+
+Defaults:
+
+- `transfer_mode`: `wr`
+- `window_size`: `4`
+- `max_inflight_chunks`: `window_size`
+- `ack_interval_chunks`: `16`
+- `ack_policy`: `window_ack`
+- `busy_policy`: `retry_same_chunk`
+
+Runtime short aliases:
+
+- `ap=wa` means `ack_policy=window_ack`
+- `bp=rsc` means `busy_policy=retry_same_chunk`
+
 ```json
 {"type":"ota_end","total_chunks":4165,"size":1016032,"sha256":"<64 hex>"}
 ```
@@ -147,26 +181,36 @@ Required requests:
 Required status notifications:
 
 ```json
-{"type":"ota_status","state":"PREPARED","slot":"app1","max_size":6553600,"chunk_size":244}
+{"type":"ota_status","st":"PREPARED","r":0,"s":1016032}
 ```
 
 ```json
-{"type":"ota_progress","state":"RECEIVING","received":524288,"size":1016032,"percent":51}
+{"type":"ota_progress","st":"RECEIVING","r":524288,"s":1016032,"p":51}
+```
+
+v2 window acknowledgement:
+
+```json
+{"type":"ota_window_ack","m":"wc","as":15,"n":16,"r":3744,"e":3744,"w":4,"i":4,"a":16,"ap":"window_ack","bp":"retry_same_chunk"}
 ```
 
 ```json
-{"type":"ota_status","state":"VERIFYING"}
+{"type":"ota_status","st":"VERIFYING","r":1016032,"s":1016032}
 ```
 
 ```json
-{"type":"ota_status","state":"READY_TO_REBOOT","next_slot":"app1"}
+{"type":"ota_status","st":"READY_TO_REBOOT","r":1016032,"s":1016032}
 ```
 
 ```json
 {"type":"ota_error","code":"VERIFY_FAILED","message":"sha256 mismatch"}
 ```
 
-Control JSON should stay below 512 bytes. Unknown control fields must be ignored. Unknown required `type` values must return `UNSUPPORTED_COMMAND`.
+Control JSON should stay below 244 bytes on the negotiated control characteristic path. Runtime `ota_status` notify frames must also stay below the negotiated ATT payload budget, normally 244 bytes at MTU 247. `ota_status` is therefore a compact phase/status frame; detailed maintenance evidence belongs to `ota_query`. Unknown control fields must be ignored. Unknown required `type` values must return `UNSUPPORTED_COMMAND`.
+
+`ota_query` must include current transfer mode, supported transfer modes, window settings, `max_inflight_chunks`, `ack_policy`, `busy_policy`, `next_seq`, `received`, and `expected_offset` so Android can distinguish v1 fallback from v2 high-throughput mode. Short keys may be used for the runtime status path as long as Android accepts both aliases. v2 does not support byte-level resume; interrupted transfers are aborted and retried from the beginning.
+
+For v2 high-throughput mode, `ota_window_ack` is a credit confirmation, not only a UI progress event. Android may only advance the next window after the expected `next_seq` and `expected_offset` are acknowledged. If Android receives a local GATT busy / not accepted result, it must retry the same chunk and must not advance `seq` or `offset`.
 
 ## Data Frames
 
@@ -190,6 +234,24 @@ Rules:
 
 Recommended initial chunk size: `min(244, negotiated_mtu - 13)`.
 
+## Release Manifest
+
+v1 firmware package source is a fixed Release URL, not backend distribution.
+
+Each firmware release must publish:
+
+- `firmware.bin`
+- `firmware.sha256`
+- `firmware_manifest.json`
+
+Minimum manifest:
+
+```json
+{"board":"sonicwave_esp32s3_n16r8","version":"v1.0.1","build_id":"<git sha>","size":1016032,"sha256":"<64 hex>","url":"firmware.bin","protocol":1}
+```
+
+Android must verify manifest schema and sha256 before starting BLE transfer.
+
 ## Error Codes
 
 All user-facing Android text must be Chinese first, with the code in parentheses when useful.
@@ -208,6 +270,16 @@ All user-facing Android text must be Chinese first, with the code in parentheses
 | `BOOT_SWITCH_FAILED` | `esp_ota_set_boot_partition` failed. | 设置启动分区失败（BOOT_SWITCH_FAILED） |
 | `BLE_DISCONNECTED` | BLE disconnected during OTA. | 蓝牙连接中断（BLE_DISCONNECTED） |
 | `USER_CANCEL` | User canceled OTA. | 用户已取消升级（USER_CANCEL） |
+| `UNSUPPORTED_TRANSFER_MODE` | Requested transfer mode is not supported. | 升级模式不支持（UNSUPPORTED_TRANSFER_MODE） |
+| `GATT_BUSY` | Android local GATT write queue is busy. | 蓝牙写入繁忙（GATT_BUSY） |
+| `RX_QUEUE_FULL` | ESP32 OTA receive queue is full. | 设备接收队列已满（RX_QUEUE_FULL） |
+| `SEQ_DUPLICATE_UNSUPPORTED` | Duplicate chunk cannot be idempotently confirmed. | 固件分片重复且无法确认（SEQ_DUPLICATE_UNSUPPORTED） |
+| `WINDOW_TIMEOUT` | Android did not receive a required window ACK in time. | 窗口确认超时（WINDOW_TIMEOUT） |
+| `WINDOW_OVERFLOW` | Window settings or received chunks exceed allowed limits. | 窗口数据超限（WINDOW_OVERFLOW） |
+| `VERSION_CONFIRM_FAILED` | Android could not confirm post-reboot identity. | 版本确认失败（VERSION_CONFIRM_FAILED） |
+| `MANIFEST_SIGNATURE_INVALID` | Release manifest signature is invalid. | 固件签名无效（MANIFEST_SIGNATURE_INVALID） |
+| `MANIFEST_EXPIRED` | Release manifest is expired. | 固件签名已过期（MANIFEST_EXPIRED） |
+| `ROLLBACK_CONFIRM_FAILED` | New firmware failed rollback confirmation. | 回退确认失败（ROLLBACK_CONFIRM_FAILED） |
 | `INTERNAL_ERROR` | Unexpected firmware error. | 设备内部错误（INTERNAL_ERROR） |
 
 ## Android Ownership Rules
@@ -240,10 +312,10 @@ After reboot, Android must reconnect through the normal business BLE path and ca
 `CAP?` should eventually include:
 
 ```text
-ACK:CAP fw=<version> proto=<proto> board=sonicwave_esp32s3_n16r8 build=<build_id> ota_slot=<app0|app1>
+ACK:CAP fw=<version> build=<build_id> board=sonicwave_esp32s3_n16r8 proto=<proto> platform_model=<...> laser_installed=<0|1> leave_stop_supported=1
 ```
 
-Until these fields are implemented, OTA acceptance cannot be marked complete by version evidence alone.
+`ota_slot` must not be added to `ACK:CAP`; it is mutable maintenance/runtime evidence, not bootstrap identity. Slot evidence belongs to OTA `ota_query`, OTA status notify, or a future dedicated runtime field. OTA acceptance cannot be marked complete without post-reboot firmware identity evidence and OTA state evidence.
 
 ## Validation Matrix
 
@@ -262,10 +334,9 @@ Minimum validation before release:
 | Oversized image | Rejects with `IMAGE_TOO_LARGE`. |
 | APP process restart during OTA | Device reports recoverable/failed OTA state via `ota_query`. |
 
-## Open Decisions
+## v2 Hardening
 
-- Exact OTA UUIDs may be changed before implementation, but must be frozen before Android and firmware coding starts.
-- Whether to expose OTA entry only in debug/settings first or in production settings.
-- Whether firmware artifacts are selected from local file, backend manifest, or fixed release URL in v1.
-- Whether v1 requires signed manifests in addition to sha256.
-- Whether rollback confirmation APIs should be enabled for post-boot validation in a later phase.
+- Optional write-without-response transfer window with `ota_window_ack`; v1 remains the default fallback.
+- Rollback confirmation: new firmware marks itself valid only after startup self-check has completed.
+- Signed manifest verification.
+- Backend manifest distribution / gray release.

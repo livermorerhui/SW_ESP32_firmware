@@ -124,6 +124,8 @@ public:
 
   bool operator==(const char* other) const { return data == (other ? other : ""); }
   bool operator!=(const char* other) const { return !(*this == other); }
+  bool operator==(const String& other) const { return data == other.data; }
+  bool operator!=(const String& other) const { return data != other.data; }
 
   String& operator=(const char* value) {
     data = value ? value : "";
@@ -167,9 +169,19 @@ inline String operator+(const char* lhs, const String& rhs) {
 
 struct SerialStub {
   void printf(const char*, ...) {}
+  void println(const char*) {}
+  void println(const String&) {}
 };
 
 static SerialStub Serial;
+
+inline void delay(unsigned long) {}
+
+struct EspStub {
+  void restart() {}
+};
+
+static EspStub ESP;
 """
 
 
@@ -177,6 +189,46 @@ PREFERENCES_STUB = r"""
 #pragma once
 
 class Preferences {};
+"""
+
+
+UPDATE_STUB = r"""
+#pragma once
+#include <cstddef>
+#include <cstdint>
+
+#define U_FLASH 0
+
+class UpdateStub {
+public:
+  bool begin(size_t, int) { return true; }
+  size_t write(const uint8_t*, size_t length) { return length; }
+  bool end(bool = true) { return true; }
+  bool isFinished() const { return true; }
+  void abort() {}
+};
+
+static UpdateStub Update;
+"""
+
+
+MBEDTLS_SHA256_STUB = r"""
+#pragma once
+#include <cstddef>
+#include <cstdint>
+
+typedef struct {
+  uint8_t bytes[32];
+} mbedtls_sha256_context;
+
+inline void mbedtls_sha256_init(mbedtls_sha256_context*) {}
+inline void mbedtls_sha256_free(mbedtls_sha256_context*) {}
+inline int mbedtls_sha256_starts(mbedtls_sha256_context*, int) { return 0; }
+inline int mbedtls_sha256_update(mbedtls_sha256_context*, const uint8_t*, size_t) { return 0; }
+inline int mbedtls_sha256_finish(mbedtls_sha256_context*, uint8_t output[32]) {
+  for (size_t i = 0; i < 32; ++i) output[i] = 0;
+  return 0;
+}
 """
 
 
@@ -189,6 +241,7 @@ TEST_MAIN = r"""
 #include "core/ProtocolCodec.h"
 #include "GoldenFrames.h"
 #include "HubAckBuilder.h"
+#include "ota/FirmwareOtaManager.h"
 #include "modules/laser/BaselineEvidenceEvaluator.h"
 #include "modules/laser/CalibrationRuntime.h"
 #include "modules/laser/LaserStableWindow.h"
@@ -1106,11 +1159,19 @@ void test_protocol_snapshot_contract_spec_required_slim_fields() {
 }
 
 void test_protocol_ack_cap_contract_stays_bootstrap_truth() {
-  const String encoded = HubAckBuilder::cap("SW-HUB-1.0.0", 1, PlatformModel::PLUS, true);
+  const String encoded = HubAckBuilder::cap(
+      "SW-HUB-1.0.0",
+      "dev-local",
+      "sonicwave_esp32s3_n16r8",
+      1,
+      PlatformModel::PLUS,
+      true);
 
   expect_reason(encoded.c_str(), GoldenFrames::ack_cap_plus_v1);
   expect_contains(encoded, "ACK:CAP ");
   expect_contains(encoded, "fw=SW-HUB-1.0.0");
+  expect_contains(encoded, "build=dev-local");
+  expect_contains(encoded, "board=sonicwave_esp32s3_n16r8");
   expect_contains(encoded, "proto=1");
   expect_contains(encoded, "platform_model=PLUS");
   expect_contains(encoded, "laser_installed=1");
@@ -1118,12 +1179,19 @@ void test_protocol_ack_cap_contract_stays_bootstrap_truth() {
   expect_not_contains(encoded, "measurement_health=");
   expect_not_contains(encoded, "degraded_start_available=");
   expect_not_contains(encoded, "degraded_start_enabled=");
+  expect_not_contains(encoded, "ota_slot=");
   assert(encoded.length() + 1 <= ProtocolCodec::kCapTruthPayloadBudgetBytes);
 }
 
 void test_protocol_golden_frame_fixture_core_cases() {
   {
-    const String encoded = HubAckBuilder::cap("SW-HUB-1.0.0", 1, PlatformModel::PLUS, true);
+    const String encoded = HubAckBuilder::cap(
+        "SW-HUB-1.0.0",
+        "dev-local",
+        "sonicwave_esp32s3_n16r8",
+        1,
+        PlatformModel::PLUS,
+        true);
     expect_reason(encoded.c_str(), GoldenFrames::ack_cap_plus_v1);
   }
 
@@ -1219,14 +1287,15 @@ void test_protocol_encode_stop_and_safety_contract() {
 }
 
 void test_hub_ack_builder_core_contracts() {
-  String encoded = HubAckBuilder::cap("1.2.3", 1, PlatformModel::PLUS, true);
-  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 proto=1 platform_model=PLUS laser_installed=1 leave_stop_supported=1");
+  String encoded = HubAckBuilder::cap("1.2.3", "build-1", "sonicwave_esp32s3_n16r8", 1, PlatformModel::PLUS, true);
+  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 build=build-1 board=sonicwave_esp32s3_n16r8 proto=1 platform_model=PLUS laser_installed=1 leave_stop_supported=1");
 
-  encoded = HubAckBuilder::cap("1.2.3", 1, PlatformModel::BASE, false);
-  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 proto=1 platform_model=BASE laser_installed=0 leave_stop_supported=1");
+  encoded = HubAckBuilder::cap("1.2.3", "build-1", "sonicwave_esp32s3_n16r8", 1, PlatformModel::BASE, false);
+  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 build=build-1 board=sonicwave_esp32s3_n16r8 proto=1 platform_model=BASE laser_installed=0 leave_stop_supported=1");
   expect_not_contains(encoded, "measurement_health=");
   expect_not_contains(encoded, "degraded_start_available=");
   expect_not_contains(encoded, "degraded_start_enabled=");
+  expect_not_contains(encoded, "ota_slot=");
   assert(encoded.length() + 1 <= ProtocolCodec::kCapTruthPayloadBudgetBytes);
 
   encoded = HubAckBuilder::deviceConfig(PlatformModel::BASE, false);
@@ -1315,6 +1384,71 @@ void test_hub_ack_builder_safety_contracts() {
   expect_reason(encoded.c_str(), "ACK:MOTION_SAMPLING enabled=0 fall_action_suppressed=0");
 }
 
+void test_firmware_ota_begin_parser_and_data_frame() {
+  FirmwareOtaBeginRequest request{};
+  FirmwareOtaError error = FirmwareOtaError::NONE;
+  const bool ok = FirmwareOtaManager::parseBeginRequest(
+      "{\"type\":\"ota_begin\",\"protocol\":1,\"version\":\"1.0.1\",\"build_id\":\"build-1\",\"board\":\"sonicwave_esp32s3_n16r8\",\"size\":12,\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"chunk_size\":244}",
+      request,
+      error);
+  assert(ok);
+  assert(error == FirmwareOtaError::NONE);
+  assert(request.protocol == 1);
+  expect_reason(request.version.c_str(), "1.0.1");
+  expect_reason(request.buildId.c_str(), "build-1");
+  expect_reason(request.board.c_str(), "sonicwave_esp32s3_n16r8");
+  assert(request.size == 12);
+  assert(request.chunkSize == 244);
+
+  FirmwareOtaBeginRequest v2Request{};
+  error = FirmwareOtaError::NONE;
+  const bool v2Ok = FirmwareOtaManager::parseBeginRequest(
+      "{\"type\":\"ota_begin\",\"p\":1,\"v\":\"SW-ESP32-1.0.2\",\"b\":\"ota-speed-v1\",\"bd\":\"sonicwave_esp32s3_n16r8\",\"s\":1063216,\"h\":\"5ce133b13ddce445bf8b596ff9e7a294adc63102db3d8e944a6eaf1d0213df0d\",\"c\":234,\"m\":\"wc\",\"w\":4,\"a\":16}",
+      v2Request,
+      error);
+  assert(v2Ok);
+  assert(error == FirmwareOtaError::NONE);
+  assert(v2Request.protocol == 1);
+  expect_reason(v2Request.version.c_str(), "SW-ESP32-1.0.2");
+  expect_reason(v2Request.buildId.c_str(), "ota-speed-v1");
+  expect_reason(v2Request.board.c_str(), "sonicwave_esp32s3_n16r8");
+  assert(v2Request.size == 1063216);
+  assert(v2Request.chunkSize == 234);
+  assert(v2Request.transferMode == FirmwareOtaTransferMode::WRITE_COMMAND);
+  assert(v2Request.windowSize == 4);
+  assert(v2Request.ackIntervalChunks == 16);
+
+  const uint8_t raw[] = {
+      0x02, 0x00, 0x00, 0x00,
+      0x0c, 0x00, 0x00, 0x00,
+      0x03, 0x00,
+      0xaa, 0xbb, 0xcc,
+  };
+  FirmwareOtaDataFrame frame{};
+  assert(FirmwareOtaManager::parseDataFrame(raw, sizeof(raw), frame));
+  assert(frame.seq == 2);
+  assert(frame.offset == 12);
+  assert(frame.length == 3);
+  assert(frame.payload[0] == 0xaa);
+  assert(frame.payload[2] == 0xcc);
+}
+
+void test_firmware_ota_runtime_status_frames_fit_att_budget() {
+  constexpr size_t kAttPayloadBudget = 244;
+  const char* states[] = {
+      "PREPARED",
+      "VERIFYING",
+      "READY_TO_REBOOT",
+      "REBOOTING",
+  };
+  for (const char* state : states) {
+    String frame = "{\"type\":\"ota_status\",\"st\":\"";
+    frame += state;
+    frame += "\",\"r\":1066992,\"s\":1066992}";
+    assert(frame.length() <= kAttPayloadBudget);
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -1359,6 +1493,8 @@ int main() {
   test_hub_ack_builder_core_contracts();
   test_hub_ack_builder_calibration_contracts();
   test_hub_ack_builder_safety_contracts();
+  test_firmware_ota_begin_parser_and_data_frame();
+  test_firmware_ota_runtime_status_frames_fit_att_budget();
   std::cout << "evaluator unit tests passed\n";
   return 0;
 }
@@ -1459,6 +1595,9 @@ def run() -> None:
     temp = Path(temp_dir)
     (temp / "Arduino.h").write_text(ARDUINO_STUB, encoding="utf-8")
     (temp / "Preferences.h").write_text(PREFERENCES_STUB, encoding="utf-8")
+    (temp / "Update.h").write_text(UPDATE_STUB, encoding="utf-8")
+    (temp / "mbedtls").mkdir()
+    (temp / "mbedtls/sha256.h").write_text(MBEDTLS_SHA256_STUB, encoding="utf-8")
     (temp / "GoldenFrames.h").write_text(golden_frame_constants(golden_frames), encoding="utf-8")
     main_cpp = temp / "evaluator_tests.cpp"
     main_cpp.write_text(TEST_MAIN, encoding="utf-8")
@@ -1484,6 +1623,7 @@ def run() -> None:
       str(ROOT / "src/modules/laser/StopOutcomeSummaryEvaluator.cpp"),
       str(ROOT / "src/core/RuntimeProtectionPolicy.cpp"),
       str(ROOT / "src/core/SafetyActionContractEvaluator.cpp"),
+      str(ROOT / "src/ota/FirmwareOtaManager.cpp"),
       "-o",
       str(binary),
     ]

@@ -44,7 +44,20 @@ jobs:
           fi
 
           cp "$firmware" release_assets/firmware.bin
-          sha256sum release_assets/firmware.bin > release_assets/firmware.sha256
+          firmware_sha=$(sha256sum release_assets/firmware.bin | awk '{print $1}')
+          firmware_size=$(wc -c < release_assets/firmware.bin | tr -d ' ')
+          echo "$firmware_sha  firmware.bin" > release_assets/firmware.sha256
+          cat > release_assets/firmware_manifest.json <<MANIFEST
+          {
+            "board": "sonicwave_esp32s3_n16r8",
+            "version": "${GITHUB_REF_NAME}",
+            "build_id": "${GITHUB_SHA}",
+            "size": ${firmware_size},
+            "sha256": "${firmware_sha}",
+            "url": "firmware.bin",
+            "protocol": 1
+          }
+          MANIFEST
 
           if [ -f docs/test_plan.md ]; then
             test_plan_ref="- Test Plan: docs/test_plan.md"
@@ -104,3 +117,13 @@ jobs:
           asset_path: release_assets/firmware.sha256
           asset_name: firmware.sha256
           asset_content_type: text/plain
+
+      - name: Upload firmware_manifest.json
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: release_assets/firmware_manifest.json
+          asset_name: firmware_manifest.json
+          asset_content_type: application/json
