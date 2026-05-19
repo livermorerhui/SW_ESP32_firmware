@@ -8,6 +8,7 @@
 #include "HubAckBuilder.h"
 #include "modules/wave/WaveModule.h"
 #include "modules/laser/LaserModule.h"
+#include "ota/FirmwareRollbackConfirmation.h"
 #include "transport/ble/BleTransport.h"
 
 static EventBus g_eventBus;
@@ -82,6 +83,8 @@ public:
             topStateName(snapshot.topState));
         outAck = HubAckBuilder::cap(
             FW_VER,
+            FW_BUILD_ID,
+            FW_BOARD_ID,
             PROTO_VER,
             l->platformModel(),
             l->laserInstalled());
@@ -349,7 +352,9 @@ void setup() {
   g_cmdBus.setHandler(&g_handler);
 
   g_ble.setDisconnectSink(&g_handler);
+  g_ble.setPlatformSnapshotOwner(&g_fsm);
   waitForMeasurementStartupResolved();
+  FirmwareRollbackConfirmation::confirmIfPending();
   g_bleDeviceName = buildBleDeviceName(g_laser.platformModel());
   g_ble.begin(&g_cmdBus,
       g_bleDeviceName.c_str(),
