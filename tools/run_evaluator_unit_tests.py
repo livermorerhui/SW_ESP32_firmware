@@ -192,23 +192,82 @@ class Preferences {};
 """
 
 
-UPDATE_STUB = r"""
+ESP_ERR_STUB = r"""
+#pragma once
+
+typedef int esp_err_t;
+
+#define ESP_OK 0
+"""
+
+
+ESP_HEAP_CAPS_STUB = r"""
+#pragma once
+#include <cstddef>
+
+#define MALLOC_CAP_8BIT 0x01
+
+inline size_t heap_caps_get_free_size(int) {
+  return 64U * 1024U;
+}
+"""
+
+
+ESP_PARTITION_STUB = r"""
+#pragma once
+#include <cstdint>
+
+typedef struct {
+  const char* label;
+  uint8_t subtype;
+  uint32_t address;
+  uint32_t size;
+} esp_partition_t;
+"""
+
+
+ESP_OTA_OPS_STUB = r"""
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include "esp_err.h"
+#include "esp_partition.h"
 
-#define U_FLASH 0
+typedef int esp_ota_handle_t;
 
-class UpdateStub {
-public:
-  bool begin(size_t, int) { return true; }
-  size_t write(const uint8_t*, size_t length) { return length; }
-  bool end(bool = true) { return true; }
-  bool isFinished() const { return true; }
-  void abort() {}
-};
+typedef enum {
+  ESP_OTA_IMG_UNDEFINED = 0,
+  ESP_OTA_IMG_VALID = 1,
+  ESP_OTA_IMG_INVALID = 2,
+  ESP_OTA_IMG_ABORTED = 3,
+  ESP_OTA_IMG_NEW = 4,
+  ESP_OTA_IMG_PENDING_VERIFY = 5,
+  ESP_OTA_IMG_INVALID_ROLLBACK = 6,
+} esp_ota_img_states_t;
 
-static UpdateStub Update;
+static esp_partition_t running_partition_stub{"app0", 16, 0x10000, 0x640000};
+static esp_partition_t update_partition_stub{"app1", 17, 0x650000, 0x640000};
+static esp_partition_t boot_partition_stub{"app0", 16, 0x10000, 0x640000};
+
+inline const esp_partition_t* esp_ota_get_running_partition() { return &running_partition_stub; }
+inline const esp_partition_t* esp_ota_get_next_update_partition(const void*) { return &update_partition_stub; }
+inline const esp_partition_t* esp_ota_get_boot_partition() { return &boot_partition_stub; }
+inline esp_err_t esp_ota_begin(const esp_partition_t*, size_t, esp_ota_handle_t* handle) {
+  if (handle) *handle = 1;
+  return ESP_OK;
+}
+inline esp_err_t esp_ota_write(esp_ota_handle_t, const void*, size_t) { return ESP_OK; }
+inline esp_err_t esp_ota_end(esp_ota_handle_t) { return ESP_OK; }
+inline esp_err_t esp_ota_set_boot_partition(const esp_partition_t* partition) {
+  if (partition) boot_partition_stub = *partition;
+  return ESP_OK;
+}
+inline esp_err_t esp_ota_abort(esp_ota_handle_t) { return ESP_OK; }
+inline esp_err_t esp_ota_get_state_partition(const esp_partition_t*, esp_ota_img_states_t* state) {
+  if (state) *state = ESP_OTA_IMG_VALID;
+  return ESP_OK;
+}
+inline esp_err_t esp_ota_mark_app_valid_cancel_rollback() { return ESP_OK; }
 """
 
 
@@ -1595,7 +1654,10 @@ def run() -> None:
     temp = Path(temp_dir)
     (temp / "Arduino.h").write_text(ARDUINO_STUB, encoding="utf-8")
     (temp / "Preferences.h").write_text(PREFERENCES_STUB, encoding="utf-8")
-    (temp / "Update.h").write_text(UPDATE_STUB, encoding="utf-8")
+    (temp / "esp_err.h").write_text(ESP_ERR_STUB, encoding="utf-8")
+    (temp / "esp_heap_caps.h").write_text(ESP_HEAP_CAPS_STUB, encoding="utf-8")
+    (temp / "esp_partition.h").write_text(ESP_PARTITION_STUB, encoding="utf-8")
+    (temp / "esp_ota_ops.h").write_text(ESP_OTA_OPS_STUB, encoding="utf-8")
     (temp / "mbedtls").mkdir()
     (temp / "mbedtls/sha256.h").write_text(MBEDTLS_SHA256_STUB, encoding="utf-8")
     (temp / "GoldenFrames.h").write_text(golden_frame_constants(golden_frames), encoding="utf-8")
@@ -1623,6 +1685,7 @@ def run() -> None:
       str(ROOT / "src/modules/laser/StopOutcomeSummaryEvaluator.cpp"),
       str(ROOT / "src/core/RuntimeProtectionPolicy.cpp"),
       str(ROOT / "src/core/SafetyActionContractEvaluator.cpp"),
+      str(ROOT / "src/ota/FirmwareRollbackConfirmation.cpp"),
       str(ROOT / "src/ota/FirmwareOtaManager.cpp"),
       "-o",
       str(binary),

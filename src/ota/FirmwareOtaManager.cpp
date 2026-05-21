@@ -1,7 +1,6 @@
 #include "FirmwareOtaManager.h"
+#include "ota/FirmwareRollbackConfirmation.h"
 #include <ctype.h>
-
-static constexpr size_t kOtaPartitionCapacityBytes = 6400UL * 1024UL;
 
 static String escapeJson(const String& value) {
   String out;
@@ -106,10 +105,35 @@ FirmwareOtaError FirmwareOtaManager::handleBegin(const FirmwareOtaBeginRequest& 
   negotiatedAckPolicy = request.ackPolicy;
   negotiatedBusyPolicy = request.busyPolicy;
 
-  if (!Update.begin(targetSize, U_FLASH)) {
-    fail(FirmwareOtaError::INTERNAL_ERROR, "update_begin_failed");
+  runningPartition = esp_ota_get_running_partition();
+  updatePartition = esp_ota_get_next_update_partition(nullptr);
+  bootPartition = esp_ota_get_boot_partition();
+  if (!runningPartition || !updatePartition || updatePartition == runningPartition) {
+    fail(FirmwareOtaError::INTERNAL_ERROR, "partition_select_failed");
     return FirmwareOtaError::INTERNAL_ERROR;
   }
+  if (targetSize > updatePartition->size) {
+    fail(FirmwareOtaError::IMAGE_TOO_LARGE, "image_exceeds_update_partition");
+    return FirmwareOtaError::IMAGE_TOO_LARGE;
+  }
+  Serial.printf("[OTA] event=partition_select running=%s running_subtype=%u running_addr=0x%lx boot=%s update=%s update_subtype=%u update_addr=0x%lx update_size=%u image_size=%u\n",
+      runningPartition->label,
+      static_cast<unsigned>(runningPartition->subtype),
+      static_cast<unsigned long>(runningPartition->address),
+      bootPartition ? bootPartition->label : "unknown",
+      updatePartition->label,
+      static_cast<unsigned>(updatePartition->subtype),
+      static_cast<unsigned long>(updatePartition->address),
+      static_cast<unsigned>(updatePartition->size),
+      static_cast<unsigned>(targetSize));
+
+  const esp_err_t beginErr = esp_ota_begin(updatePartition, targetSize, &otaHandle);
+  if (beginErr != ESP_OK) {
+    Serial.printf("[OTA] event=ota_begin_failed err=%d\n", static_cast<int>(beginErr));
+    fail(FirmwareOtaError::INTERNAL_ERROR, "esp_ota_begin_failed");
+    return FirmwareOtaError::INTERNAL_ERROR;
+  }
+  otaHandleActive = true;
   resetSha256();
 
   otaState = FirmwareOtaState::PREPARED;
@@ -147,9 +171,18 @@ FirmwareOtaError FirmwareOtaManager::acceptDataFrame(const FirmwareOtaDataFrame&
   }
 
   otaState = FirmwareOtaState::RECEIVING;
-  const size_t written = Update.write(const_cast<uint8_t*>(frame.payload), frame.length);
-  if (written != frame.length) {
-    fail(FirmwareOtaError::WRITE_FAILED, "write_failed");
+  if (!otaHandleActive || !updatePartition) {
+    fail(FirmwareOtaError::WRITE_FAILED, "ota_handle_missing");
+    return FirmwareOtaError::WRITE_FAILED;
+  }
+  const esp_err_t writeErr = esp_ota_write(otaHandle, frame.payload, frame.length);
+  if (writeErr != ESP_OK) {
+    Serial.printf("[OTA] event=ota_write_failed err=%d seq=%u offset=%u len=%u\n",
+        static_cast<int>(writeErr),
+        static_cast<unsigned>(frame.seq),
+        static_cast<unsigned>(frame.offset),
+        static_cast<unsigned>(frame.length));
+    fail(FirmwareOtaError::WRITE_FAILED, "esp_ota_write_failed");
     return FirmwareOtaError::WRITE_FAILED;
   }
   updateSha256(frame.payload, frame.length);
@@ -176,14 +209,31 @@ FirmwareOtaError FirmwareOtaManager::handleEnd(size_t expectedSize, const String
     fail(FirmwareOtaError::VERIFY_FAILED, "sha256_mismatch");
     return FirmwareOtaError::VERIFY_FAILED;
   }
-  if (!Update.end(true)) {
-    fail(FirmwareOtaError::VERIFY_FAILED, "update_end_failed");
+  if (!otaHandleActive || !updatePartition) {
+    fail(FirmwareOtaError::VERIFY_FAILED, "ota_handle_missing");
     return FirmwareOtaError::VERIFY_FAILED;
   }
-  if (!Update.isFinished()) {
-    fail(FirmwareOtaError::VERIFY_FAILED, "update_not_finished");
+  const esp_err_t endErr = esp_ota_end(otaHandle);
+  otaHandleActive = false;
+  otaHandle = 0;
+  if (endErr != ESP_OK) {
+    Serial.printf("[OTA] event=ota_end_failed err=%d\n", static_cast<int>(endErr));
+    fail(FirmwareOtaError::VERIFY_FAILED, "esp_ota_end_failed");
     return FirmwareOtaError::VERIFY_FAILED;
   }
+  const esp_err_t bootErr = esp_ota_set_boot_partition(updatePartition);
+  if (bootErr != ESP_OK) {
+    Serial.printf("[OTA] event=boot_partition_set result=failure err=%d target=%s\n",
+        static_cast<int>(bootErr),
+        updatePartition->label);
+    fail(FirmwareOtaError::BOOT_SWITCH_FAILED, "esp_ota_set_boot_partition_failed");
+    return FirmwareOtaError::BOOT_SWITCH_FAILED;
+  }
+  bootPartition = esp_ota_get_boot_partition();
+  Serial.printf("[OTA] event=boot_partition_set result=success target=%s subtype=%u addr=0x%lx\n",
+      updatePartition->label,
+      static_cast<unsigned>(updatePartition->subtype),
+      static_cast<unsigned long>(updatePartition->address));
 
   otaState = FirmwareOtaState::READY_TO_REBOOT;
   Serial.printf("[OTA] event=ready_to_reboot version=%s build=%s size=%u\n",
@@ -234,9 +284,6 @@ FirmwareOtaError FirmwareOtaManager::validatePreconditions(const FirmwareOtaBegi
   if (request.board != FW_BOARD_ID) {
     return FirmwareOtaError::UNSUPPORTED_BOARD;
   }
-  if (request.size > kOtaPartitionCapacityBytes) {
-    return FirmwareOtaError::IMAGE_TOO_LARGE;
-  }
   if (request.transferMode != FirmwareOtaTransferMode::WRITE_REQUEST &&
       request.transferMode != FirmwareOtaTransferMode::WRITE_COMMAND) {
     return FirmwareOtaError::UNSUPPORTED_TRANSFER_MODE;
@@ -279,7 +326,14 @@ void FirmwareOtaManager::abortUpdateIfNeeded(FirmwareOtaState previousState, con
   if (!shouldAbortUpdateOnFailure(previousState)) {
     return;
   }
-  Update.abort();
+  if (otaHandleActive) {
+    const esp_err_t abortErr = esp_ota_abort(otaHandle);
+    Serial.printf("[OTA] event=esp_ota_abort result=%s err=%d\n",
+        abortErr == ESP_OK ? "success" : "failure",
+        static_cast<int>(abortErr));
+    otaHandleActive = false;
+    otaHandle = 0;
+  }
   Serial.printf("[OTA] event=abort_update reason=%s previous_state=%s received=%u size=%u\n",
       detail ? detail : "unknown",
       stateName(previousState),
@@ -347,12 +401,30 @@ String FirmwareOtaManager::compactStateStatusJson() const {
   return json;
 }
 
+String FirmwareOtaManager::evidenceStatusJson() const {
+  String json = "{\"type\":\"ota_status\",\"st\":\"";
+  json += stateName(otaState);
+  json += "\"";
+  json += compactPartitionJson("run", runningPartition ? runningPartition : esp_ota_get_running_partition());
+  json += compactPartitionJson("boot", bootPartition ? bootPartition : esp_ota_get_boot_partition());
+  json += compactPartitionJson("upd", updatePartition);
+  const bool includeRollback = FirmwareRollbackConfirmation::hasEvidence() &&
+      (otaState == FirmwareOtaState::IDLE || otaState == FirmwareOtaState::FAILED);
+  if (includeRollback) {
+    const String rollbackEvidence = FirmwareRollbackConfirmation::evidenceJson();
+    json += ",";
+    json += rollbackEvidence;
+  }
+  json += "}";
+  return json;
+}
+
 void FirmwareOtaManager::emitStateStatus() {
   emitStatus(compactStateStatusJson());
 }
 
 void FirmwareOtaManager::emitQueryStatus() {
-  emitStatus(baseStatusJson());
+  emitStatus(evidenceStatusJson());
 }
 
 void FirmwareOtaManager::emitProgressIfNeeded(bool force) {
@@ -427,6 +499,11 @@ void FirmwareOtaManager::resetSession() {
   receivedBytes = 0;
   lastProgressPercent = 0;
   lastAckSeq = 0;
+  otaHandle = 0;
+  runningPartition = nullptr;
+  updatePartition = nullptr;
+  bootPartition = nullptr;
+  otaHandleActive = false;
   resetSha256();
 }
 
@@ -638,4 +715,34 @@ const char* FirmwareOtaManager::transferModeName(FirmwareOtaTransferMode mode) {
       return "wc";
   }
   return "wr";
+}
+
+String FirmwareOtaManager::partitionJson(const char* key, const esp_partition_t* partition) {
+  if (!key || !partition) return "";
+  String json = ",\"";
+  json += key;
+  json += "\":{\"label\":\"";
+  json += escapeJson(partition->label);
+  json += "\",\"subtype\":";
+  json += static_cast<unsigned long>(partition->subtype);
+  json += ",\"addr\":";
+  json += static_cast<unsigned long>(partition->address);
+  json += ",\"size\":";
+  json += static_cast<unsigned long>(partition->size);
+  json += "}";
+  return json;
+}
+
+String FirmwareOtaManager::compactPartitionJson(const char* key, const esp_partition_t* partition) {
+  if (!key || !partition) return "";
+  String json = ",\"";
+  json += key;
+  json += "\":{\"l\":\"";
+  json += escapeJson(partition->label);
+  json += "\",\"s\":";
+  json += static_cast<unsigned long>(partition->subtype);
+  json += ",\"a\":";
+  json += static_cast<unsigned long>(partition->address);
+  json += "}";
+  return json;
 }

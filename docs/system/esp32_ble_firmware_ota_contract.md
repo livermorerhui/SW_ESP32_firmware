@@ -55,7 +55,7 @@ The OTA write/switch mechanism must use Espressif OTA APIs:
 - `esp_ota_set_boot_partition`
 - `esp_restart`
 
-The required flash layout is a dual OTA app partition layout with `otadata`, `app0`, and `app1`. The current N16R8 build target uses `default_16MB.csv`, with `app0` and `app1` each at `6400K`.
+The required flash layout is a dual OTA app partition layout with `otadata`, `app0`, and `app1`. The N16R8 build target must use the repo-owned `partitions/sonicwave_esp32s3_n16r8_ota_16mb.csv`, with `app0` and `app1` each at `6400K`. OTA size acceptance must use the selected inactive partition size from `esp_ota_get_next_update_partition`, not a hard-coded app capacity.
 
 ## Existing BLE Service Freeze
 
@@ -110,7 +110,7 @@ Firmware OTA states:
 | `IDLE` | No OTA session active. |
 | `PREPARED` | Metadata accepted, inactive partition selected, OTA handle opened. |
 | `RECEIVING` | Firmware bytes are being written sequentially. |
-| `VERIFYING` | `esp_ota_end` and sha256 validation are running. |
+| `VERIFYING` | sha256 validation, `esp_ota_end`, and boot partition switch are running. |
 | `READY_TO_REBOOT` | Boot partition has been switched; reboot is allowed. |
 | `REBOOTING` | ESP32 is rebooting. |
 | `FAILED` | OTA session failed and must be aborted/cleared before retry. |
@@ -337,6 +337,6 @@ Minimum validation before release:
 ## v2 Hardening
 
 - Optional write-without-response transfer window with `ota_window_ack`; v1 remains the default fallback.
-- Rollback confirmation: new firmware marks itself valid only after startup self-check has completed.
+- Rollback confirmation: new firmware marks itself valid only after startup self-check has completed; boot logs must include `[OTA_ROLLBACK] event=self_check ...` and either `mark_valid result=success`, `mark_valid result=skipped`, or `skip reason=not_pending`.
 - Signed manifest verification.
 - Backend manifest distribution / gray release.

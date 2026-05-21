@@ -1,7 +1,8 @@
 #pragma once
 
 #include <Arduino.h>
-#include <Update.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
 #include <mbedtls/sha256.h>
 #include "core/PlatformSnapshotOwner.h"
 #include "config/GlobalConfig.h"
@@ -117,12 +118,15 @@ private:
   bool finishSha256Matches(const String& expected);
   String baseStatusJson() const;
   String compactStateStatusJson() const;
+  String evidenceStatusJson() const;
   static bool isHexSha256(const String& value);
   static String readJsonString(const String& rawJson, const char* key);
   static long readJsonLong(const String& rawJson, const char* key, long fallback);
   static FirmwareOtaError parseAbortReason(const String& rawJson);
   static FirmwareOtaTransferMode parseTransferMode(const String& value, bool& supported);
   static const char* transferModeName(FirmwareOtaTransferMode mode);
+  static String partitionJson(const char* key, const esp_partition_t* partition);
+  static String compactPartitionJson(const char* key, const esp_partition_t* partition);
 
   const PlatformSnapshotOwner* platformSnapshotOwner = nullptr;
   FirmwareOtaStatusSink* sink = nullptr;
@@ -143,6 +147,11 @@ private:
   uint32_t receivedBytes = 0;
   uint32_t lastProgressPercent = 0;
   uint32_t lastAckSeq = 0;
+  esp_ota_handle_t otaHandle = 0;
+  const esp_partition_t* runningPartition = nullptr;
+  const esp_partition_t* updatePartition = nullptr;
+  const esp_partition_t* bootPartition = nullptr;
+  bool otaHandleActive = false;
   mbedtls_sha256_context shaContext{};
   bool shaStarted = false;
 };
