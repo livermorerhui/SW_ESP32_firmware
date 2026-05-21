@@ -305,10 +305,11 @@ wave->setEnable(true);
 - App 接入参数同步与趋势图。
 
 ### 10.4 OTA
-- 推荐两阶段：
-  - 阶段1：串口 OTA/本地包升级。
-  - 阶段2：BLE/Wi-Fi OTA（带签名与版本回滚策略）。
-- OTA 期间必须进入 `FAULT_STOP` 或等效安全态，禁止波形输出。
+- OTA 现行正式规划见 [`docs/system/esp32_ble_ota_development_plan.md`](system/esp32_ble_ota_development_plan.md)。
+- 当前正式合同见 [`docs/system/esp32_ble_firmware_ota_contract.md`](system/esp32_ble_firmware_ota_contract.md)。
+- 当前主线是独立 BLE OTA，不复用业务 BLE 文本协议传二进制。
+- 版本确认、回退、证据闭环和发布包可信度是正式交付要求，不再按“仅预留”处理。
+- OTA 期间必须进入等效安全态，禁止波形输出，并保持旧固件可启动。
 
 ## 附录 A：开发者接手第一天清单
 1. 拉取代码并完成 `pio run`。

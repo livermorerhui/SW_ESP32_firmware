@@ -78,6 +78,8 @@ Disconnect note:
 - 系统架构（详细）：[docs/architecture.md](docs/architecture.md)
 - 系统总览（简版）：[docs/system_overview.md](docs/system_overview.md)
 - v1.0 路线图：[docs/roadmap_v1.md](docs/roadmap_v1.md)
+- ESP32 BLE OTA 开发规划：[docs/system/esp32_ble_ota_development_plan.md](docs/system/esp32_ble_ota_development_plan.md)
+- ESP32 BLE OTA 合同：[docs/system/esp32_ble_firmware_ota_contract.md](docs/system/esp32_ble_firmware_ota_contract.md)
 - BLE 协议：**[docs/protocol.md](docs/protocol.md)**
 - 硬件文档：[docs/hardware.md](docs/hardware.md)
 - 安全设计：[docs/safety_design.md](docs/safety_design.md)
@@ -108,3 +110,4 @@ Disconnect note:
 ## Roadmap
 
 - SonicWave Firmware v1.0 路线图：[`docs/roadmap_v1.md`](docs/roadmap_v1.md)
+- ESP32 BLE OTA 正式规划：[`docs/system/esp32_ble_ota_development_plan.md`](docs/system/esp32_ble_ota_development_plan.md)

@@ -1,8 +1,19 @@
 #pragma once
 #include <Arduino.h>
+#if __has_include("FirmwareIdentity.h")
+#include "FirmwareIdentity.h"
+#endif
 
 // ===== Versions =====
-#define FW_VER        "SW-HUB-1.0.0"
+#ifndef FW_VER
+#define FW_VER        "SW-ESP32-1.0.0"
+#endif
+#ifndef FW_BUILD_ID
+#define FW_BUILD_ID   "dev-local"
+#endif
+#ifndef FW_BOARD_ID
+#define FW_BOARD_ID   "sonicwave_esp32s3_n16r8"
+#endif
 #define PROTO_VER     2
 
 // ===== I2S =====
@@ -150,6 +161,16 @@ static constexpr bool SAFETY_POLICY_MEASUREMENT_UNAVAILABLE_STOPS_WAVE = false;
 #define SERVICE_UUID           "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 #define CHAR_UUID_RX           "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
 #define CHAR_UUID_TX           "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
+
+// ===== BLE Firmware OTA =====
+#define OTA_SERVICE_UUID        "7D2A0001-3F6A-4F1D-9B2C-0D9A5E7C0001"
+#define OTA_CHAR_UUID_CONTROL   "7D2A0002-3F6A-4F1D-9B2C-0D9A5E7C0001"
+#define OTA_CHAR_UUID_DATA      "7D2A0003-3F6A-4F1D-9B2C-0D9A5E7C0001"
+#define OTA_CHAR_UUID_STATUS    "7D2A0004-3F6A-4F1D-9B2C-0D9A5E7C0001"
+static constexpr uint16_t OTA_PROTOCOL_VERSION = 1;
+static constexpr uint16_t OTA_DEFAULT_CHUNK_SIZE = 244;
+static constexpr uint8_t OTA_DEFAULT_WINDOW_SIZE = 4;
+static constexpr uint16_t OTA_DEFAULT_ACK_INTERVAL_CHUNKS = 16;
 
 // ===== WDT (optional) =====
 #define ENABLE_WDT 1

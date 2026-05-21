@@ -33,7 +33,7 @@ Scope Freeze（冻结范围）：
 - 文档体系齐备（架构/协议/安全/测试/DevOps）。
 
 v1.0 不包含（超范围）：
-- OTA 商用闭环（仅保留规划与接口预留）。
+- OTA 已单列为正式规划，见 [`docs/system/esp32_ble_ota_development_plan.md`](system/esp32_ble_ota_development_plan.md)；v1.0 这里不再重复定义细节。
 - 复杂多传感器融合算法（EEG/心率/血氧仅做扩展规划）。
 - 云端远程管理平台。
 

@@ -259,8 +259,39 @@ class MyRxCallbacks : public BLECharacteristicCallbacks {
   }
 };
 
+class MyOtaControlCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* c) override {
+    if (!g_self || !c) return;
+    const std::string raw = c->getValue();
+    if (raw.empty()) return;
+    Serial.printf("[OTA] event=control_write_queued bytes=%u\n",
+        static_cast<unsigned>(raw.size()));
+    if (!g_self->enqueueOtaControlWrite(raw)) {
+      Serial.printf("[OTA] event=queue_rejected kind=control bytes=%u\n",
+          static_cast<unsigned>(raw.size()));
+    }
+  }
+};
+
+class MyOtaDataCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* c) override {
+    if (!g_self || !c) return;
+    const std::string raw = c->getValue();
+    if (raw.empty()) return;
+    if (!g_self->enqueueOtaDataWrite(raw)) {
+      Serial.printf("[OTA] event=queue_rejected kind=data bytes=%u\n",
+          static_cast<unsigned>(raw.size()));
+      g_self->otaManager.onRxQueueFull();
+    }
+  }
+};
+
 void BleTransport::controlTaskThunk(void* arg) {
   static_cast<BleTransport*>(arg)->controlTaskLoop();
+}
+
+void BleTransport::otaTaskThunk(void* arg) {
+  static_cast<BleTransport*>(arg)->otaTaskLoop();
 }
 
 void BleTransport::txTaskThunk(void* arg) {
@@ -291,6 +322,7 @@ void BleTransport::begin(CommandBus* cb, const char* deviceName, const char* adv
   lastDisconnectRawReason = 0;
 
   controlQueue = xQueueCreate(kControlQueueLen, sizeof(ControlMsg));
+  otaQueue = xQueueCreate(8, sizeof(OtaMsg));
   txControlQueue = xQueueCreate(kTxControlQueueLen, sizeof(TxMsg));
   txStreamQueue = xQueueCreate(kTxStreamQueueLen, sizeof(TxMsg));
   txQueueSet = xQueueCreateSet(kTxControlQueueLen + kTxStreamQueueLen);
@@ -299,6 +331,7 @@ void BleTransport::begin(CommandBus* cb, const char* deviceName, const char* adv
     xQueueAddToSet(txStreamQueue, txQueueSet);
   }
   xTaskCreatePinnedToCore(controlTaskThunk, "BleCtrl", 4096, this, 3, &controlTaskHandle, 1);
+  xTaskCreatePinnedToCore(otaTaskThunk, "BleOta", 8192, this, 3, &otaTaskHandle, 1);
   xTaskCreatePinnedToCore(txTaskThunk, "BleTx", 4096, this, 3, &txTaskHandle, 1);
 
   const char* resolvedDeviceName =
@@ -336,6 +369,24 @@ void BleTransport::begin(CommandBus* cb, const char* deviceName, const char* adv
   rx->setCallbacks(new MyRxCallbacks());
 
   svc->start();
+
+  BLEService* otaSvc = pServer->createService(OTA_SERVICE_UUID);
+  BLECharacteristic* otaControl = otaSvc->createCharacteristic(
+      OTA_CHAR_UUID_CONTROL,
+      BLECharacteristic::PROPERTY_WRITE);
+  otaControl->setCallbacks(new MyOtaControlCallbacks());
+  BLECharacteristic* otaData = otaSvc->createCharacteristic(
+      OTA_CHAR_UUID_DATA,
+      BLECharacteristic::PROPERTY_WRITE |
+      BLECharacteristic::PROPERTY_WRITE_NR);
+  otaData->setCallbacks(new MyOtaDataCallbacks());
+  pOtaStatus = otaSvc->createCharacteristic(
+      OTA_CHAR_UUID_STATUS,
+      BLECharacteristic::PROPERTY_NOTIFY);
+  pOtaStatus->addDescriptor(new BLE2902());
+  otaSvc->start();
+  otaManager.begin(platformSnapshotOwner, this);
+
   configureAdvertising(
       advertisedDeviceName.c_str(),
       advertisedModelName.empty() ? nullptr : advertisedModelName.c_str());
@@ -546,6 +597,9 @@ void BleTransport::resetSessionOnDisconnect(uint16_t connId,
   lastDisconnectReasonCode = reasonCode;
   lastDisconnectRawReason = rawReason;
   logSessionEvent("disconnect", sessionId, connId, reasonCode, rawReason);
+  if (!enqueueOtaWrite(OtaMsg::Type::BLE_DISCONNECTED, std::string("disconnect"))) {
+    Serial.println("[OTA] event=queue_rejected kind=disconnect");
+  }
   Serial.printf(
       "[BLE_LIFECYCLE] event=disconnect session_id=%lu conn_id=%u reason_code=%s raw_reason=%u connected_count=%u tx_skips=%lu control_drops=%lu critical_drops=%lu stream_replaced=%lu\n",
       static_cast<unsigned long>(sessionId),
@@ -985,6 +1039,28 @@ bool BleTransport::enqueueCommand(const std::string& raw) {
   return xQueueSend(controlQueue, &msg, 0) == pdTRUE;
 }
 
+bool BleTransport::enqueueOtaControlWrite(const std::string& raw) {
+  return enqueueOtaWrite(OtaMsg::Type::CONTROL, raw);
+}
+
+bool BleTransport::enqueueOtaDataWrite(const std::string& raw) {
+  return enqueueOtaWrite(OtaMsg::Type::DATA, raw);
+}
+
+bool BleTransport::enqueueOtaWrite(OtaMsg::Type type, const std::string& raw) {
+  if (!otaQueue) return false;
+  if (raw.empty() || raw.size() > sizeof(OtaMsg::payload)) {
+    return false;
+  }
+
+  OtaMsg msg{};
+  msg.type = type;
+  msg.length = static_cast<uint16_t>(raw.size());
+  memcpy(msg.payload, raw.data(), raw.size());
+  msg.enqueuedAtMs = millis();
+  return xQueueSend(otaQueue, &msg, 0) == pdTRUE;
+}
+
 bool BleTransport::enqueueConnectEvent() {
   if (!controlQueue) return false;
 
@@ -1381,6 +1457,38 @@ void BleTransport::sendLineNow(const char* s) {
 #endif
 }
 
+void BleTransport::sendOtaStatusNow(const char* s) {
+  if (!s) return;
+  if (!deviceConnected || !pOtaStatus) {
+    Serial.printf("[OTA] event=status_skipped reason=%s payload=%s\n",
+        !deviceConnected ? "not_connected" : "missing_status_characteristic",
+        s);
+    return;
+  }
+  pOtaStatus->setValue((uint8_t*)s, strlen(s));
+  pOtaStatus->notify();
+  Serial.printf("[OTA] event=status_notify bytes=%u payload=%s\n",
+      static_cast<unsigned>(strlen(s)),
+      s);
+}
+
+void BleTransport::notifyOtaStatus(const String& json) {
+  sendOtaStatusNow(json.c_str());
+}
+
+bool BleTransport::businessCommandBlockedByOta(const String& s) const {
+  if (!otaManager.blocksBusinessCommands()) return false;
+  return s.startsWith("WAVE:") ||
+      s.startsWith("F:") ||
+      s.startsWith("DEBUG:DEGRADED_START") ||
+      s.startsWith("DEBUG:FALL_STOP") ||
+      s.startsWith("SAFETY:") ||
+      s.startsWith("DEVICE:SET_CONFIG") ||
+      s.startsWith("CAL:") ||
+      s.equalsIgnoreCase("ZERO") ||
+      s.startsWith("SET_PS:");
+}
+
 void BleTransport::controlTaskLoop() {
   ControlMsg msg{};
 
@@ -1415,6 +1523,12 @@ void BleTransport::controlTaskLoop() {
     }
 
     String in = msg.line;
+    if (businessCommandBlockedByOta(in)) {
+      if (!enqueueTxLineRaw("NACK:BUSY_OTA")) {
+        noteTxEnqueueFailure(TxFrameClass::NACK, "ota_busy_nack", "NACK:BUSY_OTA");
+      }
+      continue;
+    }
     if (tryHandleDirectQuery(in)) {
       continue;
     }
@@ -1441,6 +1555,43 @@ void BleTransport::controlTaskLoop() {
     if (!enqueueTxLine(ack)) {
       noteTxEnqueueFailure(classifyTxLine(ack.c_str()), "command_ack", ack.c_str());
     }
+  }
+}
+
+void BleTransport::otaTaskLoop() {
+  OtaMsg msg{};
+
+  while (true) {
+    if (!otaQueue || xQueueReceive(otaQueue, &msg, portMAX_DELAY) != pdTRUE) {
+      continue;
+    }
+
+    const uint32_t latencyMs = millis() - msg.enqueuedAtMs;
+    if (msg.type == OtaMsg::Type::BLE_DISCONNECTED) {
+      Serial.printf("[OTA] event=disconnect_process latency_ms=%lu\n",
+          static_cast<unsigned long>(latencyMs));
+      otaManager.onBleDisconnected();
+      continue;
+    }
+
+    if (msg.type == OtaMsg::Type::CONTROL) {
+      String json;
+      json.reserve(msg.length + 1);
+      for (uint16_t i = 0; i < msg.length; ++i) {
+        json += static_cast<char>(msg.payload[i]);
+      }
+      Serial.printf("[OTA] event=control_process bytes=%u latency_ms=%lu payload=%s\n",
+          static_cast<unsigned>(msg.length),
+          static_cast<unsigned long>(latencyMs),
+          json.c_str());
+      otaManager.handleControlJson(json);
+      continue;
+    }
+
+    Serial.printf("[OTA] event=data_process bytes=%u latency_ms=%lu\n",
+        static_cast<unsigned>(msg.length),
+        static_cast<unsigned long>(latencyMs));
+    otaManager.handleDataFrame(msg.payload, msg.length);
   }
 }
 

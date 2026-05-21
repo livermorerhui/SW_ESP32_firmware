@@ -12,6 +12,7 @@
 #include "core/EventBus.h"
 #include "core/CommandBus.h"
 #include "core/ProtocolCodec.h"
+#include "ota/FirmwareOtaManager.h"
 
 class BleDisconnectSink {
 public:
@@ -20,21 +21,33 @@ public:
   virtual ~BleDisconnectSink() = default;
 };
 
-class BleTransport : public EventSink {
+class BleTransport : public EventSink, public FirmwareOtaStatusSink {
 public:
   void begin(CommandBus* cb, const char* deviceName = nullptr, const char* advertisedModel = nullptr);
   void updateAdvertisingIdentity(const char* deviceName, const char* advertisedModel = nullptr);
   bool isConnected() const { return deviceConnected; }
   void setDisconnectSink(BleDisconnectSink* s) { disconnectSink = s; }
+  void setPlatformSnapshotOwner(const PlatformSnapshotOwner* owner) { platformSnapshotOwner = owner; }
 
   // EventSink
   void onEvent(const Event& e) override;
+  void notifyOtaStatus(const String& json) override;
+  bool enqueueOtaControlWrite(const std::string& raw);
+  bool enqueueOtaDataWrite(const std::string& raw);
 
 private:
   struct ControlMsg {
     enum class Type : uint8_t { RX_COMMAND, BLE_CONNECTED, BLE_DISCONNECTED };
     Type type = Type::RX_COMMAND;
     char line[128]{};
+  };
+
+  struct OtaMsg {
+    enum class Type : uint8_t { CONTROL, DATA, BLE_DISCONNECTED };
+    Type type = Type::CONTROL;
+    uint16_t length = 0;
+    uint8_t payload[260]{};
+    uint32_t enqueuedAtMs = 0;
   };
 
   struct TxMsg {
@@ -97,6 +110,7 @@ private:
   };
 
   static void controlTaskThunk(void* arg);
+  static void otaTaskThunk(void* arg);
   static void txTaskThunk(void* arg);
   static const char* disconnectReasonCodeName(DisconnectReasonCode code);
   static const char* negotiationStatusCodeName(NegotiationStatusCode code);
@@ -109,6 +123,7 @@ private:
   static bool isCriticalEvent(EventType type);
 
   void controlTaskLoop();
+  void otaTaskLoop();
   void txTaskLoop();
   void logAdvertisingAction(const char* action, const char* reason) const;
   void handleGapEvent(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* param);
@@ -160,10 +175,12 @@ private:
                                     uint32_t expectedSessionId,
                                     uint32_t nowMs);
   void sendLineNow(const char* s);
+  void sendOtaStatusNow(const char* s);
   void startAdvertisingSafe(const char* reason = "unspecified");
   void stopAdvertisingSafe(const char* reason = "unspecified");
   void configureAdvertising(const char* deviceName, const char* advertisedModel);
   bool enqueueCommand(const std::string& raw);
+  bool enqueueOtaWrite(OtaMsg::Type type, const std::string& raw);
   bool enqueueConnectEvent();
   bool enqueueDisconnectEvent();
   bool enqueueTxLine(const String& s);
@@ -171,6 +188,7 @@ private:
   bool enqueueStreamTxLine(const String& s);
   bool enqueueStreamTxLineRaw(const char* s);
   bool tryHandleDirectQuery(const String& s);
+  bool businessCommandBlockedByOta(const String& s) const;
   void applyAdvertisingPowerProfile() const;
   void setAdvertisingProfile(AdvertisingProfile profile, bool restartIfNeeded);
   void maybeRelaxAdvertisingProfile(uint32_t nowMs);
@@ -193,12 +211,17 @@ private:
 
   friend class MyServerCallbacks;
   friend class MyRxCallbacks;
+  friend class MyOtaControlCallbacks;
+  friend class MyOtaDataCallbacks;
 
 private:
   CommandBus* bus = nullptr;
   BleDisconnectSink* disconnectSink = nullptr;
+  const PlatformSnapshotOwner* platformSnapshotOwner = nullptr;
+  FirmwareOtaManager otaManager;
   BLEServer* pServer = nullptr;
   BLECharacteristic* pTx = nullptr;
+  BLECharacteristic* pOtaStatus = nullptr;
 
   volatile bool deviceConnected = false;
   volatile bool protocolActivityObserved = false;
@@ -226,10 +249,12 @@ private:
   bool remoteBdaValid = false;
   uint16_t lastDisconnectRawReason = 0;
   QueueHandle_t controlQueue = nullptr;
+  QueueHandle_t otaQueue = nullptr;
   QueueHandle_t txControlQueue = nullptr;
   QueueHandle_t txStreamQueue = nullptr;
   QueueSetHandle_t txQueueSet = nullptr;
   TaskHandle_t controlTaskHandle = nullptr;
+  TaskHandle_t otaTaskHandle = nullptr;
   TaskHandle_t txTaskHandle = nullptr;
   uint32_t lastAdvRestartMs = 0;
   UBaseType_t txControlHighWatermark = 0;

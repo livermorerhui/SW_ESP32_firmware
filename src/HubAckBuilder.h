@@ -57,12 +57,16 @@ inline String startRejected(FaultCode reason) {
 
 inline String cap(
     const char* firmwareVersion,
+    const char* buildId,
+    const char* boardId,
     int protocolVersion,
     PlatformModel platformModel,
     bool laserInstalled) {
   String out;
-  out.reserve(96);
+  out.reserve(128);
   appendKeyValue(out, "ACK:CAP fw=", firmwareVersion);
+  appendKeyValue(out, " build=", buildId);
+  appendKeyValue(out, " board=", boardId);
   appendKeyIntValue(out, " proto=", protocolVersion);
   appendKeyValue(out, " platform_model=", platformModelName(platformModel));
   appendKeyIntValue(out, " laser_installed=", laserInstalled ? 1 : 0);
