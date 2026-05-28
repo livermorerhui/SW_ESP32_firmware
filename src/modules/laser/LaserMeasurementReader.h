@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <ModbusMaster.h>
 #include "core/Types.h"
+#include "modules/laser/LaserSensorProfile.h"
 
 struct MeasurementReadResult {
   bool transportOk = false;
@@ -28,8 +29,7 @@ public:
   void clearFailureBurst(uint32_t now, bool flushSummary = true);
 
 private:
-  bool isDistanceSentinelRaw(uint16_t rawRegister, int16_t signedRaw, const char*& reason) const;
-  bool isDistanceValidRaw(int16_t signedRaw, const char*& reason) const;
+  uint8_t readDistanceRegister(const LaserSensorProfile& activeProfile);
   void noteReadFailure(
       uint8_t result,
       uint32_t now,
@@ -52,6 +52,7 @@ private:
       uint32_t nextReadBackoffMs);
 
   ModbusMaster node;
+  const LaserSensorProfile* profile = &activeLaserSensorProfile();
   bool hasLoggedReadFailure = false;
   uint8_t lastReadFailureCode = 0;
   uint32_t lastReadFailureLogMs = 0;

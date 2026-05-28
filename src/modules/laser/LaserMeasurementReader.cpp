@@ -8,8 +8,17 @@ constexpr uint32_t kMeasurementDiagSlowReadWarnMs = 80UL;
 }
 
 void LaserMeasurementReader::begin() {
-  Serial1.begin(MODBUS_BAUD, SERIAL_8N1, RX_PIN, TX_PIN);
-  node.begin(MODBUS_SLAVE_ID, Serial1);
+  profile = &activeLaserSensorProfile();
+  Serial1.begin(profile->serial.baud, profile->serial.serialConfig, RX_PIN, TX_PIN);
+  node.begin(profile->modbus.slaveId, Serial1);
+  Serial.printf(
+      "[LASER_SENSOR_PROFILE] active=%s baud=%lu slave_id=%u function=0x%02X register=0x%04X count=%u\n",
+      profile->stableName,
+      static_cast<unsigned long>(profile->serial.baud),
+      static_cast<unsigned>(profile->modbus.slaveId),
+      static_cast<unsigned>(profile->modbus.distanceReadFunction),
+      static_cast<unsigned>(profile->modbus.distanceRegister),
+      static_cast<unsigned>(profile->modbus.distanceRegisterCount));
 }
 
 MeasurementReadResult LaserMeasurementReader::read(
@@ -18,7 +27,7 @@ MeasurementReadResult LaserMeasurementReader::read(
     uint32_t nextReadBackoffMs) {
   MeasurementReadResult out{};
   out.readStartedAtMs = millis();
-  out.modbusResult = node.readInputRegisters(REG_DISTANCE, 1);
+  out.modbusResult = readDistanceRegister(*profile);
   out.readCompletedAtMs = millis();
   out.readDurationMs = out.readCompletedAtMs - out.readStartedAtMs;
 
@@ -46,53 +55,29 @@ MeasurementReadResult LaserMeasurementReader::read(
   out.transportOk = true;
 
   out.rawRegister = node.getResponseBuffer(0);
-  out.signedRaw = static_cast<int16_t>(out.rawRegister);
-  out.scaledDistance = out.signedRaw * LASER_DISTANCE_MM_TO_RUNTIME_UNITS;
-
-  const char* reason = nullptr;
-  if (isDistanceSentinelRaw(out.rawRegister, out.signedRaw, reason)) {
-    out.sentinel = true;
-    out.invalidReason = reason;
-    return out;
-  }
-
-  if (!isDistanceValidRaw(out.signedRaw, reason)) {
-    out.invalidReason = reason;
-    return out;
-  }
-
-  out.validDistance = true;
+  const LaserDistanceDecodeResult decoded = decodeLaserDistanceRaw(*profile, out.rawRegister);
+  out.signedRaw = decoded.signedRaw;
+  out.scaledDistance = decoded.scaledDistance;
+  out.sentinel = decoded.sentinel;
+  out.validDistance = decoded.validDistance;
+  out.invalidReason = decoded.invalidReason;
   return out;
 }
 
-bool LaserMeasurementReader::isDistanceSentinelRaw(
-    uint16_t rawRegister,
-    int16_t signedRaw,
-    const char*& reason) const {
-  (void)signedRaw;
-
-  if (rawRegister == LASER_SENTINEL_OVER_RANGE_RAW) {
-    reason = "SENTINEL_OVER_RANGE";
-    return true;
+uint8_t LaserMeasurementReader::readDistanceRegister(const LaserSensorProfile& activeProfile) {
+  switch (activeProfile.modbus.distanceReadFunction) {
+    case LaserModbusReadFunction::READ_HOLDING_REGISTERS:
+      return node.readHoldingRegisters(
+          activeProfile.modbus.distanceRegister,
+          activeProfile.modbus.distanceRegisterCount);
+    case LaserModbusReadFunction::READ_INPUT_REGISTERS:
+      return node.readInputRegisters(
+          activeProfile.modbus.distanceRegister,
+          activeProfile.modbus.distanceRegisterCount);
   }
-
-  reason = nullptr;
-  return false;
-}
-
-bool LaserMeasurementReader::isDistanceValidRaw(int16_t signedRaw, const char*& reason) const {
-  if (signedRaw < LASER_VALID_MEASUREMENT_MIN_RAW) {
-    reason = "OUT_OF_RANGE_LOW";
-    return false;
-  }
-
-  if (signedRaw > LASER_VALID_MEASUREMENT_MAX_RAW) {
-    reason = "OUT_OF_RANGE_HIGH";
-    return false;
-  }
-
-  reason = nullptr;
-  return true;
+  return node.readInputRegisters(
+      activeProfile.modbus.distanceRegister,
+      activeProfile.modbus.distanceRegisterCount);
 }
 
 void LaserMeasurementReader::logMeasurementDiag(
