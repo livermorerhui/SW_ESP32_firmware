@@ -39,6 +39,7 @@ using std::uint16_t;
 using std::uint32_t;
 
 #define I2S_NUM_0 0
+#define SERIAL_8N1 0x800001c
 
 class String {
 public:
@@ -304,6 +305,7 @@ TEST_MAIN = r"""
 #include "modules/laser/BaselineEvidenceEvaluator.h"
 #include "modules/laser/CalibrationRuntime.h"
 #include "modules/laser/LaserStableWindow.h"
+#include "modules/laser/LaserSensorProfile.h"
 #include "modules/laser/MeasurementAvailabilityProbePolicy.h"
 #include "modules/laser/MeasurementHealthStateMachine.h"
 #include "modules/laser/PresenceContractEvaluator.h"
@@ -324,6 +326,24 @@ void expect_contains(const String& actual, const char* expected) {
 
 void expect_not_contains(const String& actual, const char* unexpected) {
   assert(actual.indexOf(unexpected) < 0);
+}
+
+void expect_float_close(float actual, float expected) {
+  assert(std::fabs(actual - expected) < 0.0001f);
+}
+
+void expect_no_laser_sensor_profile_fields(const String& actual) {
+  expect_not_contains(actual, "sensor_profile=");
+  expect_not_contains(actual, "laser_profile=");
+  expect_not_contains(actual, "profile_id=");
+  expect_not_contains(actual, "sensor_supplier=");
+  expect_not_contains(actual, "laser_supplier=");
+  expect_not_contains(actual, "supplier=");
+  expect_not_contains(actual, "sensor_model=");
+  expect_not_contains(actual, "laser_model=");
+  expect_not_contains(actual, "WANG_WTX_J100_485");
+  expect_not_contains(actual, "WTX-J100");
+  expect_not_contains(actual, "AUTO");
 }
 
 void test_presence_enter_exit() {
@@ -665,6 +685,75 @@ void test_calibration_runtime_effective_zero_fallback_and_lock() {
   assert(result.calibrationZeroDistance == 90.0f);
   assert(result.effectiveZeroDistance == 88.0f);
   assert(result.usesRuntimeZero);
+}
+
+void test_laser_sensor_profile_wang_wtx_j100_decode_contract() {
+  const LaserSensorProfile& profile = activeLaserSensorProfile();
+  assert(profile.id == LaserSensorProfileId::WANG_WTX_J100_485);
+  expect_reason(profile.stableName, "WANG_WTX_J100_485");
+  expect_reason(laserSensorProfileIdName(profile.id), "WANG_WTX_J100_485");
+  expect_reason(laserSensorProfileIdName(static_cast<LaserSensorProfileId>(255)), "UNKNOWN");
+  assert(profile.serial.baud == 9600);
+  assert(profile.serial.serialConfig == SERIAL_8N1);
+  assert(profile.modbus.slaveId == 1);
+  assert(profile.modbus.distanceReadFunction == LaserModbusReadFunction::READ_INPUT_REGISTERS);
+  assert(static_cast<uint8_t>(LaserModbusReadFunction::READ_HOLDING_REGISTERS) == 0x03);
+  assert(static_cast<uint8_t>(profile.modbus.distanceReadFunction) == 0x04);
+  assert(profile.modbus.distanceRegister == 0x0064);
+  assert(profile.modbus.distanceRegisterCount == 1);
+  assert(profile.decode.signedRaw16);
+  assert(profile.decode.scaleDivisor == 100.0f);
+  assert(profile.decode.offset == 0.0f);
+  assert(profile.decode.validMinRaw == -3570);
+  assert(profile.decode.validMaxRaw == 3570);
+  assert(profile.decode.sentinelOverRangeRaw == 32767);
+
+  LaserDistanceDecodeResult decoded = decodeLaserDistanceRaw(profile, 0);
+  assert(decoded.validDistance);
+  assert(!decoded.sentinel);
+  assert(decoded.signedRaw == 0);
+  expect_float_close(decoded.scaledDistance, 0.0f);
+  assert(decoded.invalidReason == nullptr);
+
+  decoded = decodeLaserDistanceRaw(profile, static_cast<uint16_t>(static_cast<int16_t>(-2200)));
+  assert(decoded.validDistance);
+  assert(decoded.signedRaw == -2200);
+  expect_float_close(decoded.scaledDistance, -22.0f);
+
+  decoded = decodeLaserDistanceRaw(profile, static_cast<uint16_t>(static_cast<int16_t>(-3570)));
+  assert(decoded.validDistance);
+  assert(!decoded.sentinel);
+  assert(decoded.signedRaw == -3570);
+  expect_float_close(decoded.scaledDistance, -35.70f);
+  assert(decoded.invalidReason == nullptr);
+
+  decoded = decodeLaserDistanceRaw(profile, 3500);
+  assert(decoded.validDistance);
+  assert(decoded.signedRaw == 3500);
+  expect_float_close(decoded.scaledDistance, 35.0f);
+
+  decoded = decodeLaserDistanceRaw(profile, 3570);
+  assert(decoded.validDistance);
+  assert(!decoded.sentinel);
+  assert(decoded.signedRaw == 3570);
+  expect_float_close(decoded.scaledDistance, 35.70f);
+  assert(decoded.invalidReason == nullptr);
+
+  decoded = decodeLaserDistanceRaw(profile, static_cast<uint16_t>(static_cast<int16_t>(-3571)));
+  assert(!decoded.validDistance);
+  assert(!decoded.sentinel);
+  expect_reason(decoded.invalidReason, "OUT_OF_RANGE_LOW");
+
+  decoded = decodeLaserDistanceRaw(profile, 3571);
+  assert(!decoded.validDistance);
+  assert(!decoded.sentinel);
+  expect_reason(decoded.invalidReason, "OUT_OF_RANGE_HIGH");
+
+  decoded = decodeLaserDistanceRaw(profile, 32767);
+  assert(!decoded.validDistance);
+  assert(decoded.sentinel);
+  expect_reason(decoded.invalidReason, "SENTINEL_OVER_RANGE");
+  expect_float_close(decoded.scaledDistance, 327.67f);
 }
 
 void test_fall_stop_action_decision() {
@@ -1193,6 +1282,7 @@ void test_protocol_encode_snapshot_contract() {
   expect_not_contains(encoded, "laser_installed=");
   expect_not_contains(encoded, "runtime_ready=");
   expect_not_contains(encoded, "baseline_ready=");
+  expect_no_laser_sensor_profile_fields(encoded);
 }
 
 void test_protocol_snapshot_contract_spec_required_slim_fields() {
@@ -1214,6 +1304,7 @@ void test_protocol_snapshot_contract_spec_required_slim_fields() {
   expect_contains(encoded, "degraded_start_available=1");
   expect_contains(encoded, "degraded_start_enabled=0");
   expect_contains(encoded, "leave_stop_enabled=1");
+  expect_no_laser_sensor_profile_fields(encoded);
   assert(encoded.length() + 1 <= ProtocolCodec::kConnectSnapshotPayloadBudgetBytes);
 }
 
@@ -1239,6 +1330,7 @@ void test_protocol_ack_cap_contract_stays_bootstrap_truth() {
   expect_not_contains(encoded, "degraded_start_available=");
   expect_not_contains(encoded, "degraded_start_enabled=");
   expect_not_contains(encoded, "ota_slot=");
+  expect_no_laser_sensor_profile_fields(encoded);
   assert(encoded.length() + 1 <= ProtocolCodec::kCapTruthPayloadBudgetBytes);
 }
 
@@ -1525,6 +1617,7 @@ int main() {
   test_calibration_runtime_weight_and_clamp();
   test_calibration_runtime_effective_zero();
   test_calibration_runtime_effective_zero_fallback_and_lock();
+  test_laser_sensor_profile_wang_wtx_j100_decode_contract();
   test_fall_stop_action_decision();
   test_stop_reason_and_source_fallbacks();
   test_stop_outcome_summary_evaluator();
@@ -1679,6 +1772,7 @@ def run() -> None:
       str(ROOT / "src/modules/laser/PresenceContractEvaluator.cpp"),
       str(ROOT / "src/modules/laser/BaselineEvidenceEvaluator.cpp"),
       str(ROOT / "src/modules/laser/LaserStableWindow.cpp"),
+      str(ROOT / "src/modules/laser/LaserSensorProfile.cpp"),
       str(ROOT / "src/modules/laser/CalibrationRuntime.cpp"),
       str(ROOT / "src/modules/laser/MeasurementAvailabilityProbePolicy.cpp"),
       str(ROOT / "src/modules/laser/MeasurementHealthStateMachine.cpp"),
