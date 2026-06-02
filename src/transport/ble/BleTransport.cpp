@@ -22,6 +22,9 @@ static constexpr uint16_t kConnParamMaxInterval = 24;
 static constexpr uint16_t kConnParamLatency = 0;
 static constexpr uint16_t kConnParamTimeout = 400;
 static constexpr uint32_t kStreamControlHoldoffMs = 35;
+static constexpr uint32_t kStreamMaxDeferMs = 250;
+static constexpr uint8_t kMaxControlBurstBeforeStream = 4;
+static constexpr TickType_t kDeferredStreamRetryDelayTicks = pdMS_TO_TICKS(5);
 static constexpr esp_power_level_t kBleDefaultTxPowerLevel = ESP_PWR_LVL_P3;
 static constexpr esp_power_level_t kBleAdvertisingFastPowerLevel = ESP_PWR_LVL_P3;
 static constexpr esp_power_level_t kBleAdvertisingIdlePowerLevel = ESP_PWR_LVL_N0;
@@ -1109,14 +1112,6 @@ bool BleTransport::enqueueStreamTxLine(const String& s) {
 bool BleTransport::enqueueStreamTxLineRaw(const char* s) {
   if (!txStreamQueue || !s) return false;
 
-  if (shouldDeferStreamForControl()) {
-    noteStreamSuppressedForControl(
-        txControlQueue ? uxQueueMessagesWaiting(txControlQueue) : 0U,
-        millis());
-    return true;
-  }
-
-  flushStreamSuppressionSummaryIfNeeded(millis());
   TxMsg msg{};
   msg.priority = TxMsg::Priority::STREAM;
   strlcpy(msg.line, s, sizeof(msg.line));
@@ -1160,6 +1155,11 @@ void BleTransport::flushStreamSuppressionSummaryIfNeeded(uint32_t nowMs) {
   txStreamSuppressionBurstMaxControlDepth = 0;
 }
 
+bool BleTransport::streamDeferBudgetExpired(uint32_t nowMs) const {
+  return txStreamSuppressionBurstCount > 0 &&
+      (nowMs - txStreamSuppressionBurstStartedAtMs) >= kStreamMaxDeferMs;
+}
+
 void BleTransport::logTruthPayloadBudgetWarningIfNeeded(const char* s, size_t framedLen) const {
   if (!s) return;
 
@@ -1181,11 +1181,14 @@ void BleTransport::logTruthPayloadBudgetWarningIfNeeded(const char* s, size_t fr
   }
 }
 
-bool BleTransport::shouldDeferStreamForControl() const {
+bool BleTransport::shouldDeferStreamForControl(uint32_t nowMs) const {
+  if (streamDeferBudgetExpired(nowMs) ||
+      controlBurstSinceStream >= kMaxControlBurstBeforeStream) {
+    return false;
+  }
   if (txControlQueue && uxQueueMessagesWaiting(txControlQueue) > 0) {
     return true;
   }
-  const uint32_t nowMs = millis();
   return lastControlTxAtMs != 0 && (nowMs - lastControlTxAtMs) < kStreamControlHoldoffMs;
 }
 
@@ -1617,14 +1620,28 @@ void BleTransport::txTaskLoop() {
                       msg.line);
       }
       sendLineNow(msg.line);
+      if (controlBurstSinceStream < UINT8_MAX) {
+        controlBurstSinceStream += 1;
+      }
+      if (controlBurstSinceStream >= kMaxControlBurstBeforeStream &&
+          uxQueueMessagesWaiting(txStreamQueue) > 0) {
+        break;
+      }
     }
 
     if (xQueueReceive(txStreamQueue, &msg, 0) == pdTRUE) {
-      if (shouldDeferStreamForControl()) {
+      const uint32_t nowMs = millis();
+      if (shouldDeferStreamForControl(nowMs)) {
+        noteStreamSuppressedForControl(
+            txControlQueue ? uxQueueMessagesWaiting(txControlQueue) : 0U,
+            nowMs);
         xQueueOverwrite(txStreamQueue, &msg);
+        vTaskDelay(kDeferredStreamRetryDelayTicks);
         continue;
       }
+      flushStreamSuppressionSummaryIfNeeded(nowMs);
       sendLineNow(msg.line);
+      controlBurstSinceStream = 0;
     }
   }
 }

@@ -196,9 +196,10 @@ private:
   void noteQueueWatermark(const char* queueName, UBaseType_t depth, UBaseType_t& highWatermark);
   void noteStreamSuppressedForControl(UBaseType_t controlDepth, uint32_t nowMs);
   void flushStreamSuppressionSummaryIfNeeded(uint32_t nowMs);
+  bool streamDeferBudgetExpired(uint32_t nowMs) const;
   void logTruthPayloadBudgetWarningIfNeeded(const char* s, size_t framedLen) const;
   bool isStreamFrame(const char* s) const;
-  bool shouldDeferStreamForControl() const;
+  bool shouldDeferStreamForControl(uint32_t nowMs) const;
   TxFrameClass classifyTxLine(const char* s) const;
   void noteTxEnqueueFailure(TxFrameClass frameClass, const char* origin, const char* line);
   void noteEventEnqueueFailure(EventType type, const char* line);
@@ -275,6 +276,7 @@ private:
   uint32_t txStreamSuppressionBurstStartedAtMs = 0;
   UBaseType_t txStreamSuppressionBurstMaxControlDepth = 0;
   uint32_t lastControlTxAtMs = 0;
+  uint8_t controlBurstSinceStream = 0;
   uint32_t lastRecoveryDisconnectMs = 0;
   AdvertisingProfile advertisingProfile = AdvertisingProfile::FAST_DISCOVERY;
   uint32_t advertisingProfileStartedAtMs = 0;

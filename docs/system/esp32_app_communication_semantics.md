@@ -298,11 +298,20 @@ ACK：
 当前 BLE TX 使用 notify 文本行输出。它不是应用层确认交付机制，因此以下规则必须固定：
 
 - `EVT:STREAM` 是 measurement plane，可丢最新样本外的历史样本。
+- `EVT:STREAM` 不能被 control/status frame 无限期饿死；BLE TX 调度必须保留“latest stream”并设置有界公平预算，确保 Demo APP 校准和遥测曲线能持续收到实时距离 / 体重样本。
 - `EVT:STATE`、`EVT:WAVE_OUTPUT`、`EVT:FAULT`、`EVT:SAFETY`、`EVT:STOP` 属于关键 truth frame，内部重构必须可观察其入队失败或断链跳过。
 - BLE 已断开时，固件不能假装 `EVT:*` 已经交付给 APP；此时 notify 路径只能记录串口诊断。
 - reconnect 后恢复真实状态的正式通道仍是 `SNAPSHOT`，不能新增临时 BLE 线格式表达同一件事。
 - APP / Demo APP 不应把断链窗口里缺失的 `EVT:*` 当成固件状态未变化；应以 reconnect 后 `SNAPSHOT` 为 authoritative runtime truth。
 - 如果断链窗口跳过关键 truth frame，`BleTransport` 会设置内部 reconnect snapshot dirty 标记；下一次 `SNAPSHOT` notify 成功发出后清除此标记并记录串口补偿日志。
+
+2026-06-02 的 Demo APP 遥测 / 校准修复确认：
+
+- 问题现象：ESP32 测量平面有有效样本，但 Demo APP 实时曲线、实时体重、实时距离和校准录点缺少实时数据。
+- 根因证据：修复前 capture 中 `MEASUREMENT_DIAG ok` 持续增长，Android 只收到极少 `EVT:STREAM`，同时串口出现大量 `queue=stream suppressed_for_control`。
+- 修复边界：不改 `EVT:STREAM` wire format，不改校准算法，不改 MAX485/Modbus 参数；只调整 BLE TX 内部调度。
+- 当前调度参数：control/status 仍优先；stream 保留最新样本；最多延迟 250ms 或最多连续发送 4 个 control frame 后让出一次 stream；延迟重试间隔 5ms。
+- 后续如果要让 SW APP 默认不接收实时距离、Demo APP 按需接收，推荐新增显式订阅合同，例如 `STREAM:SET enabled=1 rate_hz=10`、`ACK:STREAM ...`、`ACK:CAP stream_control_supported=1`。不要靠 APP 名称或连接来源猜测是否发送实时流。
 
 2026-04-22 的 `BleTransport critical delivery observability` 真机验证确认：
 
