@@ -17,6 +17,7 @@ enum class CmdType : uint8_t {
   FALL_STOP_SET,
   LEAVE_PROTECTION_SET,
   MOTION_SAMPLING_MODE_SET,
+  STREAM_SET,
   LEGACY_FIE     // 兼容 F/I/E 组合命令
 };
 
@@ -51,6 +52,11 @@ struct DegradedStartCommand {
   bool enabled = false;
 };
 
+struct StreamSubscriptionCommand {
+  bool enabled = false;
+  uint8_t rateHz = 10;
+};
+
 struct Command {
   CmdType type = CmdType::CAP_QUERY;
   WaveParams wave{};
@@ -63,6 +69,7 @@ struct Command {
   MotionSamplingModeCommand motionSamplingMode{};
   DeviceConfigCommand deviceConfig{};
   DegradedStartCommand degradedStart{};
+  StreamSubscriptionCommand streamSubscription{};
 };
 
 class CommandHandler {

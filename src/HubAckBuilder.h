@@ -71,6 +71,7 @@ inline String cap(
   appendKeyValue(out, " platform_model=", platformModelName(platformModel));
   appendKeyIntValue(out, " laser_installed=", laserInstalled ? 1 : 0);
   appendKeyIntValue(out, " leave_stop_supported=", 1);
+  appendKeyIntValue(out, " stream_control_supported=", 1);
   ProtocolCodec::logTruthPayloadBudgetWarningIfNeeded(
       "bootstrap_truth",
       out.length() + 1,
@@ -167,6 +168,15 @@ inline String motionSampling(bool enabled, bool fallActionSuppressed) {
   out.reserve(72);
   appendKeyIntValue(out, "ACK:MOTION_SAMPLING enabled=", enabled ? 1 : 0);
   appendKeyIntValue(out, " fall_action_suppressed=", fallActionSuppressed ? 1 : 0);
+  return out;
+}
+
+inline String streamSubscription(bool enabled, uint8_t rateHz) {
+  String out;
+  out.reserve(56);
+  appendKeyIntValue(out, "ACK:STREAM enabled=", enabled ? 1 : 0);
+  appendKeyIntValue(out, " supported=", 1);
+  appendKeyIntValue(out, " rate_hz=", rateHz);
   return out;
 }
 

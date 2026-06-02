@@ -28,6 +28,10 @@ sealed class Command {
     ) : Command()
     data class FallStopProtectionSet(val enabled: Boolean) : Command()
     data class MotionSamplingModeSet(val enabled: Boolean) : Command()
+    data class StreamSet(
+        val enabled: Boolean,
+        val rateHz: Int = 10,
+    ) : Command()
 
     // Legacy commands for fallback mode.
     data object LegacyZero : Command()
@@ -196,6 +200,12 @@ sealed class Event {
     data class DegradedStart(
         val enabled: Boolean,
         val available: Boolean,
+        val raw: String,
+    ) : Event()
+    data class StreamSubscription(
+        val enabled: Boolean,
+        val supported: Boolean,
+        val rateHz: Int?,
         val raw: String,
     ) : Event()
     data class Capabilities(val values: Map<String, String>, val raw: String) : Event()

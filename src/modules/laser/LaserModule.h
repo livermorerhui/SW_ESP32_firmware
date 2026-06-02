@@ -4,6 +4,7 @@
 #include "config/LaserPhase2Config.h"
 #include "core/DeviceConfig.h"
 #include "core/EventBus.h"
+#include "core/ProtocolCodec.h"
 #include "core/SystemStateMachine.h"
 #include "modules/laser/BaselineContractDiagnostics.h"
 #include "modules/laser/BaselineEvidenceEvaluator.h"
@@ -90,6 +91,10 @@ public:
   bool getCalibrationModel(CalibrationModel& out) const;
   bool setCalibrationModel(const CalibrationModel& model, String& reason);
   bool captureCalibrationPoint(float referenceWeightKg, CalibrationCapture& out, String& reason);
+  bool setStreamSubscription(bool enabled, uint8_t rateHz, String& reason);
+  void resetStreamSubscription(const char* reason);
+  bool streamSubscriptionEnabled() const;
+  uint8_t streamSubscriptionRateHz() const;
   static const char* calibrationModelTypeName(CalibrationModelType type);
 
 private:
@@ -203,6 +208,7 @@ private:
       float distance,
       float weight,
       const char* reason);
+  bool shouldPublishStreamSample(uint32_t now);
   void logLatestMeasurementPlaneSummary(const char* trigger);
 
   float getMean(const float* values) const;
@@ -276,6 +282,9 @@ private:
   bool lastLoggedMeasurementBypassState = false;
   const char* lastInvalidReason = nullptr;
   uint32_t calibrationCaptureCounter = 0;
+  volatile bool streamEnabled = false;
+  volatile uint8_t streamRateHz = ProtocolCodec::kStreamDefaultRateHz;
+  uint32_t lastStreamPublishedAtMs = 0;
   // Primary Judgment Owner：
   // MA12 / deviation / ratio / main_state / duration 统一由 RhythmStateJudge 维护。
   RhythmStateJudge rhythmStateJudge{};

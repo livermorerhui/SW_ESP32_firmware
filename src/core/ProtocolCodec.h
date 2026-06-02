@@ -11,8 +11,11 @@ class ProtocolCodec {
 public:
   static constexpr uint16_t kSingleNotifyBudgetMtu = 185;
   static constexpr uint16_t kSingleNotifyPayloadBudget = kSingleNotifyBudgetMtu - 3;
-  static constexpr size_t kCapTruthPayloadBudgetBytes = 140;
+  static constexpr size_t kCapTruthPayloadBudgetBytes = kSingleNotifyPayloadBudget;
   static constexpr size_t kConnectSnapshotPayloadBudgetBytes = kSingleNotifyPayloadBudget;
+  static constexpr uint8_t kStreamDefaultRateHz = 10;
+  static constexpr uint8_t kStreamMinRateHz = 1;
+  static constexpr uint8_t kStreamMaxRateHz = 20;
 
   static bool isSnapshotQuery(const String& in) {
     String s = in;
@@ -194,6 +197,35 @@ public:
         return false;
       }
       out.degradedStart.enabled = enabled;
+      return true;
+    }
+    if (s.startsWith("STREAM:SET")) {
+      out.type = CmdType::STREAM_SET;
+
+      String enabledStr, rateStr;
+      bool hasEnabled = readParam("enabled=", enabledStr) || readParam("mode=", enabledStr);
+      if (!hasEnabled) { err = "INVALID_PARAM"; return false; }
+
+      bool enabled = false;
+      if (!parseBoolValue(enabledStr, enabled)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+
+      int rateHz = kStreamDefaultRateHz;
+      if (readParam("rate_hz=", rateStr) || readParam("rate=", rateStr) || readParam("hz=", rateStr)) {
+        if (!parseStrictInt(rateStr, rateHz)) {
+          err = "INVALID_PARAM";
+          return false;
+        }
+      }
+      if (rateHz < kStreamMinRateHz || rateHz > kStreamMaxRateHz) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+
+      out.streamSubscription.enabled = enabled;
+      out.streamSubscription.rateHz = static_cast<uint8_t>(rateHz);
       return true;
     }
 

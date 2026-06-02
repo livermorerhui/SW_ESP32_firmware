@@ -251,6 +251,50 @@ class SonicWaveClient(
         }
     }
 
+    suspend fun setStreamSubscriptionAndAwaitAck(
+        enabled: Boolean,
+        rateHz: Int = 10,
+        timeoutMs: Long = 1_500,
+    ): Event.StreamSubscription = coroutineScope {
+        val semanticResult = CompletableDeferred<Event?>()
+        val collector = launch {
+            transport.incomingLines.collect { line ->
+                val event = ProtocolCodec.decode(line) ?: return@collect
+                if (!semanticResult.isCompleted &&
+                    (event is Event.StreamSubscription ||
+                        event is Event.Nack ||
+                        event is Event.Error)
+                ) {
+                    semanticResult.complete(event)
+                }
+            }
+        }
+
+        try {
+            send(Command.StreamSet(enabled = enabled, rateHz = rateHz))
+            when (val event = withTimeoutOrNull(timeoutMs) { semanticResult.await() }) {
+                is Event.StreamSubscription -> {
+                    _mode.value = ProtocolMode.PRIMARY
+                    event
+                }
+
+                is Event.Nack -> {
+                    throw IllegalStateException("STREAM 收到 NACK:${event.reason}")
+                }
+
+                is Event.Error -> {
+                    throw IllegalStateException("STREAM 收到 ERR:${event.reason}")
+                }
+
+                else -> {
+                    throw IllegalStateException("STREAM 在 ${timeoutMs}ms 内未收到设备确认")
+                }
+            }
+        } finally {
+            collector.cancel()
+        }
+    }
+
     fun close() {
         transport.close()
         scope.cancel()

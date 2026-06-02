@@ -22,6 +22,8 @@ Allowed fields:
 - `proto`
 - `platform_model`
 - `laser_installed`
+- static protocol capabilities, when they are short and explicitly reviewed,
+  for example `stream_control_supported`
 
 If compatibility requires temporary retention of additional fields, they must remain few, short, and explicitly reviewed.
 
@@ -87,6 +89,7 @@ The following classes of fields must not be added to `ACK:CAP`:
 - readiness state
 - peripheral health state
 - mutable feature flags
+- mutable subscription state
 - protection degradation state
 - measurement-plane state
 - future peripheral status fields
@@ -106,6 +109,8 @@ Examples of prohibited fields:
 - `max485_available`
 - `pcm5102_available`
 - `temperature_sensor_available`
+- `stream_enabled`
+- `stream_rate_hz`
 
 ## APP Initialization Order
 
@@ -151,7 +156,9 @@ on for start-gate decisions.
 When adding new information:
 
 - identity-level information belongs to `CAP`
+- static protocol capability belongs to `CAP` only when it is short and reviewed
 - runtime health belongs to `SNAPSHOT`
+- mutable stream subscription result belongs to a dedicated ACK, for example `ACK:STREAM`
 - continuous changing data belongs to `EVT:*`
 - command results belong to dedicated ACKs or events
 

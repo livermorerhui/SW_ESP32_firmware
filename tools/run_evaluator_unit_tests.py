@@ -1201,6 +1201,19 @@ void test_protocol_parse_core_commands() {
   assert(ProtocolCodec::parseCommand("WAVE:STOP", command, error));
   assert(command.type == CmdType::WAVE_STOP);
 
+  assert(ProtocolCodec::parseCommand("STREAM:SET enabled=1,rate_hz=10", command, error));
+  assert(command.type == CmdType::STREAM_SET);
+  assert(command.streamSubscription.enabled);
+  assert(command.streamSubscription.rateHz == 10);
+
+  assert(ProtocolCodec::parseCommand("STREAM:SET enabled=off", command, error));
+  assert(command.type == CmdType::STREAM_SET);
+  assert(!command.streamSubscription.enabled);
+  assert(command.streamSubscription.rateHz == ProtocolCodec::kStreamDefaultRateHz);
+
+  assert(!ProtocolCodec::parseCommand("STREAM:SET enabled=1,rate_hz=0", command, error));
+  expect_reason(error.c_str(), "INVALID_PARAM");
+
   assert(!ProtocolCodec::parseCommand("WAVE:SET f=60,i=80", command, error));
   expect_reason(error.c_str(), "INVALID_PARAM");
 }
@@ -1326,6 +1339,7 @@ void test_protocol_ack_cap_contract_stays_bootstrap_truth() {
   expect_contains(encoded, "platform_model=PLUS");
   expect_contains(encoded, "laser_installed=1");
   expect_contains(encoded, "leave_stop_supported=1");
+  expect_contains(encoded, "stream_control_supported=1");
   expect_not_contains(encoded, "measurement_health=");
   expect_not_contains(encoded, "degraded_start_available=");
   expect_not_contains(encoded, "degraded_start_enabled=");
@@ -1439,10 +1453,10 @@ void test_protocol_encode_stop_and_safety_contract() {
 
 void test_hub_ack_builder_core_contracts() {
   String encoded = HubAckBuilder::cap("1.2.3", "build-1", "sonicwave_esp32s3_n16r8", 1, PlatformModel::PLUS, true);
-  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 build=build-1 board=sonicwave_esp32s3_n16r8 proto=1 platform_model=PLUS laser_installed=1 leave_stop_supported=1");
+  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 build=build-1 board=sonicwave_esp32s3_n16r8 proto=1 platform_model=PLUS laser_installed=1 leave_stop_supported=1 stream_control_supported=1");
 
   encoded = HubAckBuilder::cap("1.2.3", "build-1", "sonicwave_esp32s3_n16r8", 1, PlatformModel::BASE, false);
-  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 build=build-1 board=sonicwave_esp32s3_n16r8 proto=1 platform_model=BASE laser_installed=0 leave_stop_supported=1");
+  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 build=build-1 board=sonicwave_esp32s3_n16r8 proto=1 platform_model=BASE laser_installed=0 leave_stop_supported=1 stream_control_supported=1");
   expect_not_contains(encoded, "measurement_health=");
   expect_not_contains(encoded, "degraded_start_available=");
   expect_not_contains(encoded, "degraded_start_enabled=");
@@ -1533,6 +1547,12 @@ void test_hub_ack_builder_safety_contracts() {
 
   encoded = HubAckBuilder::motionSampling(false, false);
   expect_reason(encoded.c_str(), "ACK:MOTION_SAMPLING enabled=0 fall_action_suppressed=0");
+
+  encoded = HubAckBuilder::streamSubscription(true, 10);
+  expect_reason(encoded.c_str(), "ACK:STREAM enabled=1 supported=1 rate_hz=10");
+
+  encoded = HubAckBuilder::streamSubscription(false, ProtocolCodec::kStreamDefaultRateHz);
+  expect_reason(encoded.c_str(), "ACK:STREAM enabled=0 supported=1 rate_hz=10");
 }
 
 void test_firmware_ota_begin_parser_and_data_frame() {

@@ -27,7 +27,7 @@ cd tools/android_demo
 - Primary match: advertises service UUID `6E400001-B5A3-F393-E0A9-E50E24DCCA9E`
 - Secondary match: device name contains `Sonicwave`/`SonicWave`/`Vibrate`
 5. Tap `Connect` on target device.
-6. After connected, app auto-enables TX notify (CCCD), requests MTU (target 185), probes `CAP?`, then refreshes `SNAPSHOT?`.
+6. After connected, app auto-enables TX notify (CCCD), requests MTU (target 185), probes `CAP?`, enables Demo realtime stream with `STREAM:SET enabled=1,rate_hz=10` when `stream_control_supported=1`, then refreshes `SNAPSHOT?`.
 - If no stream data arrives in 3 seconds, screen shows:
   `未收到测重数据（请确认已开启通知/固件在发送）`
 - `设备原始日志` can be expanded to confirm both outgoing and incoming lines.
@@ -57,7 +57,8 @@ cd tools/android_demo
 - Snapshot:
   - `SNAPSHOT: top_state=IDLE runtime_ready=1 start_ready=1 baseline_ready=0 platform_model=BASE laser_installed=0 laser_available=0 degraded_start_available=0 degraded_start_enabled=0`
 - Live stream:
-  - `EVT:STREAM:<dist>,<weight>`
+  - `ACK:STREAM enabled=1 supported=1 rate_hz=10`
+  - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=1 ma12_ready=<0|1> distance=<mm> weight=<kg> ma12=<kg>`
 - Stable weight:
   - `EVT:STABLE:<weight>`
 - Calibration:
@@ -79,8 +80,9 @@ cd tools/android_demo
   1. After connection, check `TX CAP?`.
   2. Confirm `RX ACK:CAP ... platform_model=... laser_installed=...`.
   3. Confirm `TX SNAPSHOT?` follows and `RX SNAPSHOT: ...` returns runtime truth.
-  4. Confirm subsequent `RX-RAW` chunks and `RX` complete lines continue normally.
-  5. Confirm stream lines (`EVT:STREAM`) appear continuously when measurement plane is active.
+  4. If `ACK:CAP` contains `stream_control_supported=1`, confirm `TX STREAM:SET enabled=1,rate_hz=10` and `RX ACK:STREAM enabled=1 ...`.
+  5. Confirm subsequent `RX-RAW` chunks and `RX` complete lines continue normally.
+  6. Confirm stream lines (`EVT:STREAM`) appear continuously when measurement plane is active.
 
 ## Init Contract
 - `ACK:CAP` is bootstrap truth only. It identifies the device.
@@ -91,7 +93,8 @@ cd tools/android_demo
   1. connect
   2. enable notify
   3. `CAP?`
-  4. `SNAPSHOT?`
+  4. `STREAM:SET enabled=1,rate_hz=10` when the firmware advertises `stream_control_supported=1`
+  5. `SNAPSHOT?`
 - After every successful `DEVICE:SET_CONFIG`, the app should refresh both:
   1. `CAP?`
   2. `SNAPSHOT?`

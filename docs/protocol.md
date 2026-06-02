@@ -63,14 +63,30 @@
   - 请求：`WAVE:STOP`
   - 响应：`ACK:OK`
 
-### 2.5 `SCALE:ZERO`
+### 2.5 `STREAM:SET`
+- 格式：`STREAM:SET enabled=<0|1>,rate_hz=<1..20>`
+- 参数：
+  - `enabled`: 是否通过 BLE 上行实时 `EVT:STREAM`。
+  - `rate_hz`: 上行实时流目标频率；缺省为 `10`。
+- 默认行为：
+  - 每次 BLE 连接建立或断开后，固件将 stream subscription 重置为关闭。
+  - 关闭 stream 只停止 BLE 上行 `EVT:STREAM`，不停止 MAX485 测量、测量健康、稳定体重、baseline 或安全判断。
+- 推荐使用：
+  - Demo APP 进入遥测 / 校准调试链路时发送 `STREAM:SET enabled=1,rate_hz=10`。
+  - 正式 SW APP 如不需要实时距离/体重曲线，可不发送该命令。
+- 响应：
+  - `ACK:STREAM enabled=<0|1> supported=1 rate_hz=<rate>`
+- 错误情况：
+  - 缺失参数、布尔值无效或 `rate_hz` 越界：`NACK:INVALID_PARAM`
+
+### 2.6 `SCALE:ZERO`
 - 格式：`SCALE:ZERO`
 - 作用：触发零点校准。
 - 示例：
   - 请求：`SCALE:ZERO`
   - 响应：`ACK:OK`
 
-### 2.6 `SCALE:CAL`
+### 2.7 `SCALE:CAL`
 - 格式：`SCALE:CAL z=<float> k=<float>`
 - 参数：
   - `z`: zeroDistance
@@ -106,6 +122,9 @@
   - 命令执行成功。
 - `ACK:CAP fw=<ver> proto=<ver>`
   - 能力查询成功返回。
+  - 当前包含 `stream_control_supported=1`，表示设备支持 `STREAM:SET` 显式实时流订阅。
+- `ACK:STREAM enabled=<0|1> supported=1 rate_hz=<rate>`
+  - 实时测量流订阅设置成功。
 - 线上传输示例（含帧结尾）：
   - `ACK:CAP fw=SW-HUB-1.0.0 proto=1\n`
   - `ACK:OK\n`
@@ -150,6 +169,8 @@
     - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=0 ma12_ready=0 reason=<READ_FAIL|OUT_OF_RANGE_LOW|...>`
 - 含义：measurement plane 的唯一正式 continuous carrier。
 - 说明：
+  - 只有当前 BLE session 通过 `STREAM:SET enabled=1` 订阅后，固件才通过 BLE 上行该实时流。
+  - stream 订阅关闭时，固件内部测量、baseline、安全判断仍继续运行。
   - `distance / weight / ma12 / valid / reason / seq` 属于同一 formal sample。
   - 裸 CSV `<dist>,<weight>` 仅保留为 legacy/fallback，不再是 primary 协议的正式载体。
 
