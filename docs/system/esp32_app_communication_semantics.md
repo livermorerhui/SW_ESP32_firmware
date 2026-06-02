@@ -314,6 +314,7 @@ ACK：
 - 当前已采用显式订阅合同：`ACK:CAP stream_control_supported=1` 表示设备支持，`STREAM:SET enabled=1,rate_hz=10` 打开当前 BLE session 的实时 `EVT:STREAM`，`ACK:STREAM enabled=<0|1> supported=1 rate_hz=<rate>` 确认结果。
 - 订阅关闭只影响 BLE 上行实时流，不影响固件内部测量健康、稳定体重、baseline 或 safety 判断。
 - 每次 BLE 连接建立或断开后，固件将 stream subscription 重置为关闭；Demo APP 需要实时遥测/校准时显式开启，正式 SW APP 可默认不发送该命令。不要靠 APP 名称或连接来源猜测是否发送实时流。
+- 长期合同和回归入口：`docs/system/esp32_realtime_stream_subscription_contract.md`。
 
 2026-04-22 的 `BleTransport critical delivery observability` 真机验证确认：
 

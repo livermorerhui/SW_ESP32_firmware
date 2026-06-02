@@ -77,6 +77,12 @@
   - `CAP? / SNAPSHOT / WAVE:* / EVT:*` 的正式字段、字段名和消费含义
   - Demo APP / SW APP 已正式依赖的兼容桥接输出
 - 涉及 BLE 重构时，必须先对照 `docs/system/esp32_ble_safe_refactor_freeze_checklist.md` 审计，再决定哪些只允许做内部抽取、哪些属于正式协议变更
+- 涉及 Demo APP / 正式 SW APP 对实时测量流 `EVT:STREAM` 的差异化需求时，必须按 `docs/system/esp32_realtime_stream_subscription_contract.md` 执行：
+  - 是否上行实时流必须通过 `STREAM:SET enabled=<0|1>,rate_hz=<1..20>` 显式订阅表达
+  - `ACK:CAP stream_control_supported=1` 只能表示静态协议能力，不表示当前已开启实时流
+  - 当前订阅状态只能看 `ACK:STREAM` 或设备侧 `[STREAM_CONTROL]` 执行证据
+  - 禁止靠 APP 名称、BLE 设备名、连接来源或 Demo / SW APP 猜测来决定是否发送实时流
+  - 关闭实时流只影响 BLE `EVT:STREAM` 上行，不得被解释为停止 MAX485 测量、baseline、稳定体重或 safety 判断
 - 如果本轮开发尚未正式收官，除非用户明确提出，否则 AI 不得自行执行：
   - `git commit`
   - `git push`
@@ -113,6 +119,7 @@
   - ESP32 串口或设备侧日志是否可读、可用、能支撑结论
   - 如本轮约定采服务器日志，还要检查服务器日志是否真实有内容
 - 如果某一路日志只有文件、没有可读内容，或内容不足以支撑结论，AI 必须明确标记该路证据未通过，不能笼统写成“测试通过”
+- 真机 capture 复核实时流订阅链路时，如果未采到 Demo TX 原始行，但已经有 `ACK:STREAM enabled=1` 与 ESP32 `[STREAM_CONTROL] action=set enabled=1`，不得直接判握手失败；ACK 和设备侧执行日志足以证明订阅完成。若 UI 消费层缺结构化日志，应标记为消费层 evidence gap，而不是继续扩大固件协议或校准算法改动。
 - 修改串口采集、PlatformIO monitor、烧录、真机日志、BLE 回放等工具链前，AI 必须先搜索并审计成熟方案，优先使用 PlatformIO / 官方工具 / 项目既有脚本；禁止未经对比就自写底层串口或采集器并让用户反复真机试错
 - 如确需自写工具，必须先说明官方方案为何不适用、替代哪一层能力、如何验证、如何回退
 - 涉及 ESP32-S3 N16R8 底座引脚切换时，必须先读取 `docs/system/esp32s3_pin_profiles.md`：
