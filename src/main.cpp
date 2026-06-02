@@ -133,6 +133,21 @@ public:
         return true;
       }
 
+      case CmdType::STREAM_SET: {
+        String reason;
+        if (!l->setStreamSubscription(
+                c.streamSubscription.enabled,
+                c.streamSubscription.rateHz,
+                reason)) {
+          outAck = HubAckBuilder::simpleNack(reason);
+          return false;
+        }
+        outAck = HubAckBuilder::streamSubscription(
+            l->streamSubscriptionEnabled(),
+            l->streamSubscriptionRateHz());
+        return true;
+      }
+
       case CmdType::WAVE_SET: {
         Serial.printf(
             "[LAYER:COMMAND_DISPATCH] cmd=WAVE:SET freq_hz=%.2f intensity=%d owner=WaveModule::setParams\n",
@@ -290,10 +305,12 @@ public:
   }
 
   void onBleDisconnect() override {
+    if (l) l->resetStreamSubscription("ble_disconnect");
     if (sm) sm->onBleDisconnected();
   }
 
   void onBleConnected() override {
+    if (l) l->resetStreamSubscription("ble_connected");
     if (sm) sm->onBleConnected();
   }
 

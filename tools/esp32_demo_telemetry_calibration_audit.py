@@ -139,6 +139,18 @@ def build_report(capture_dir: Path) -> tuple[str, str]:
     baseline_fragmented = len(grep_lines(esp32, r"notify_fragmented.*prefix=EVT:BASELINE"))
     fatal_lines = fatal_runtime_lines(runtime_combined)
 
+    stream_cap_supported = len(grep_lines(android, r"RX line emitted=ACK:CAP .*stream_control_supported=1|ACK:CAP .*stream_control_supported=1"))
+    stream_set_tx = len(grep_lines(android, r"\[TX\].*STREAM:SET|STREAM:SET enabled=1|STREAM:SET enabled=true"))
+    stream_request = len(grep_lines(android, r"\[STREAM_CONTROL\].*request.*enabled=true"))
+    stream_ack_enabled = len(grep_lines(android, r"RX line emitted=ACK:STREAM .*enabled=1|\[STREAM_CONTROL\].*ack enabled=true|\[STREAM_CONTROL\].*enabled=true.*source=connect"))
+    stream_ack_disabled = len(grep_lines(android, r"RX line emitted=ACK:STREAM .*enabled=0|\[STREAM_CONTROL\].*ack enabled=false"))
+    stream_enable_failed = len(grep_lines(android, r"\[STREAM_CONTROL\].*enable_failed"))
+    stream_cap_skipped = len(grep_lines(android, r"\[STREAM_CONTROL\].*skip reason=capability_not_supported"))
+    esp32_stream_set = len(grep_lines(esp32, r"\[STREAM_CONTROL\].*action=set.*enabled=1"))
+    esp32_stream_reset = len(grep_lines(esp32, r"\[STREAM_CONTROL\].*action=reset"))
+    explicit_stream_supported = stream_cap_supported > 0
+    explicit_stream_acknowledged = stream_ack_enabled > 0 or esp32_stream_set > 0
+
     android_stream_lines = len(grep_lines(android, r"RX line emitted=EVT:STREAM"))
     android_stream_chunks = len(grep_lines(android, r"RX chunk .*EVT:STREAM"))
     app_stream_restored = android_stream_lines >= STREAM_RESTORED_MIN_LINES
@@ -178,6 +190,14 @@ def build_report(capture_dir: Path) -> tuple[str, str]:
         findings.append("MEASUREMENT_TRANSIENT 有 fail_start 但缺 recovered（RS485_TRANSIENT_UNRECOVERED）。")
     if not esp32_ready:
         findings.append("未看到 measurement_health=READY（MEASUREMENT_HEALTH_NOT_READY）。")
+    if stream_enable_failed > 0:
+        findings.append("Demo APP 发送实时流订阅失败（STREAM_SUBSCRIPTION_ENABLE_FAILED）。")
+    if explicit_stream_supported and explicit_stream_acknowledged and stream_set_tx == 0 and stream_request == 0:
+        observations.append("未采到 Demo TX 原始行，但 ACK:STREAM / ESP32 set 已证明实时流订阅完成。")
+    elif explicit_stream_supported and stream_set_tx == 0 and stream_request == 0:
+        findings.append("固件声明支持显式实时流订阅，但 Demo APP 未发起 STREAM:SET（STREAM_SUBSCRIPTION_NOT_REQUESTED）。")
+    elif explicit_stream_supported and not explicit_stream_acknowledged:
+        findings.append("Demo APP 已连接支持显式订阅的固件，但未收到 ACK:STREAM enabled=1（STREAM_SUBSCRIPTION_NOT_ACKED）。")
     if esp32_plane_valid > 0 and android_stream_lines == 0 and stream_suppressed > 0:
         findings.append("固件已有有效测量样本，但 BLE stream 被 control 队列压制（STREAM_SUPPRESSED_FOR_CONTROL）。")
     elif esp32_plane_valid > 0 and android_stream_lines == 0:
@@ -209,6 +229,8 @@ def build_report(capture_dir: Path) -> tuple[str, str]:
         verdict = "FAIL_FATAL_RUNTIME_EXCEPTION"
     elif any("RS485_NO_VALID_READ" in item or "MEASUREMENT_HEALTH_NOT_READY" in item for item in findings):
         verdict = "FAIL_RS485_OR_MEASUREMENT_HEALTH"
+    elif any("STREAM_SUBSCRIPTION_" in item for item in findings):
+        verdict = "FAIL_STREAM_SUBSCRIPTION_HANDSHAKE"
     elif any("STREAM_SUPPRESSED_FOR_CONTROL" in item for item in findings):
         verdict = "FAIL_STREAM_SUPPRESSED_FOR_CONTROL"
     elif any("STREAM_NOT_DELIVERED_TO_APP" in item or "APP_READY_WITHOUT_STREAM" in item for item in findings):
@@ -227,6 +249,10 @@ def build_report(capture_dir: Path) -> tuple[str, str]:
         verdict = "NEEDS_REVIEW"
 
     android_hits = [
+        hit("显式实时流能力 ACK:CAP", android, r"RX line emitted=ACK:CAP .*stream_control_supported=1|ACK:CAP .*stream_control_supported=1", limit=12),
+        hit("Demo 发起 STREAM:SET", android, r"\[TX\].*STREAM:SET|STREAM:SET enabled=1|STREAM:SET enabled=true|\[STREAM_CONTROL\].*request.*enabled=true", limit=12),
+        hit("Demo 收到 ACK:STREAM enabled=1", android, r"RX line emitted=ACK:STREAM .*enabled=1|\[STREAM_CONTROL\].*ack enabled=true|\[STREAM_CONTROL\].*enabled=true.*source=connect", limit=12),
+        hit("Demo 实时流订阅失败 / 跳过", android, r"\[STREAM_CONTROL\].*(enable_failed|skip reason=capability_not_supported)|RX line emitted=ACK:STREAM .*enabled=0", limit=12),
         hit("Demo/Transport 收到 SNAPSHOT READY", android, r"RX line emitted=SNAPSHOT:.*measurement_health=READY", limit=16),
         hit("Demo/Transport 收到 EVT:BASELINE", android, r"RX line emitted=EVT:BASELINE", limit=16),
         hit("Demo/Transport 收到 EVT:STREAM", android, r"RX line emitted=EVT:STREAM", limit=20),
@@ -238,6 +264,7 @@ def build_report(capture_dir: Path) -> tuple[str, str]:
         hit("校准无实时距离", android, r"distancePresent=false|no live distance|没有实时距离|capture_unavailable_no_live_distance", limit=12),
     ]
     esp32_hits = [
+        hit("固件实时流订阅状态", esp32, r"\[STREAM_CONTROL\]", limit=18),
         hit("传感器 profile", esp32, r"\[LASER_SENSOR_PROFILE\]", limit=8),
         hit("测量诊断", esp32, r"\[MEASUREMENT_DIAG\]", limit=18),
         hit("测量健康", esp32, r"\[MEASUREMENT_HEALTH\]|measurement_health=", limit=18),
@@ -269,6 +296,14 @@ def build_report(capture_dir: Path) -> tuple[str, str]:
         f"- stream_suppressed_for_control_lines: `{stream_suppressed}`",
         f"- stream_suppressed_for_control_last_total: `{stream_suppressed_total if stream_suppressed_total is not None else 'unknown'}`",
         f"- baseline_fragmented_lines: `{baseline_fragmented}`",
+        f"- stream_control_supported_lines: `{stream_cap_supported}`",
+        f"- stream_set_tx_or_request_lines: `{stream_set_tx + stream_request}`",
+        f"- stream_ack_enabled_lines: `{stream_ack_enabled}`",
+        f"- stream_ack_disabled_lines: `{stream_ack_disabled}`",
+        f"- stream_enable_failed_lines: `{stream_enable_failed}`",
+        f"- stream_capability_skip_lines: `{stream_cap_skipped}`",
+        f"- esp32_stream_set_enabled_lines: `{esp32_stream_set}`",
+        f"- esp32_stream_reset_lines: `{esp32_stream_reset}`",
         f"- calibration_precondition_lines: `{cal_preconditions}`",
         f"- calibration_point_lines: `{cal_points}`",
         f"- calibration_no_distance_lines: `{cal_no_distance}`",

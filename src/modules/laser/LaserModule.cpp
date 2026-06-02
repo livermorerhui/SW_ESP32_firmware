@@ -282,6 +282,41 @@ bool LaserModule::captureCalibrationPoint(float referenceWeightKg, CalibrationCa
   return true;
 }
 
+bool LaserModule::setStreamSubscription(bool enabled, uint8_t rateHz, String& reason) {
+  if (rateHz < ProtocolCodec::kStreamMinRateHz || rateHz > ProtocolCodec::kStreamMaxRateHz) {
+    reason = "INVALID_PARAM";
+    return false;
+  }
+  streamEnabled = enabled;
+  streamRateHz = rateHz;
+  lastStreamPublishedAtMs = 0;
+  Serial.printf(
+      "[STREAM_CONTROL] action=set enabled=%d rate_hz=%u source=STREAM_SET\n",
+      streamEnabled ? 1 : 0,
+      static_cast<unsigned>(streamRateHz));
+  return true;
+}
+
+void LaserModule::resetStreamSubscription(const char* reason) {
+  const bool wasEnabled = streamEnabled;
+  streamEnabled = false;
+  streamRateHz = ProtocolCodec::kStreamDefaultRateHz;
+  lastStreamPublishedAtMs = 0;
+  Serial.printf(
+      "[STREAM_CONTROL] action=reset enabled=0 rate_hz=%u previous_enabled=%d reason=%s\n",
+      static_cast<unsigned>(streamRateHz),
+      wasEnabled ? 1 : 0,
+      reason ? reason : "unspecified");
+}
+
+bool LaserModule::streamSubscriptionEnabled() const {
+  return streamEnabled;
+}
+
+uint8_t LaserModule::streamSubscriptionRateHz() const {
+  return streamRateHz;
+}
+
 float LaserModule::getMean(const float* values) const {
   float sum = 0;
   for (int i = 0; i < bufCount; i++) sum += values[i];
@@ -371,10 +406,29 @@ void LaserModule::publishMeasurementSample(
   if (!sample.shouldPublish) {
     return;
   }
+  if (!shouldPublishStreamSample(now)) {
+    return;
+  }
   if (bus) {
     bus->publish(sample.event);
   }
   measurementPlane.notePublished(sample);
+}
+
+bool LaserModule::shouldPublishStreamSample(uint32_t now) {
+  if (!streamEnabled) {
+    return false;
+  }
+  const uint8_t rateHz = streamRateHz;
+  if (rateHz == 0) {
+    return false;
+  }
+  const uint32_t minIntervalMs = 1000UL / static_cast<uint32_t>(rateHz);
+  if (lastStreamPublishedAtMs != 0 && (now - lastStreamPublishedAtMs) < minIntervalMs) {
+    return false;
+  }
+  lastStreamPublishedAtMs = now;
+  return true;
 }
 
 void LaserModule::logLatestMeasurementPlaneSummary(const char* trigger) {

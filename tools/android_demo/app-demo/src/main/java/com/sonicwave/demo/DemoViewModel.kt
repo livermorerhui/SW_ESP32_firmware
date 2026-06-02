@@ -428,6 +428,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 probe?.reason?.let { reason ->
                     appendSystemLog(text(R.string.log_capability_probe_result, reason))
                 }
+                enableDemoRealtimeStreamIfSupported(probe?.capabilities)
                 val nextProtocolMode = mergeProtocolMode(
                     currentMode = _uiState.value.protocolMode,
                     observedMode = probe?.mode,
@@ -2165,6 +2166,17 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
 
+                    is Event.StreamSubscription -> {
+                        _uiState.update {
+                            it.copy(
+                                lastAckOrError = event.raw,
+                            )
+                        }
+                        appendSystemLog(
+                            "[STREAM_CONTROL] ack enabled=${event.enabled} supported=${event.supported} rate_hz=${event.rateHz ?: "-"}",
+                        )
+                    }
+
                     is Event.DeviceConfig -> {
                         val devicePlatformModel = event.platformModel
                         val eventLaserInstalled = event.laserInstalled
@@ -3459,10 +3471,41 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         return parseCapabilityBoolean(capabilities.values["MOTION_SAMPLING_MODE"]) ?: false
     }
 
+    private fun isStreamControlSupported(capabilities: Event.Capabilities?): Boolean {
+        return parseCapabilityBoolean(capabilities?.values?.get("STREAM_CONTROL_SUPPORTED")) ?: false
+    }
+
     private fun isFallStopEnabled(capabilities: Event.Capabilities): Boolean? {
         parseCapabilityBoolean(capabilities.values["FALL_STOP_ENABLED"])?.let { return it }
         val suppressed = parseCapabilityBoolean(capabilities.values["FALL_ACTION_SUPPRESSED"]) ?: return null
         return !suppressed
+    }
+
+    private fun enableDemoRealtimeStreamIfSupported(capabilities: Event.Capabilities?) {
+        if (!isStreamControlSupported(capabilities)) {
+            appendSystemLog("[STREAM_CONTROL] skip reason=capability_not_supported")
+            return
+        }
+        viewModelScope.launch {
+            runCatching {
+                appendSystemLog("[STREAM_CONTROL] request enabled=true rate_hz=$DEMO_STREAM_RATE_HZ source=connect")
+                client.setStreamSubscriptionAndAwaitAck(
+                    enabled = true,
+                    rateHz = DEMO_STREAM_RATE_HZ,
+                )
+            }.onSuccess { ack ->
+                _uiState.update {
+                    it.copy(
+                        lastAckOrError = ack.raw,
+                    )
+                }
+                appendSystemLog(
+                    "[STREAM_CONTROL] enabled=${ack.enabled} supported=${ack.supported} rate_hz=${ack.rateHz ?: "-"} source=connect",
+                )
+            }.onFailure { throwable ->
+                appendSystemLog("[STREAM_CONTROL] enable_failed reason=${throwable.message ?: throwable.javaClass.simpleName}")
+            }
+        }
     }
 
     private fun parseCapabilityBoolean(raw: String?): Boolean? {
@@ -4344,6 +4387,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         private val NAME_KEYWORDS = listOf("sonicwave", "vibrate")
         private const val NO_STREAM_WARNING_TIMEOUT_MS = 3_000L
+        private const val DEMO_STREAM_RATE_HZ = 10
         private const val DISPLAY_THROTTLE_MS = 125L
         private const val RAW_LOG_PUBLISH_INTERVAL_MS = 200L
         private const val TEST_SESSION_PANEL_PUBLISH_INTERVAL_MS = 200L

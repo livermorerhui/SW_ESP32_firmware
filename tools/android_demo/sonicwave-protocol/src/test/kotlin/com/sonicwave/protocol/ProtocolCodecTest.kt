@@ -51,6 +51,10 @@ class ProtocolCodecTest {
             "DEBUG:DEGRADED_START enabled=1",
             ProtocolCodec.encode(Command.DegradedStartSet(enabled = true)),
         )
+        assertEquals(
+            "STREAM:SET enabled=1,rate_hz=10",
+            ProtocolCodec.encode(Command.StreamSet(enabled = true, rateHz = 10)),
+        )
     }
 
     @Test
@@ -110,6 +114,16 @@ class ProtocolCodecTest {
         assertEquals(true, ack.enabled)
         assertEquals(true, ack.available)
         assertEquals("ACK:DEGRADED_START enabled=1 available=1", ack.raw)
+    }
+
+    @Test
+    fun decodeStreamSubscriptionAckAsDedicatedEvent() {
+        val event = ProtocolCodec.decode("ACK:STREAM enabled=1 supported=1 rate_hz=10")
+        val ack = assertIs<Event.StreamSubscription>(event)
+        assertEquals(true, ack.enabled)
+        assertEquals(true, ack.supported)
+        assertEquals(10, ack.rateHz)
+        assertEquals("ACK:STREAM enabled=1 supported=1 rate_hz=10", ack.raw)
     }
 
     @Test

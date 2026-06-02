@@ -23,6 +23,7 @@ object ProtocolCodec {
         }
         is Command.FallStopProtectionSet -> "DEBUG:FALL_STOP enabled=${if (command.enabled) 1 else 0}"
         is Command.MotionSamplingModeSet -> "DEBUG:MOTION_SAMPLING enabled=${if (command.enabled) 1 else 0}"
+        is Command.StreamSet -> "STREAM:SET enabled=${if (command.enabled) 1 else 0},rate_hz=${command.rateHz}"
         Command.LegacyZero -> "ZERO"
         is Command.LegacySetPs -> "SET_PS:${command.zeroDistance},${command.scaleFactor}"
         is Command.LegacyWaveFie -> encodeLegacyWaveFie(command)
@@ -37,6 +38,7 @@ object ProtocolCodec {
         parseDeviceConfig(raw)?.let { return it }
         parseFallStopProtection(raw)?.let { return it }
         parseDegradedStart(raw)?.let { return it }
+        parseStreamSubscription(raw)?.let { return it }
         parseCalibrationModel(raw)?.let { return it }
         parseCalibrationSetModelResult(raw)?.let { return it }
         parseCalibrationPoint(raw)?.let { return it }
@@ -117,6 +119,19 @@ object ProtocolCodec {
         return Event.DegradedStart(
             enabled = enabled,
             available = available,
+            raw = raw,
+        )
+    }
+
+    private fun parseStreamSubscription(raw: String): Event.StreamSubscription? {
+        if (!raw.startsWith("ACK:STREAM", ignoreCase = true)) return null
+        val payload = raw.substringAfter("ACK:STREAM", "").trim()
+        val kv = parseKeyValuePayload(payload)
+        val enabled = parseBooleanFlag(kv["ENABLED"]) ?: return null
+        return Event.StreamSubscription(
+            enabled = enabled,
+            supported = parseBooleanFlag(kv["SUPPORTED"]) ?: true,
+            rateHz = kv["RATE_HZ"]?.toIntOrNull(),
             raw = raw,
         )
     }
