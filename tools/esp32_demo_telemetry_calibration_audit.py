@@ -192,7 +192,9 @@ def build_report(capture_dir: Path) -> tuple[str, str]:
         findings.append("未看到 measurement_health=READY（MEASUREMENT_HEALTH_NOT_READY）。")
     if stream_enable_failed > 0:
         findings.append("Demo APP 发送实时流订阅失败（STREAM_SUBSCRIPTION_ENABLE_FAILED）。")
-    if explicit_stream_supported and stream_set_tx == 0 and stream_request == 0:
+    if explicit_stream_supported and explicit_stream_acknowledged and stream_set_tx == 0 and stream_request == 0:
+        observations.append("未采到 Demo TX 原始行，但 ACK:STREAM / ESP32 set 已证明实时流订阅完成。")
+    elif explicit_stream_supported and stream_set_tx == 0 and stream_request == 0:
         findings.append("固件声明支持显式实时流订阅，但 Demo APP 未发起 STREAM:SET（STREAM_SUBSCRIPTION_NOT_REQUESTED）。")
     elif explicit_stream_supported and not explicit_stream_acknowledged:
         findings.append("Demo APP 已连接支持显式订阅的固件，但未收到 ACK:STREAM enabled=1（STREAM_SUBSCRIPTION_NOT_ACKED）。")
