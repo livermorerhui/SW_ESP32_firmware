@@ -143,13 +143,21 @@ def build_report(capture_dir: Path) -> tuple[str, str]:
     stream_set_tx = len(grep_lines(android, r"\[TX\].*STREAM:SET|STREAM:SET enabled=1|STREAM:SET enabled=true"))
     stream_request = len(grep_lines(android, r"\[STREAM_CONTROL\].*request.*enabled=true"))
     stream_ack_enabled = len(grep_lines(android, r"RX line emitted=ACK:STREAM .*enabled=1|\[STREAM_CONTROL\].*ack enabled=true|\[STREAM_CONTROL\].*enabled=true.*source=connect"))
+    stream_subscription_result_ok = len(
+        grep_lines(android, r"\[STREAM_SUBSCRIPTION_RESULT\].*enabled=true.*acked=true")
+    )
     stream_ack_disabled = len(grep_lines(android, r"RX line emitted=ACK:STREAM .*enabled=0|\[STREAM_CONTROL\].*ack enabled=false"))
-    stream_enable_failed = len(grep_lines(android, r"\[STREAM_CONTROL\].*enable_failed"))
+    stream_enable_failed = len(
+        grep_lines(
+            android,
+            r"\[STREAM_CONTROL\].*enable_failed|\[STREAM_SUBSCRIPTION_RESULT\].*acked=false.*reason=(?!capability_not_supported)",
+        )
+    )
     stream_cap_skipped = len(grep_lines(android, r"\[STREAM_CONTROL\].*skip reason=capability_not_supported"))
     esp32_stream_set = len(grep_lines(esp32, r"\[STREAM_CONTROL\].*action=set.*enabled=1"))
     esp32_stream_reset = len(grep_lines(esp32, r"\[STREAM_CONTROL\].*action=reset"))
     explicit_stream_supported = stream_cap_supported > 0
-    explicit_stream_acknowledged = stream_ack_enabled > 0 or esp32_stream_set > 0
+    explicit_stream_acknowledged = stream_ack_enabled > 0 or stream_subscription_result_ok > 0 or esp32_stream_set > 0
 
     android_stream_lines = len(grep_lines(android, r"RX line emitted=EVT:STREAM"))
     android_stream_chunks = len(grep_lines(android, r"RX chunk .*EVT:STREAM"))
@@ -159,9 +167,18 @@ def build_report(capture_dir: Path) -> tuple[str, str]:
     consume_valid = len(grep_lines(android, r"\[LAYER:MEASUREMENT_CONSUME\].*valid=1"))
     consume_invalid = len(grep_lines(android, r"\[LAYER:MEASUREMENT_CONSUME\].*valid=0"))
     consume_ignored = len(grep_lines(android, r"\[LAYER:MEASUREMENT_CONSUME\].*ignored"))
-    cal_preconditions = len(grep_lines(android, r"\[CAL_APP\] preconditions|\[CAL_APP\] record clicked"))
-    cal_points = len(grep_lines(android, r"\[CAL_APP\] point appended|\[CAL_UI\] pointRecorded|ACK:CAL_POINT"))
-    cal_no_distance = len(grep_lines(android, r"distancePresent=false|no live distance|没有实时距离|capture_unavailable_no_live_distance"))
+    consume_summary_valid = len(grep_lines(android, r"\[MEASUREMENT_CONSUME_SUMMARY\].*valid_count=[1-9]\d*"))
+    consume_summary_invalid = len(grep_lines(android, r"\[MEASUREMENT_CONSUME_SUMMARY\].*invalid_count=[1-9]\d*"))
+    consume_summary_ignored = len(grep_lines(android, r"\[MEASUREMENT_CONSUME_SUMMARY\].*ignored_count=[1-9]\d*"))
+    app_consume_valid_total = consume_valid + consume_summary_valid
+    cal_preconditions = len(grep_lines(android, r"\[CAL_APP\] preconditions|\[CAL_APP\] record clicked|\[CAL_CAPTURE_ATTEMPT\]"))
+    cal_points = len(grep_lines(android, r"\[CAL_APP\] point appended|\[CAL_UI\] pointRecorded|ACK:CAL_POINT|\[CAL_CAPTURE_RESULT\].*result=success"))
+    cal_no_distance = len(
+        grep_lines(
+            android,
+            r"distancePresent=false|distance_present=false|no live distance|没有实时距离|capture_unavailable_no_live_distance|\[CAL_CAPTURE_RESULT\].*reason=NO_LIVE_DISTANCE",
+        )
+    )
     user_failed = has(notes, r"result=fail|异常|没有数据|无法校准|曲线.*没有|无数据|不是实时")
     user_passed = has(notes, r"result=pass|通过|曲线.*有数据|校准.*成功|校准点已记录")
 
@@ -204,7 +221,7 @@ def build_report(capture_dir: Path) -> tuple[str, str]:
         findings.append("固件已有有效测量样本，但 APP 侧未收到 EVT:STREAM（STREAM_NOT_DELIVERED_TO_APP）。")
     elif android_snapshot_ready > 0 and android_baseline_lines > 0 and android_stream_lines == 0:
         findings.append("APP 已收到 READY snapshot / baseline，但没有实时 EVT:STREAM（APP_READY_WITHOUT_STREAM）。")
-    elif android_stream_lines > 0 and consume_valid == 0:
+    elif android_stream_lines > 0 and app_consume_valid_total == 0:
         if user_passed and app_stream_restored and cal_no_distance == 0:
             evidence_gaps.append(
                 "Demo APP 缺少 MEASUREMENT_CONSUME / 校准录点结构化日志；"
@@ -213,9 +230,9 @@ def build_report(capture_dir: Path) -> tuple[str, str]:
             observations.append("Demo APP 传输层实时 EVT:STREAM 已恢复，消费层调试日志缺失不再单独判失败。")
         else:
             findings.append("APP 收到 EVT:STREAM，但消费层未形成有效测量点（APP_STREAM_CONSUME_GAP）。")
-    elif consume_valid > 0 and cal_points == 0 and cal_preconditions > 0:
+    elif app_consume_valid_total > 0 and cal_points == 0 and cal_preconditions > 0:
         findings.append("APP 已消费遥测，但校准录点未完成，优先看录制 / 参考重量 / distancePresent 条件（CALIBRATION_PRECONDITION_GAP）。")
-    elif consume_valid > 0 and cal_points > 0:
+    elif app_consume_valid_total > 0 and cal_points > 0:
         observations.append("Demo APP 已消费有效遥测且校准点有记录证据。")
 
     if cal_no_distance > 0:
@@ -243,7 +260,7 @@ def build_report(capture_dir: Path) -> tuple[str, str]:
         verdict = "PASS_APP_STREAM_RESTORED_WITH_EVIDENCE_GAP"
     elif evidence_gaps:
         verdict = "NEEDS_REVIEW_EVIDENCE_GAP"
-    elif user_passed and (consume_valid > 0 or app_stream_restored):
+    elif user_passed and (app_consume_valid_total > 0 or app_stream_restored):
         verdict = "PASS_CANDIDATE"
     else:
         verdict = "NEEDS_REVIEW"
@@ -251,8 +268,8 @@ def build_report(capture_dir: Path) -> tuple[str, str]:
     android_hits = [
         hit("显式实时流能力 ACK:CAP", android, r"RX line emitted=ACK:CAP .*stream_control_supported=1|ACK:CAP .*stream_control_supported=1", limit=12),
         hit("Demo 发起 STREAM:SET", android, r"\[TX\].*STREAM:SET|STREAM:SET enabled=1|STREAM:SET enabled=true|\[STREAM_CONTROL\].*request.*enabled=true", limit=12),
-        hit("Demo 收到 ACK:STREAM enabled=1", android, r"RX line emitted=ACK:STREAM .*enabled=1|\[STREAM_CONTROL\].*ack enabled=true|\[STREAM_CONTROL\].*enabled=true.*source=connect", limit=12),
-        hit("Demo 实时流订阅失败 / 跳过", android, r"\[STREAM_CONTROL\].*(enable_failed|skip reason=capability_not_supported)|RX line emitted=ACK:STREAM .*enabled=0", limit=12),
+        hit("Demo 收到 ACK:STREAM enabled=1", android, r"RX line emitted=ACK:STREAM .*enabled=1|\[STREAM_CONTROL\].*ack enabled=true|\[STREAM_CONTROL\].*enabled=true.*source=connect|\[STREAM_SUBSCRIPTION_RESULT\].*enabled=true.*acked=true", limit=12),
+        hit("Demo 实时流订阅失败 / 跳过", android, r"\[STREAM_CONTROL\].*(enable_failed|skip reason=capability_not_supported)|\[STREAM_SUBSCRIPTION_RESULT\].*acked=false|RX line emitted=ACK:STREAM .*enabled=0", limit=12),
         hit("Demo/Transport 收到 SNAPSHOT READY", android, r"RX line emitted=SNAPSHOT:.*measurement_health=READY", limit=16),
         hit("Demo/Transport 收到 EVT:BASELINE", android, r"RX line emitted=EVT:BASELINE", limit=16),
         hit("Demo/Transport 收到 EVT:STREAM", android, r"RX line emitted=EVT:STREAM", limit=20),
@@ -260,8 +277,9 @@ def build_report(capture_dir: Path) -> tuple[str, str]:
         hit("APP 消费有效遥测", android, r"\[LAYER:MEASUREMENT_CONSUME\].*valid=1", limit=16),
         hit("APP 消费无效遥测", android, r"\[LAYER:MEASUREMENT_CONSUME\].*valid=0", limit=16),
         hit("APP 忽略遥测 carrier", android, r"\[LAYER:MEASUREMENT_CONSUME\].*ignored", limit=12),
-        hit("校准前置 / 录点", android, r"\[CAL_APP\] preconditions|\[CAL_APP\] record clicked|\[CAL_APP\] point appended|\[CAL_UI\] pointRecorded|ACK:CAL_POINT", limit=24),
-        hit("校准无实时距离", android, r"distancePresent=false|no live distance|没有实时距离|capture_unavailable_no_live_distance", limit=12),
+        hit("APP 消费遥测 summary", android, r"\[MEASUREMENT_CONSUME_SUMMARY\]", limit=16),
+        hit("校准前置 / 录点", android, r"\[CAL_APP\] preconditions|\[CAL_APP\] record clicked|\[CAL_APP\] point appended|\[CAL_UI\] pointRecorded|ACK:CAL_POINT|\[CAL_CAPTURE_ATTEMPT\]|\[CAL_CAPTURE_RESULT\]", limit=24),
+        hit("校准无实时距离", android, r"distancePresent=false|distance_present=false|no live distance|没有实时距离|capture_unavailable_no_live_distance|\[CAL_CAPTURE_RESULT\].*reason=NO_LIVE_DISTANCE", limit=12),
     ]
     esp32_hits = [
         hit("固件实时流订阅状态", esp32, r"\[STREAM_CONTROL\]", limit=18),
@@ -293,12 +311,15 @@ def build_report(capture_dir: Path) -> tuple[str, str]:
         f"- app_consume_valid: `{consume_valid}`",
         f"- app_consume_invalid: `{consume_invalid}`",
         f"- app_consume_ignored: `{consume_ignored}`",
+        f"- app_consume_summary_valid: `{consume_summary_valid}`",
+        f"- app_consume_summary_invalid: `{consume_summary_invalid}`",
+        f"- app_consume_summary_ignored: `{consume_summary_ignored}`",
         f"- stream_suppressed_for_control_lines: `{stream_suppressed}`",
         f"- stream_suppressed_for_control_last_total: `{stream_suppressed_total if stream_suppressed_total is not None else 'unknown'}`",
         f"- baseline_fragmented_lines: `{baseline_fragmented}`",
         f"- stream_control_supported_lines: `{stream_cap_supported}`",
         f"- stream_set_tx_or_request_lines: `{stream_set_tx + stream_request}`",
-        f"- stream_ack_enabled_lines: `{stream_ack_enabled}`",
+        f"- stream_ack_enabled_lines: `{stream_ack_enabled + stream_subscription_result_ok}`",
         f"- stream_ack_disabled_lines: `{stream_ack_disabled}`",
         f"- stream_enable_failed_lines: `{stream_enable_failed}`",
         f"- stream_capability_skip_lines: `{stream_cap_skipped}`",

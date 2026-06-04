@@ -148,6 +148,17 @@ PASS_APP_STREAM_RESTORED_WITH_EVIDENCE_GAP
 - 曲线和校准 UI 通过由用户体感结论支撑。
 - 后续如要把 Demo UI 消费链也完全自动化验收，应补 Demo APP 消费层结构化日志，而不是改固件协议或校准算法。
 
+2026-06-02 后续 Demo APP 可观测性包已补齐以下结构化事件：
+
+- `[STREAM_SUBSCRIPTION_RESULT]`
+- `[MEASUREMENT_CONSUME_SUMMARY]`
+- `[CAL_CAPTURE_ATTEMPT]`
+- `[CAL_CAPTURE_RESULT]`
+
+这些事件只用于 Demo APP capture / audit，不改变 BLE wire payload、校准算法、MAX485 参数或正式 SW APP 默认行为。
+
+旧 capture 仍可能保持 `PASS_APP_STREAM_RESTORED_WITH_EVIDENCE_GAP`，因为当时 APP 未输出上述 summary。新版本 Demo APP 的真机验收应优先用这些结构化事件证明“传输 -> 消费 -> 曲线 -> 校准录点”。
+
 ## 7. 禁止事项
 
 - 禁止靠 APP 名称、BLE 设备名或连接来源决定是否发送实时流。

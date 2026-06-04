@@ -182,6 +182,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private val testSessionExporter = TestSessionExporter(application)
     private val motionSamplingExporter = MotionSamplingExporter(application)
     private val recordingMutex = Mutex()
+    private val measurementTrace = DemoMeasurementTrace()
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -196,6 +197,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private var streamWatchdogJob: Job? = null
     private var waveTruthRefreshJob: Job? = null
     private var liveWaveParamSendJob: Job? = null
+    private val waveLifecycleCommandGate = WaveLifecycleCommandGate()
     private var lastStreamAtMs: Long = 0L
     private var telemetrySessionStartMs: Long = 0L
     private var latestDistance: Float? = null
@@ -317,6 +319,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         waveTruthRefreshJob?.cancel()
         telemetrySessionStartMs = 0L
         lastStreamAtMs = 0L
+        measurementTrace.reset()
         resetMeasurementDisplayState()
         resetRawConsoleState()
         resetSessionStores(clearTestSession = false)
@@ -805,6 +808,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
         pendingWaveStopRequest = null
         pendingWaveStopCompletion = null
+        val startCommandToken = waveLifecycleCommandGate.beginStart()
         pendingWaveStartRequest = PendingWaveStartRequest(
             freq = freq,
             intensity = intensity,
@@ -816,16 +820,41 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching {
                 client.send(Command.WaveSet(freqHz = freq, intensity = intensity))
+                if (!waveLifecycleCommandGate.canContinueStart(
+                        token = startCommandToken,
+                        hasPendingStart = pendingWaveStartRequest != null,
+                        hasPendingStop = pendingWaveStopRequest != null,
+                    )
+                ) {
+                    appendSystemLog("[WAVE_UI] stale start command suppressed after WAVE:SET")
+                    return@runCatching
+                }
                 client.send(Command.WaveStart)
             }.onSuccess {
-                lastRequestedWaveParams = freq to intensity
-                schedulePendingWaveTruthRefresh("WAVE_START_SENT")
-                _uiState.update {
-                    it.copy(
-                        lastAckOrError = text(R.string.message_sent_wave_start_bundle),
+                if (waveLifecycleCommandGate.canContinueStart(
+                        token = startCommandToken,
+                        hasPendingStart = pendingWaveStartRequest != null,
+                        hasPendingStop = pendingWaveStopRequest != null,
                     )
+                ) {
+                    lastRequestedWaveParams = freq to intensity
+                    schedulePendingWaveTruthRefresh("WAVE_START_SENT")
+                    _uiState.update {
+                        it.copy(
+                            lastAckOrError = text(R.string.message_sent_wave_start_bundle),
+                        )
+                    }
                 }
             }.onFailure { error ->
+                if (!waveLifecycleCommandGate.canContinueStart(
+                        token = startCommandToken,
+                        hasPendingStart = pendingWaveStartRequest != null,
+                        hasPendingStop = pendingWaveStopRequest != null,
+                    )
+                ) {
+                    appendSystemLog("[WAVE_UI] stale start failure ignored reason=${error.message ?: "UNKNOWN"}")
+                    return@onFailure
+                }
                 pendingWaveStartRequest = null
                 cancelPendingWaveStop("START_SEND_FAILURE")
                 _uiState.update {
@@ -843,6 +872,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendWaveStop() {
         liveWaveParamSendJob?.cancel()
+        waveLifecycleCommandGate.invalidateForStop()
         pendingWaveStartRequest = null
         pendingWaveStopRequest = PendingWaveStopRequest(
             requestedAtMs = System.currentTimeMillis(),
@@ -859,7 +889,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             ).syncWaveControlFlags()
         }
         publishTestSessionPanel(force = true)
-        schedulePendingWaveTruthRefresh("WAVE_STOP_REQUESTED")
         viewModelScope.launch {
             runCatching {
                 client.send(Command.WaveStop)
@@ -886,7 +915,15 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     fun sendCalibrationCapture() {
         val state = _uiState.value
         appendSystemLog(buildCapturePreconditionLog(state))
+        appendSystemLog(buildCalibrationCaptureAttemptLog(state, route = CalibrationCaptureRouteUi.APP_LIVE_SNAPSHOT.name))
         if (!state.canCaptureCalibrationPoint) {
+            appendSystemLog(
+                buildCalibrationCaptureFailureLog(
+                    state = state,
+                    route = CalibrationCaptureRouteUi.APP_LIVE_SNAPSHOT.name,
+                    reason = "PRECONDITION_NOT_MET",
+                ),
+            )
             _uiState.update {
                 it.copy(
                     lastAckOrError = describeCaptureUnavailable(state),
@@ -900,6 +937,13 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
         val referenceWeight = state.captureReferenceInput.toFloatOrNull()
         if (referenceWeight == null || referenceWeight < 0.0f) {
+            appendSystemLog(
+                buildCalibrationCaptureFailureLog(
+                    state = state,
+                    route = CalibrationCaptureRouteUi.APP_LIVE_SNAPSHOT.name,
+                    reason = "INVALID_REFERENCE_WEIGHT",
+                ),
+            )
             _uiState.update {
                 it.copy(
                     lastAckOrError = text(R.string.message_invalid_capture_reference),
@@ -914,6 +958,13 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
         val distanceRuntime = state.distance
         if (distanceRuntime == null || !distanceRuntime.isFinite()) {
+            appendSystemLog(
+                buildCalibrationCaptureFailureLog(
+                    state = state,
+                    route = CalibrationCaptureRouteUi.APP_LIVE_SNAPSHOT.name,
+                    reason = "NO_LIVE_DISTANCE",
+                ),
+            )
             _uiState.update {
                 it.copy(
                     lastAckOrError = text(R.string.capture_unavailable_no_live_distance),
@@ -969,6 +1020,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         appendSystemLog(
             "[CAL_APP] point appended count=${_uiState.value.calibrationPoints.size} distance_mm=${point.distanceMm} ref=${point.referenceWeightKg} stableVisible=${point.stableFlag} route=${point.captureRoute.name}",
         )
+        appendSystemLog(buildCalibrationCaptureResultLog(result = "success", point = point))
         appendSystemLog("[CAL_APP] fit dataset size=${_uiState.value.comparisonResult?.sampleCount ?: 0}")
     }
 
@@ -1668,6 +1720,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         disconnectRequested = false
                     }
                     streamWatchdogJob?.cancel()
+                    measurementTrace.reset()
                     clearStableBaseline()
                     stopRecordingIfActive(text(R.string.recording_stopped_disconnect))
                     stopMotionSamplingIfActive(text(R.string.motion_sampling_status_stopped_disconnect))
@@ -2109,6 +2162,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }.also {
                         appendSystemLog("[CAL_UI] pointRecorded count=${_uiState.value.calibrationPoints.size}")
+                        _uiState.value.latestCalibrationPoint?.let { point ->
+                            appendSystemLog(buildCalibrationCaptureResultLog(result = "success", point = point))
+                        }
                     }
 
                     is Event.CalibrationModel -> _uiState.update {
@@ -2634,6 +2690,28 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun maybeLogMeasurementConsumeSummary(
+        snapshot: DemoMeasurementTraceSnapshot,
+        source: String,
+        force: Boolean = false,
+    ) {
+        val total = snapshot.validCount + snapshot.invalidCount + snapshot.ignoredCount
+        if (!force && total % MEASUREMENT_CONSUME_LOG_INTERVAL != 0L) return
+        appendSystemLog(
+            "[MEASUREMENT_CONSUME_SUMMARY] " +
+                "source=$source " +
+                "valid_count=${snapshot.validCount} " +
+                "invalid_count=${snapshot.invalidCount} " +
+                "ignored_count=${snapshot.ignoredCount} " +
+                "last_seq=${snapshot.lastSeq ?: "-"} " +
+                "last_distance=${snapshot.lastDistance ?: "-"} " +
+                "last_weight=${snapshot.lastWeight ?: "-"} " +
+                "last_invalid_reason=${snapshot.lastInvalidReason ?: "-"} " +
+                "last_ignored_carrier=${snapshot.lastIgnoredCarrier?.name ?: "-"} " +
+                "protocol_mode=${snapshot.lastProtocolMode?.name ?: _uiState.value.protocolMode.name}",
+        )
+    }
+
     private fun isHighPriorityLog(line: String): Boolean {
         val trackTestSessions = shouldTrackTestSessionAutomation(_uiState.value)
         return line.contains("EVT:FAULT") ||
@@ -2641,7 +2719,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             line.contains("[FAULT]") ||
             (trackTestSessions && line.contains("[TEST_SESSION]")) ||
             line.contains("[DEVICE_CONFIG]") ||
-            line.contains("[LAYER:MEASUREMENT_CONSUME]")
+            line.contains("[LAYER:MEASUREMENT_CONSUME]") ||
+            line.contains("[MEASUREMENT_CONSUME_SUMMARY]") ||
+            line.contains("[CAL_CAPTURE_ATTEMPT]") ||
+            line.contains("[CAL_CAPTURE_RESULT]") ||
+            line.contains("[STREAM_SUBSCRIPTION_RESULT]")
     }
 
     private fun mutableMotionSamplingRows(session: MotionSamplingSessionUi): MutableList<MotionSamplingRowUi> {
@@ -2780,11 +2862,21 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private fun onStreamSample(sample: Event.StreamSample) {
         if (!shouldConsumeMeasurementCarrier(sample)) {
             val ignoredSequence = sample.sequence
+            val ignoredSnapshot = measurementTrace.recordIgnored(
+                sequence = ignoredSequence,
+                carrier = sample.carrier,
+                protocolMode = _uiState.value.protocolMode,
+            )
             if (ignoredSequence != null && ignoredSequence % MEASUREMENT_CONSUME_LOG_INTERVAL == 0L) {
                 appendSystemLog(
                     "[LAYER:MEASUREMENT_CONSUME] ignored carrier=${sample.carrier.name} mode=${_uiState.value.protocolMode.name}",
                 )
             }
+            maybeLogMeasurementConsumeSummary(
+                snapshot = ignoredSnapshot,
+                source = "ignored_carrier",
+                force = ignoredSequence == null,
+            )
             return
         }
 
@@ -2799,6 +2891,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (!sample.valid || sample.distance == null || sample.weight == null) {
             val invalidSequence = sample.sequence
+            val invalidSnapshot = measurementTrace.recordInvalid(
+                sequence = invalidSequence,
+                distance = sample.distance,
+                weight = sample.weight,
+                reason = sample.reason,
+            )
             recentWeightBuffer.clear()
             latestDistance = sample.distance
             latestWeight = sample.weight
@@ -2813,6 +2911,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     "[LAYER:MEASUREMENT_CONSUME] seq=$invalidSequence valid=0 reason=${sample.reason ?: "INVALID"}",
                 )
             }
+            maybeLogMeasurementConsumeSummary(
+                snapshot = invalidSnapshot,
+                source = "invalid_sample",
+                force = invalidSequence == null,
+            )
             return
         }
 
@@ -2841,6 +2944,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             ma3 = recentMovingAverage(3),
             ma5 = recentMovingAverage(5),
             ma7 = recentMovingAverage(7),
+        )
+        val validSnapshot = measurementTrace.recordValid(
+            sequence = sampleSequence,
+            distance = distance,
+            weight = weight,
         )
         val trackTestSessions = shouldTrackTestSessionAutomation(currentState)
         val testSessionSample = if (trackTestSessions) {
@@ -2882,6 +2990,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 "[LAYER:MEASUREMENT_CONSUME] seq=$sampleSequence valid=1 distance=$distance weight=$weight ma12=${sample.ma12?.toString() ?: "-"}",
             )
         }
+        maybeLogMeasurementConsumeSummary(
+            snapshot = validSnapshot,
+            source = "valid_sample",
+            force = sampleSequence == null || validSnapshot.validCount == 1L,
+        )
 
         if (_uiState.value.isRecording) {
             viewModelScope.launch(Dispatchers.IO) {
@@ -3484,6 +3597,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private fun enableDemoRealtimeStreamIfSupported(capabilities: Event.Capabilities?) {
         if (!isStreamControlSupported(capabilities)) {
             appendSystemLog("[STREAM_CONTROL] skip reason=capability_not_supported")
+            appendSystemLog(
+                "[STREAM_SUBSCRIPTION_RESULT] enabled=false rate_hz=$DEMO_STREAM_RATE_HZ acked=false source=connect reason=capability_not_supported",
+            )
             return
         }
         viewModelScope.launch {
@@ -3502,8 +3618,14 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 appendSystemLog(
                     "[STREAM_CONTROL] enabled=${ack.enabled} supported=${ack.supported} rate_hz=${ack.rateHz ?: "-"} source=connect",
                 )
+                appendSystemLog(
+                    "[STREAM_SUBSCRIPTION_RESULT] enabled=${ack.enabled} rate_hz=${ack.rateHz ?: "-"} acked=true source=connect supported=${ack.supported}",
+                )
             }.onFailure { throwable ->
                 appendSystemLog("[STREAM_CONTROL] enable_failed reason=${throwable.message ?: throwable.javaClass.simpleName}")
+                appendSystemLog(
+                    "[STREAM_SUBSCRIPTION_RESULT] enabled=false rate_hz=$DEMO_STREAM_RATE_HZ acked=false source=connect reason=${throwable.message ?: throwable.javaClass.simpleName}",
+                )
             }
         }
     }
@@ -3784,6 +3906,44 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             "refValid=${isCaptureReferenceValid(state.captureReferenceInput)} " +
             "distancePresent=${hasCaptureDistanceSnapshot(state)} " +
             "qualityVisible=${hasVisibleCaptureQuality(state)}"
+    }
+
+    private fun buildCalibrationCaptureAttemptLog(state: UiState, route: String): String {
+        return "[CAL_CAPTURE_ATTEMPT] " +
+            "route=$route " +
+            "recording=${state.isRecording} " +
+            "connected=${state.isConnected} " +
+            "ref_valid=${isCaptureReferenceValid(state.captureReferenceInput)} " +
+            "distance_present=${hasCaptureDistanceSnapshot(state)} " +
+            "quality_visible=${hasVisibleCaptureQuality(state)} " +
+            "live_seq=${state.lastMeasurementSequence ?: "-"} " +
+            "live_distance=${state.distance ?: "-"} " +
+            "live_weight=${state.weight ?: "-"}"
+    }
+
+    private fun buildCalibrationCaptureFailureLog(
+        state: UiState,
+        route: String,
+        reason: String,
+    ): String {
+        return "[CAL_CAPTURE_RESULT] " +
+            "result=failure " +
+            "reason=$reason " +
+            "point_count=${state.calibrationPoints.size} " +
+            "route=$route " +
+            "distance_mm=- " +
+            "reference_weight=${state.captureReferenceInput.toFloatOrNull() ?: "-"} " +
+            "live_seq=${state.lastMeasurementSequence ?: "-"}"
+    }
+
+    private fun buildCalibrationCaptureResultLog(result: String, point: CalibrationPointUi): String {
+        return "[CAL_CAPTURE_RESULT] " +
+            "result=$result " +
+            "point_count=${_uiState.value.calibrationPoints.size} " +
+            "route=${point.captureRoute.name} " +
+            "distance_mm=${point.distanceMm} " +
+            "reference_weight=${point.referenceWeightKg} " +
+            "live_seq=${_uiState.value.lastMeasurementSequence ?: "-"}"
     }
 
     private fun defaultSafetyStatus(): SafetyStatusUi {
