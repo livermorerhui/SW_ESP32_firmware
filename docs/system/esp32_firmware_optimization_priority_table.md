@@ -1,6 +1,6 @@
 # ESP32 Firmware Optimization Priority Table
 
-最后更新时间：2026-06-02
+最后更新时间：2026-06-06
 
 ## 1. 当前结论
 
@@ -11,6 +11,10 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 截至 2026-05-18 `1759a12`，ESP32 固件低风险工程标准化重构已经收口：protocol / ACK / measurement probe / laser diagnostics / calibration runtime / stable contract diagnostics / stable window / presence counter wrapper 均已完成本地验证。当前没有“必须继续重构后才能联调或发版”的固件结构项。剩余 `BleTransport` 拆分、stable candidate owner、baseline latch owner、presence owner state carrier、occupied-cycle owner、motion safety runtime action 等均属于可选预研或中高风险专项，不应按普通自动重构继续推进。
 
 2026-06-02 已完成 Demo APP 实时遥测 / 校准实时数据修复：`EVT:STREAM` 上行改为 BLE session scoped 显式订阅，合同入口为 `docs/system/esp32_realtime_stream_subscription_contract.md`。Demo APP 在能力支持时发送 `STREAM:SET enabled=1,rate_hz=10`，正式 SW APP 可默认不发送；关闭实时流只影响 BLE 上行，不影响固件内部测量、baseline 或 safety 判断。该包已合入 `main`：`bc18a74`。同日已补 Demo APP 消费层可观测性：`STREAM_SUBSCRIPTION_RESULT / MEASUREMENT_CONSUME_SUMMARY / CAL_CAPTURE_ATTEMPT / CAL_CAPTURE_RESULT`，后续新版本真机 capture 应能自动证明 UI 消费和校准录点链路。
+
+2026-06-04 已完成 Demo APP 快速 `Start -> Stop` 竞态修复与真机复核：commit `a7882f9` 新增 `WaveLifecycleCommandGate`，防止旧的 in-flight Start 在 Stop 后继续发送 `WAVE:START`。真机 capture `20260604_164648...demo_app_wave_stop_race` 证明 18 次 start / stop 对齐，ESP32 每轮均进入 `WAVE_STOP received -> STOP REQUEST -> wave.stopSoft -> i2s_stop`。当前 Demo APP 可以继续正常运行，不需要为了运行或联调立即重构。
+
+2026-06-06 已完成 Demo APP 重构启动审计：`reports/task_20260606_demo_app_refactor_start_audit.md`。结论是可以自动重构，但只建议先做小包 `FW-OPT-013 Measurement display owner 抽取`；`FW-OPT-014 Calibration session owner 抽取` 继续按条件触发，`FW-OPT-015 DemoViewModel 大范围重构` 保持冻结。
 
 本总表是 ESP32 固件后续优化的长期入口。一次性报告只作为证据来源，不作为 backlog 真相源。
 
@@ -40,16 +44,29 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 | FW-OPT-008 | 旧协议 / 旧开发文档状态标注 | 文档过期治理 | 已完成第一轮 | 否 | P4 | ESP32 文档治理 | `docs/protocol.md`；`docs/firmware_developer_guide.md`；`docs/safety_design.md` | 已在旧入口标注 current / legacy / historical 状态和当前真相源；后续只在具体旧文档被继续使用时增量清理 |
 | FW-OPT-009 | release hardening / minimum soak validation | 发布硬化 | 已完成当前基线 | 否 | P4 | 跨仓 release hardening | SW capture `20260518_103916...minimum_soak_release_esp32_plus`；SW release hardening 文档；本总表 | 当前 SW `52f782f` + ESP32 `5bb7e0c` 组合已通过 ESP32-plus minimum soak，audit `PASS_CANDIDATE`，无 hard failure / evidence gap；如固件或 APP commit 变化需重新跑最小 capture |
 | FW-OPT-010 | 固件大 owner 受控技术债记录 | 长期结构债 / 后续治理 | 观察项 | 否 | P3 | ESP32 固件结构审计窗口 | `src/modules/laser/LaserModule.cpp`；`src/transport/ble/BleTransport.cpp`；`src/core/SystemStateMachine.cpp`；SW 报告 `reports/task_20260518_sw_app_esp32_controlled_tech_debt_record.md`；本总表 | 当前已确认 `LaserModule`、`BleTransport`、`SystemStateMachine` 仍是大 owner，但不是当前 blocker；后续只按真实问题或窄 helper 继续治理。允许优先做 diagnostics、纯计算、ACK / payload builder、host-side tests、日志证据 helper；暂不因“文件大”直接拆 BLE 生命周期、start / stop action owner、stable / baseline / presence 动作时序、motion safety runtime action 或 wave ramp / I2S 输出时序 |
-| FW-OPT-011 | `STREAM:SET` 显式实时流订阅合同 | 协议合同 / Demo 调试链路 | 已完成 / 新可观测性待真机复核 | 否 | P1 | ESP32 / Demo APP 遥测与校准链路 | `docs/system/esp32_realtime_stream_subscription_contract.md`；`reports/tasks/stream_set_realtime_subscription_closure/`；capture `20260602_152844...esp32_demo_telemetry_calibration`；commit `bc18a74`；Demo APP 可观测性包 | 已恢复 Demo 曲线和校准实时数据；旧真机 audit 为 `PASS_APP_STREAM_RESTORED_WITH_EVIDENCE_GAP`。已补 Demo APP `STREAM_SUBSCRIPTION_RESULT / MEASUREMENT_CONSUME_SUMMARY / CAL_CAPTURE_ATTEMPT / CAL_CAPTURE_RESULT` 结构化日志和 audit 兼容识别；下一步只需用新 Demo APP 真机 capture 复核 evidence gap 是否消除，不改固件协议、校准算法或 MAX485 参数 |
+| FW-OPT-011 | `STREAM:SET` 显式实时流订阅合同 | 协议合同 / Demo 调试链路 | 已完成 / 新可观测性待真机复核 | 否 | P1 | ESP32 / Demo APP 遥测与校准链路 | `docs/system/esp32_realtime_stream_subscription_contract.md`；`reports/tasks/stream_set_realtime_subscription_closure/`；capture `20260602_152844...esp32_demo_telemetry_calibration`；commit `bc18a74`；commit `a7882f9` | 已恢复 Demo 曲线和校准实时数据；旧真机 audit 为 `PASS_APP_STREAM_RESTORED_WITH_EVIDENCE_GAP`。已补 Demo APP `STREAM_SUBSCRIPTION_RESULT / MEASUREMENT_CONSUME_SUMMARY / CAL_CAPTURE_ATTEMPT / CAL_CAPTURE_RESULT` 结构化日志和 audit 兼容识别；下一步只需用新 Demo APP 真机 capture 复核 evidence gap 是否消除，不改固件协议、校准算法或 MAX485 参数 |
+| FW-OPT-012 | Demo APP 快速 `Start -> Stop` 控制竞态 | Demo APP 控制链修复 / 真机复核 | 已完成 | 否 | P1 | Demo APP 控制链收口 | commit `a7882f9`；`reports/task_demo_app_wave_stop_command_race_fix.md`；SW capture `20260604_164648...demo_app_wave_stop_race` | 已修复旧 Start 覆盖后发 Stop 的明确风险，真机证明 18 次 start / stop 对齐；后续如果再次复现，先采 APP raw TX、ESP32 串口接收和 `i2s_stop` 三段证据，不直接改固件协议或 `SystemStateMachine` |
+| FW-OPT-013 | Demo APP Measurement display owner 抽取 | 可选重构 / 可测性提升 | 可启动第一包 | 否 | P3 | Demo APP 小包重构 | `DemoViewModel.kt`；`DemoMeasurementTrace.kt`；`reports/tasks/demo_app_observability_quality_audit/`；`reports/task_20260606_demo_app_refactor_start_audit.md`；本总表 | 用户明确要启动 Demo APP 重构时，建议第一包只抽 `Event.StreamSample -> TelemetryPointUi / measurement display state` 小 owner，并补 JVM tests：valid sample、invalid sample、ignored carrier、buffer trim；不得顺手拆校准、连接、导出或 BLE 合同 |
+| FW-OPT-014 | Demo APP Calibration session owner 抽取 | 可选重构 / 校准流程治理 | 待条件触发 | 否 | P3 | Demo APP 小包重构 | `DemoViewModel.kt`；`CalibrationToolsSection.kt`；`tools/esp32_demo_telemetry_calibration_audit.py`；`reports/task_20260606_demo_app_refactor_start_audit.md`；本总表 | 暂不作为第一包。只有当校准录点再次出现实时快照 / legacy `ACK:CAL_POINT` 归因不清，或需要继续扩展校准工具时，才拆 `CalibrationSessionController`。启动前先保留现有 APP 实时快照录点和 legacy 录点行为，并补 JVM tests：无距离不可录点、有实时距离和参考重量可录点、legacy 点可合并、新录点触发模型比较 rebuild |
+| FW-OPT-015 | DemoViewModel 大范围重构 | 高风险冻结项 / 架构债 | 冻结 | 否 | P4 | Demo APP 架构预研 | `DemoViewModel.kt`；FW-OPT-013；FW-OPT-014；`reports/task_20260606_demo_app_refactor_start_audit.md` | 当前不作为待办，不因“文件大”直接拆。只有完成 FW-OPT-013 / FW-OPT-014 或出现新的真实 blocker 后，才评估连接 owner、protocol event reducer、test-session/export owner 等更大范围拆分；禁止一次性全量重构 |
 
 ## 4. 重构收口与真机测试原则
 
 当前重构收口结论：
 
 - 没有必须继续重构的 ESP32 固件 blocker。
+- 没有必须继续重构的 Demo APP blocker；当前 Demo APP 可继续运行、联调和真机验证。
 - 不继续深拆不会阻断联调、release hardening 或 minimum soak。
 - 剩余偏重 owner 主要是动作编排 owner，保留比强拆更安全。
 - 后续只有在真机证据证明存在实际问题时，才提升对应专项优先级。
+
+Demo APP 后续重构启动原则：
+
+- 先复核 FW-OPT-011 的新可观测性证据链，证明 `STREAM_SUBSCRIPTION_RESULT / MEASUREMENT_CONSUME_SUMMARY / CAL_CAPTURE_ATTEMPT / CAL_CAPTURE_RESULT` 能消除旧 evidence gap。
+- 如果复核通过，Demo APP 可保持现状，不需要马上重构。
+- 如果复核仍暴露消费层或校准录点归因缺口，优先启动 FW-OPT-013 或 FW-OPT-014 的小包重构。
+- 禁止第一刀直接做 Demo APP 全量重构；不得在同一包里同时拆连接、控制、遥测、校准、采样、导出和 UI 状态。
+- 重构包默认不改 `EVT:STREAM` wire payload、`STREAM:SET` 合同、固件校准算法、MAX485 参数或正式 SW APP 默认行为。
 
 下一轮真机测试是否需要收集日志：
 
