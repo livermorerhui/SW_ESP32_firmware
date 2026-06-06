@@ -256,20 +256,16 @@ cd tools/android_demo
 
 ### B7：DeviceConfigWriteTracker
 
-状态：可选小包。
+状态：已完成。阶段报告见 `reports/task_20260606_demo_app_device_config_write_tracker.md`。
 
 目标：
 
-- 抽 pending device config request、confirmation match、timeout state。
+- 已抽 pending device config request、confirmation match、timeout state。
 - 保留 `client.send` 与 watchdog job 在 ViewModel。
 
 测试：
 
-- observed config match 后 success。
-- mismatch 保持 pending。
-- ACK fallback status。
-- NACK/Error clears pending。
-- timeout clears pending。
+- `DeviceConfigWriteTrackerTest` 覆盖 observed config match 后 success、mismatch 保持 pending、缺字段保持 pending、ACK fallback、NACK/Error clear、timeout clear、confirmation refresh gate。
 
 ### B8：Presentation model / Compose 参数收口
 
@@ -304,7 +300,7 @@ cd tools/android_demo
 2. B3 `CalibrationSessionStore`：已完成。
 3. B4 `WaveControlStateReducer`：第一阶段已完成；第二阶段只在先审 pending lifecycle / formal session action 后继续。
 4. B5 `MotionSamplingSessionStore`：已完成。
-5. B7 `DeviceConfigWriteTracker`：下一建议包。
+5. B7 `DeviceConfigWriteTracker`：已完成。
 6. B8 Presentation model 收口。
 7. B6 `TestSessionBridge`，只有 wave control reducer 稳定后再做。
 

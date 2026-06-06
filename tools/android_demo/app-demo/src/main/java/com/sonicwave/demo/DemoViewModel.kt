@@ -163,12 +163,6 @@ private data class PendingWaveStopCompletion(
     val stopSource: String,
 )
 
-private data class PendingDeviceConfigRequest(
-    val platformModel: PlatformModel,
-    val laserInstalled: Boolean,
-    val requestedAtMs: Long,
-)
-
 class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private val client = SonicWaveClient(application)
     private val recorder = TelemetryRecorder(application)
@@ -184,6 +178,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         timeProvider = { System.currentTimeMillis() },
     )
     private val motionSamplingStore = MotionSamplingSessionStore()
+    private val deviceConfigWriteTracker = DeviceConfigWriteTracker()
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -214,8 +209,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private var hadConnectedSession: Boolean = false
     private var awaitingCalibrationCaptureResult: Boolean = false
     private var awaitingModelWriteResult: Boolean = false
-    private var awaitingDeviceConfigWriteResult: Boolean = false
-    private var pendingDeviceConfigRequest: PendingDeviceConfigRequest? = null
     private var pendingDeviceConfigWatchdogJob: Job? = null
     private var pendingWriteModelType: CalibrationModelType? = null
     private var degradedStartDialogSuppressed: Boolean = false
@@ -1083,8 +1076,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        awaitingDeviceConfigWriteResult = true
-        pendingDeviceConfigRequest = PendingDeviceConfigRequest(
+        deviceConfigWriteTracker.start(
             platformModel = platformModel,
             laserInstalled = laserInstalled,
             requestedAtMs = System.currentTimeMillis(),
@@ -2033,7 +2025,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             deviceConfigStatus = pendingDeviceConfigStatus ?: it.deviceConfigStatus,
                             stableWeight = event.stableWeightKg ?: it.stableWeight,
                             stableWeightActive = event.baselineReady ?: it.stableWeightActive,
-                            isDeviceConfigWritePending = awaitingDeviceConfigWriteResult,
+                            isDeviceConfigWritePending = deviceConfigWriteTracker.isPending,
                         )).syncFormalWaveTruth().syncWaveControlFlags()
                     }.also {
                         reconcileTestSessionWithFormalWaveTruth(
@@ -2158,7 +2150,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             fallStopCapabilityVerified = isFallStopEnabled(event) != null,
                             isFallStopSyncInProgress = false,
                             deviceConfigStatus = pendingDeviceConfigStatus ?: state.deviceConfigStatus,
-                            isDeviceConfigWritePending = awaitingDeviceConfigWriteResult,
+                            isDeviceConfigWritePending = deviceConfigWriteTracker.isPending,
                         )
                     }
 
@@ -2180,17 +2172,17 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             preferredLaserPlatformModel = devicePlatformModel
                         }
                         val systemLogs = mutableListOf<String>()
-                        val status = if (awaitingDeviceConfigWriteResult) {
-                            val finalPlatformModel = devicePlatformModel ?: pendingDeviceConfigRequest?.platformModel
-                            val finalLaserInstalled = eventLaserInstalled ?: pendingDeviceConfigRequest?.laserInstalled
-                            clearPendingDeviceConfigWriteState()
-                            systemLogs += "[DEVICE_CONFIG] write success model=${finalPlatformModel?.name ?: "UNKNOWN"} laser=${finalLaserInstalled ?: false}"
+                        val confirmation = deviceConfigWriteTracker.confirmObserved(
+                            observedPlatformModel = devicePlatformModel,
+                            observedLaserInstalled = eventLaserInstalled,
+                        )
+                        val status = confirmation?.let {
+                            clearPendingDeviceConfigWatchdog()
+                            systemLogs += "[DEVICE_CONFIG] write success model=${it.observedPlatformModel.name} laser=${it.observedLaserInstalled}"
                             pendingDeviceConfigSuccessStatus(
-                                platformModel = finalPlatformModel,
-                                laserInstalled = finalLaserInstalled,
+                                platformModel = it.observedPlatformModel,
+                                laserInstalled = it.observedLaserInstalled,
                             )
-                        } else {
-                            null
                         }
                         _uiState.update {
                             it.copy(
@@ -2199,7 +2191,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 selectedPlatformModel = devicePlatformModel ?: it.selectedPlatformModel,
                                 selectedLaserInstalled = eventLaserInstalled ?: it.selectedLaserInstalled,
                                 deviceConfigStatus = status ?: it.deviceConfigStatus,
-                                isDeviceConfigWritePending = awaitingDeviceConfigWriteResult,
+                                isDeviceConfigWritePending = deviceConfigWriteTracker.isPending,
                                 lastAckOrError = event.raw,
                             )
                         }
@@ -2328,12 +2320,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         } else {
                             null
                         }
-                        val deviceConfigStatus = if (awaitingDeviceConfigWriteResult) {
-                            clearPendingDeviceConfigWriteState()
+                        val deviceConfigStatus = deviceConfigWriteTracker.genericAck()?.let {
+                            clearPendingDeviceConfigWatchdog()
                             systemLogs += "[DEVICE_CONFIG] write generic_ack raw=${event.raw}"
                             text(R.string.device_config_status_ack_fallback, event.raw)
-                        } else {
-                            null
                         }
                         _uiState.update {
                             val ackStopTargetState = if (acknowledgedManualStop) {
@@ -2366,7 +2356,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 captureStatus = captureStatus ?: nextState.captureStatus,
                                 writeModelStatus = writeModelStatus ?: nextState.writeModelStatus,
                                 deviceConfigStatus = deviceConfigStatus ?: nextState.deviceConfigStatus,
-                                isDeviceConfigWritePending = awaitingDeviceConfigWriteResult,
+                                isDeviceConfigWritePending = deviceConfigWriteTracker.isPending,
                             ).syncFormalWaveTruth().syncWaveControlFlags()
                         }
                         if (acknowledgedManualStop) {
@@ -2415,7 +2405,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         } else {
                             null
                         }
-                        val deviceConfigStatus = if (awaitingDeviceConfigWriteResult) {
+                        val deviceConfigStatus = if (deviceConfigWriteTracker.isPending) {
                             clearPendingDeviceConfigWriteState()
                             systemLogs += "[DEVICE_CONFIG] write failure reason=$reason"
                             text(R.string.device_config_status_failure, formatNackMessage(reason))
@@ -2428,7 +2418,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 captureStatus = captureStatus ?: it.captureStatus,
                                 writeModelStatus = writeModelStatus ?: it.writeModelStatus,
                                 deviceConfigStatus = deviceConfigStatus ?: it.deviceConfigStatus,
-                                isDeviceConfigWritePending = awaitingDeviceConfigWriteResult,
+                                isDeviceConfigWritePending = deviceConfigWriteTracker.isPending,
                             )
                         }
                         systemLogs.forEach(::appendSystemLog)
@@ -2469,7 +2459,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         } else {
                             null
                         }
-                        val deviceConfigStatus = if (awaitingDeviceConfigWriteResult) {
+                        val deviceConfigStatus = if (deviceConfigWriteTracker.isPending) {
                             clearPendingDeviceConfigWriteState()
                             systemLogs += "[DEVICE_CONFIG] write error reason=${event.reason}"
                             text(R.string.device_config_status_send_failed, event.reason)
@@ -2482,7 +2472,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 captureStatus = captureStatus ?: it.captureStatus,
                                 writeModelStatus = writeModelStatus ?: it.writeModelStatus,
                                 deviceConfigStatus = deviceConfigStatus ?: it.deviceConfigStatus,
-                                isDeviceConfigWritePending = awaitingDeviceConfigWriteResult,
+                                isDeviceConfigWritePending = deviceConfigWriteTracker.isPending,
                             )
                         }
                         systemLogs.forEach(::appendSystemLog)
@@ -3526,18 +3516,19 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         pendingDeviceConfigWatchdogJob?.cancel()
         pendingDeviceConfigWatchdogJob = viewModelScope.launch {
             delay(DEVICE_CONFIG_WRITE_CONFIRM_REFRESH_DELAY_MS)
-            if (awaitingDeviceConfigWriteResult && _uiState.value.isConnected) {
+            if (deviceConfigWriteTracker.shouldRefreshConfirmation(_uiState.value.isConnected)) {
                 appendSystemLog("[DEVICE_CONFIG] write awaiting confirmation, refreshing device truth")
                 refreshCapabilityAndSnapshot()
             }
 
             delay(DEVICE_CONFIG_WRITE_TIMEOUT_MS - DEVICE_CONFIG_WRITE_CONFIRM_REFRESH_DELAY_MS)
-            if (!awaitingDeviceConfigWriteResult) {
+            if (!deviceConfigWriteTracker.isPending) {
                 pendingDeviceConfigWatchdogJob = null
                 return@launch
             }
 
-            clearPendingDeviceConfigWriteState(cancelWatchdog = false)
+            deviceConfigWriteTracker.timeout()
+            pendingDeviceConfigWatchdogJob = null
             appendSystemLog("[DEVICE_CONFIG] write timeout waiting for confirmation")
             _uiState.update {
                 it.copy(
@@ -3568,34 +3559,27 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         observedPlatformModel: PlatformModel?,
         observedLaserInstalled: Boolean?,
     ): String? {
-        val request = pendingDeviceConfigRequest ?: return null
-        if (!awaitingDeviceConfigWriteResult) return null
-        if (!doesObservedDeviceConfigMatchRequested(
-                requestedPlatformModel = request.platformModel,
-                requestedLaserInstalled = request.laserInstalled,
-                observedPlatformModel = observedPlatformModel,
-                observedLaserInstalled = observedLaserInstalled,
-            )
-        ) {
-            return null
-        }
-
-        clearPendingDeviceConfigWriteState()
+        val confirmation = deviceConfigWriteTracker.confirmObserved(
+            observedPlatformModel = observedPlatformModel,
+            observedLaserInstalled = observedLaserInstalled,
+        ) ?: return null
+        clearPendingDeviceConfigWatchdog()
         appendSystemLog(
-            "[DEVICE_CONFIG] write confirmed via device truth model=${request.platformModel.name} laser=${request.laserInstalled}",
+            "[DEVICE_CONFIG] write confirmed via device truth model=${confirmation.request.platformModel.name} laser=${confirmation.request.laserInstalled}",
         )
         return pendingDeviceConfigSuccessStatus(
-            platformModel = observedPlatformModel ?: request.platformModel,
-            laserInstalled = observedLaserInstalled ?: request.laserInstalled,
+            platformModel = confirmation.observedPlatformModel,
+            laserInstalled = confirmation.observedLaserInstalled,
         )
     }
 
-    private fun clearPendingDeviceConfigWriteState(cancelWatchdog: Boolean = true) {
-        awaitingDeviceConfigWriteResult = false
-        pendingDeviceConfigRequest = null
-        if (cancelWatchdog) {
-            pendingDeviceConfigWatchdogJob?.cancel()
-        }
+    private fun clearPendingDeviceConfigWriteState() {
+        deviceConfigWriteTracker.clear()
+        clearPendingDeviceConfigWatchdog()
+    }
+
+    private fun clearPendingDeviceConfigWatchdog() {
+        pendingDeviceConfigWatchdogJob?.cancel()
         pendingDeviceConfigWatchdogJob = null
     }
 
@@ -4158,16 +4142,4 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         private const val PENDING_WAVE_TRUTH_REFRESH_ATTEMPTS = 4
         private const val PENDING_WAVE_TRUTH_REFRESH_INTERVAL_MS = 250L
     }
-}
-
-internal fun doesObservedDeviceConfigMatchRequested(
-    requestedPlatformModel: PlatformModel?,
-    requestedLaserInstalled: Boolean?,
-    observedPlatformModel: PlatformModel?,
-    observedLaserInstalled: Boolean?,
-): Boolean {
-    return requestedPlatformModel != null &&
-        requestedLaserInstalled != null &&
-        observedPlatformModel == requestedPlatformModel &&
-        observedLaserInstalled == requestedLaserInstalled
 }
