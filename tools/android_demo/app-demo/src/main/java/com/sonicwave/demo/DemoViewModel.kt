@@ -183,6 +183,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private val waveControlStateReducer = WaveControlStateReducer(
         timeProvider = { System.currentTimeMillis() },
     )
+    private val motionSamplingStore = MotionSamplingSessionStore()
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -1312,34 +1313,20 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         if (state.isMotionSamplingActive) return
 
         val now = System.currentTimeMillis()
-        val model = state.latestModel
-        val sampledFrequency = state.freq
-        val sampledIntensity = state.intensity
         val sessionId = "motion_$now"
-        val session = MotionSamplingSessionUi(
-            sessionId = sessionId,
-            startedAtMs = now,
-            appVersion = appVersionName(),
-            firmwareMetadata = state.capabilityInfo,
-            connectedDeviceName = state.connectedDeviceName,
-            protocolModeCode = state.protocolMode.name,
-            waveFrequencyHz = sampledFrequency,
-            waveIntensity = sampledIntensity,
-            fallStopEnabled = state.fallStopEnabled,
-            samplingModeEnabled = state.motionSamplingModeEnabled,
-            waveWasRunningAtSessionStart = state.waveOutputActive,
-            modelTypeCode = model?.type?.name,
-            modelReferenceDistance = model?.referenceDistance,
-            modelC0 = model?.c0,
-            modelC1 = model?.c1,
-            modelC2 = model?.c2,
-            notes = "",
-            rows = mutableListOf(),
+        val session = motionSamplingStore.start(
+            state = state,
+            metadata = MotionSamplingStartMetadata(
+                sessionId = sessionId,
+                startedAtMs = now,
+                appVersion = appVersionName(),
+            ),
         )
         motionSamplingSessionStore = session
         _uiState.update {
             it.copy(
                 isMotionSamplingActive = true,
+                motionSamplingSession = session,
                 motionSamplingStatus = text(R.string.motion_sampling_status_started, sessionId),
             )
         }
@@ -1352,11 +1339,15 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearMotionSamplingSession() {
         val state = _uiState.value
-        if (state.isMotionSamplingActive) return
-        val sessionId = motionSamplingSessionStore?.sessionId ?: return
-        motionSamplingSessionStore = null
+        val clearResult = motionSamplingStore.clear(
+            session = motionSamplingSessionStore,
+            isActive = state.isMotionSamplingActive,
+        )
+        val sessionId = clearResult.second ?: return
+        motionSamplingSessionStore = clearResult.first
         _uiState.update {
             it.copy(
+                motionSamplingSession = clearResult.first,
                 motionSamplingStatus = text(R.string.motion_sampling_status_cleared),
             )
         }
@@ -1505,17 +1496,16 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             runCatching {
                 motionSamplingExporter.exportSession(session, request)
             }.onSuccess { result ->
-                motionSamplingSessionStore = motionSamplingSessionStore
-                    ?.takeIf { it.sessionId == session.sessionId }
-                    ?.copy(
-                        exportScenarioLabel = request.scenarioLabel,
-                        exportScenarioCategory = request.scenarioCategory,
-                        lastExportTimestampMs = request.exportTimestampMs,
-                        lastExportCsvPath = result.csvDestinationLabel,
-                        lastExportJsonPath = result.jsonDestinationLabel,
-                    )
+                motionSamplingSessionStore = motionSamplingStore.markExported(
+                    session = motionSamplingSessionStore,
+                    expectedSessionId = session.sessionId,
+                    request = request,
+                    csvDestinationLabel = result.csvDestinationLabel,
+                    jsonDestinationLabel = result.jsonDestinationLabel,
+                )
                 _uiState.update {
                     it.copy(
+                        motionSamplingSession = motionSamplingSessionStore,
                         motionSamplingStatus = text(R.string.motion_sampling_status_exported, result.csvDestinationLabel),
                     )
                 }
@@ -2530,6 +2520,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (clearMotionSamplingSession) {
             motionSamplingSessionStore = null
+            _uiState.update {
+                it.copy(
+                    isMotionSamplingActive = false,
+                    motionSamplingSession = null,
+                )
+            }
         }
         lastTestSessionPanelPublishAtMs = 0L
         if (forcePublish) {
@@ -2617,10 +2613,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    private fun mutableMotionSamplingRows(session: MotionSamplingSessionUi): MutableList<MotionSamplingRowUi> {
-        return session.rows as? MutableList<MotionSamplingRowUi> ?: session.rows.toMutableList()
-    }
-
     private fun mutableTestSessionSamples(session: TestSessionUi): MutableList<TestSessionSampleUi> {
         return session.samples as? MutableList<TestSessionSampleUi> ?: session.samples.toMutableList()
     }
@@ -2642,13 +2634,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 sampleCount = samples.size,
             ),
         )
-    }
-
-    private fun appendMotionSamplingRow(row: MotionSamplingRowUi) {
-        val session = motionSamplingSessionStore ?: return
-        val rows = mutableMotionSamplingRows(session)
-        rows.add(row)
-        motionSamplingSessionStore = session.copy(rows = rows)
     }
 
     private fun sendCommand(command: Command, label: String) {
@@ -2776,11 +2761,14 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val sampleSequence = sample.sequence
         val currentState = _uiState.value
         val currentSignals = sessionCaptureSignals
-        val samplingRow = buildMotionSamplingRow(
+        val samplingAppendResult = motionSamplingStore.appendRow(
+            session = motionSamplingSessionStore,
             state = currentState,
             sample = sample,
-            now = now,
+            nowMs = now,
         )
+        motionSamplingSessionStore = samplingAppendResult.session
+        val samplingRow = samplingAppendResult.row
         val displaySnapshot = measurementDisplayStore.applyValid(
             sample = sample,
             nowMs = now,
@@ -2804,8 +2792,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             null
         }
-        samplingRow?.let(::appendMotionSamplingRow)
         testSessionSample?.let(::appendTestSessionSample)
+        samplingRow?.let {
+            _uiState.update { state ->
+                state.copy(motionSamplingSession = motionSamplingSessionStore)
+            }
+        }
         publishMeasurementDisplay()
         if (trackTestSessions) {
             publishTestSessionPanel()
@@ -4033,26 +4025,24 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun stopMotionSamplingIfActive(reason: String) {
-        var stoppedSessionId: String? = null
-        var stoppedRowCount = 0
-        val now = System.currentTimeMillis()
-        motionSamplingSessionStore = motionSamplingSessionStore?.let { session ->
-            stoppedSessionId = session.sessionId
-            stoppedRowCount = session.rows.size
-            session.copy(endedAtMs = now)
-        }
+        val stopResult = motionSamplingStore.stop(
+            session = motionSamplingSessionStore,
+            nowMs = System.currentTimeMillis(),
+        )
+        motionSamplingSessionStore = stopResult.session
         _uiState.update { state ->
             if (!state.isMotionSamplingActive) {
-                state
+                state.copy(motionSamplingSession = motionSamplingSessionStore)
             } else {
                 state.copy(
                     isMotionSamplingActive = false,
+                    motionSamplingSession = motionSamplingSessionStore,
                     motionSamplingStatus = reason,
                 )
             }
         }
-        stoppedSessionId?.let { sessionId ->
-            appendSystemLog("[MOTION_SAMPLE] session stopped id=$sessionId rows=$stoppedRowCount")
+        stopResult.stoppedSessionId?.let { sessionId ->
+            appendSystemLog("[MOTION_SAMPLE] session stopped id=$sessionId rows=${stopResult.stoppedRowCount}")
         }
     }
 
@@ -4099,67 +4089,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             line = line,
             verboseStreamLogsEnabled = _uiState.value.verboseStreamLogsEnabled,
         )
-    }
-
-    private fun buildMotionSamplingRow(
-        state: UiState,
-        sample: Event.StreamSample,
-        now: Long,
-    ): MotionSamplingRowUi? {
-        if (!state.isMotionSamplingActive) return null
-        val session = motionSamplingSessionStore ?: return null
-        val distance = sample.distance ?: return null
-        val weight = sample.weight ?: return null
-        val previous = session.rows.lastOrNull()
-        val elapsedMs = now - session.startedAtMs
-        val dtSeconds = previous?.let { ((now - it.timestampMs).coerceAtLeast(1L)) / 1000f }
-        val ddDt = if (dtSeconds != null) {
-            (distance - previous.distanceMm) / dtSeconds
-        } else {
-            null
-        }
-        val dwDt = if (dtSeconds != null) {
-            (weight - previous.liveWeightKg) / dtSeconds
-        } else {
-            null
-        }
-
-        return MotionSamplingRowUi(
-            sampleIndex = session.rows.size + 1,
-            measurementSeq = sample.sequence,
-            deviceTimestampMs = sample.timestampMs,
-            timestampMs = now,
-            elapsedMs = elapsedMs,
-            distanceMm = distance,
-            liveWeightKg = weight,
-            ma12WeightKg = sample.ma12.takeIf { sample.ma12Ready },
-            stableWeightKg = if (state.stableWeightActive) state.stableWeight else null,
-            measurementValid = sample.valid && distance.isFinite() && weight.isFinite(),
-            stableVisible = state.stableWeightActive,
-            runtimeStateCode = state.deviceState.name,
-            waveStateCode = state.safetyStatus.waveCode.ifBlank {
-                currentWaveStateCode(state.waveOutputActive)
-            },
-            safetyStateCode = state.safetyStatus.effectCode.ifBlank { "NONE" },
-            safetyReasonCode = state.safetyStatus.reasonCode.ifBlank { "NONE" },
-            safetyCode = state.safetyStatus.code,
-            connectionStateCode = connectionStateCode(state.connectionState),
-            modelTypeCode = state.latestModel?.type?.name,
-            ddDt = ddDt,
-            dwDt = dwDt,
-        )
-    }
-
-    private fun connectionStateCode(connectionState: ConnectionState): String {
-        return when (connectionState) {
-            is ConnectionState.Connected -> "CONNECTED"
-            is ConnectionState.Connecting,
-            is ConnectionState.DiscoveringServices,
-            is ConnectionState.Subscribing -> "CONNECTING"
-
-            is ConnectionState.Error -> "ERROR"
-            ConnectionState.Disconnected -> "DISCONNECTED"
-        }
     }
 
     private fun text(@StringRes resId: Int, vararg args: Any): String {

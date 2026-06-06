@@ -208,27 +208,30 @@ cd tools/android_demo
 
 ### B5：MotionSamplingSessionStore
 
-状态：可选；只有继续扩展 motion sampling 或导出字段时启动。
+状态：已完成。阶段报告见 `reports/task_20260606_demo_app_motion_sampling_session_store.md`。
 
 目标：
 
-- 抽 start/stop/clear 状态。
-- 抽 `buildMotionSamplingRow()` 的 row 计算，包括 elapsed、dd/dt、dw/dt、runtime/safety/model metadata。
-- 抽 export path update。
+- 已抽 start/stop/clear 状态。
+- 已抽 row build，包括 elapsed、dd/dt、dw/dt、runtime/safety/model metadata。
+- 已抽 export metadata update。
+- 已补 session snapshot 回填，避免 UI 只能看到 active/status 而拿不到 session 数据。
 
 保留在 ViewModel：
 
 - `client.send(Command.MotionSamplingModeSet)`。
 - `MotionSamplingExporter` IO。
 - UI 文案和 `motionSamplingStatus` 资源文本。
+- system log 调用点。
 
 新增测试：
 
 - start metadata 从 current UiState 正确冻结。
-- 第一条 row 无 delta。
+- 第一条 row 无 delta，并携带 runtime/safety/model metadata。
 - 第二条 row 计算 dd/dt 和 dw/dt。
+- inactive 状态不追加 row。
 - stop 写入 endedAtMs。
-- active 时不能 clear/export。
+- active 时不能 clear。
 - export 后回填 csv/json path。
 
 ### B6：TestSessionBridge
@@ -300,8 +303,8 @@ cd tools/android_demo
 1. B2 `RawConsoleStore`：已完成。
 2. B3 `CalibrationSessionStore`：已完成。
 3. B4 `WaveControlStateReducer`：第一阶段已完成；第二阶段只在先审 pending lifecycle / formal session action 后继续。
-4. B5 `MotionSamplingSessionStore`：下一建议包。
-5. B7 `DeviceConfigWriteTracker`。
+4. B5 `MotionSamplingSessionStore`：已完成。
+5. B7 `DeviceConfigWriteTracker`：下一建议包。
 6. B8 Presentation model 收口。
 7. B6 `TestSessionBridge`，只有 wave control reducer 稳定后再做。
 
