@@ -8,10 +8,7 @@ import androidx.annotation.StringRes
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.sonicwave.protocol.CalibrationComparisonEngine
 import com.sonicwave.protocol.CalibrationComparisonResult
-import com.sonicwave.protocol.CalibrationFitResult
-import com.sonicwave.protocol.CalibrationFitSample
 import com.sonicwave.protocol.CalibrationModelType
 import com.sonicwave.protocol.CALIBRATION_DISTANCE_RUNTIME_DIVISOR
 import com.sonicwave.protocol.CapabilityResult
@@ -38,9 +35,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.time.LocalTime
-import java.time.format.DateTimeFormatter
-import java.util.ArrayDeque
 import kotlin.math.roundToInt
 
 sealed interface ScanState {
@@ -184,6 +178,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private val recordingMutex = Mutex()
     private val measurementTrace = DemoMeasurementTrace()
     private val measurementDisplayStore = MeasurementDisplayStore(TELEMETRY_WINDOW_MS)
+    private val rawConsoleStore = RawConsoleStore(MAX_RAW_LOG_LINES)
+    private val calibrationSessionStore = CalibrationSessionStore()
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -222,13 +218,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private var preferredLaserPlatformModel: PlatformModel = PlatformModel.PLUS
     private var testSessionStore: TestSessionUi? = null
     private var motionSamplingSessionStore: MotionSamplingSessionUi? = null
-    private val rawLogBuffer = ArrayDeque<String>()
 
     init {
         observeClient()
         refreshPermissionState()
         _uiState.update {
-            withCaptureAvailability(
+            calibrationSessionStore.withCaptureAvailability(
                 it.copy(
                     safetyStatus = defaultSafetyStatus(),
                     statusLabel = currentStatusLabel(
@@ -258,7 +253,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val hasPermission = _uiState.value.permissionState is PermissionState.Granted
         if (!hasPermission) {
             _uiState.update {
-                withCaptureAvailability(
+                calibrationSessionStore.withCaptureAvailability(
                     it.copy(
                         isDeviceSheetVisible = false,
                         scanState = ScanState.Idle,
@@ -271,7 +266,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
         client.startScan(preferredNamePrefixes = listOf("SonicWave", "Sonicwave", "Vibrate"))
         _uiState.update {
-            withCaptureAvailability(
+            calibrationSessionStore.withCaptureAvailability(
                 it.copy(
                     isDeviceSheetVisible = true,
                     scanState = ScanState.Scanning,
@@ -284,7 +279,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     fun closeScanSheet() {
         client.stopScan()
         _uiState.update {
-            withCaptureAvailability(
+            calibrationSessionStore.withCaptureAvailability(
                 it.copy(
                     isDeviceSheetVisible = false,
                     scanState = ScanState.Idle,
@@ -319,8 +314,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         resetSessionStores(clearTestSession = false)
 
         _uiState.update {
-            resetCalibrationSessionState(
-                withCaptureAvailability(
+            calibrationSessionStore.reset(
+                calibrationSessionStore.withCaptureAvailability(
                     it.copy(
                         scanState = ScanState.Idle,
                         statusLabel = currentStatusLabel(connectionState = ConnectionState.Connecting, isScanning = false),
@@ -383,7 +378,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 client.connect(device.id)
             }.onSuccess {
                 _uiState.update {
-                    withCaptureAvailability(
+                    calibrationSessionStore.withCaptureAvailability(
                         it.copy(
                             notifyEnabled = true,
                             notifyError = null,
@@ -401,7 +396,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     val probeCapabilities = probe?.capabilities
                     val probedFallStopEnabled = probeCapabilities?.let(::isFallStopEnabled)
-                    withCaptureAvailability(
+                    calibrationSessionStore.withCaptureAvailability(
                         it.copy(
                             isDeviceSheetVisible = false,
                             capabilityInfo = probe?.let(::formatCapabilityInfo) ?: it.capabilityInfo,
@@ -441,7 +436,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }.onFailure { error ->
                 _uiState.update {
-                    withCaptureAvailability(
+                    calibrationSessionStore.withCaptureAvailability(
                         it.copy(
                             lastAckOrError = text(
                                 R.string.message_connect_failed,
@@ -488,8 +483,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         resetMeasurementDisplayState()
         resetSessionStores(clearTestSession = false)
         _uiState.update {
-            resetCalibrationSessionState(
-                withCaptureAvailability(
+            calibrationSessionStore.reset(
+                calibrationSessionStore.withCaptureAvailability(
                     it.copy(
                         connectedDeviceName = null,
                         isConnecting = false,
@@ -590,57 +585,25 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateModelReferenceInput(value: String) {
         _uiState.update { state ->
-            synchronizeModelSelectionUi(
-                state.copy(
-                    modelRefInput = value,
-                    preparedModel = parsePreparedModelFromInputs(
-                        state = state.copy(modelRefInput = value),
-                        source = PreparedCalibrationModelSourceUi.MANUAL_OVERRIDE,
-                    ),
-                ),
-            )
+            calibrationSessionStore.updateManualModelInput(state, referenceInput = value)
         }
     }
 
     fun updateModelC0Input(value: String) {
         _uiState.update { state ->
-            synchronizeModelSelectionUi(
-                state.copy(
-                    modelC0Input = value,
-                    preparedModel = parsePreparedModelFromInputs(
-                        state = state.copy(modelC0Input = value),
-                        source = PreparedCalibrationModelSourceUi.MANUAL_OVERRIDE,
-                    ),
-                ),
-            )
+            calibrationSessionStore.updateManualModelInput(state, c0Input = value)
         }
     }
 
     fun updateModelC1Input(value: String) {
         _uiState.update { state ->
-            synchronizeModelSelectionUi(
-                state.copy(
-                    modelC1Input = value,
-                    preparedModel = parsePreparedModelFromInputs(
-                        state = state.copy(modelC1Input = value),
-                        source = PreparedCalibrationModelSourceUi.MANUAL_OVERRIDE,
-                    ),
-                ),
-            )
+            calibrationSessionStore.updateManualModelInput(state, c1Input = value)
         }
     }
 
     fun updateModelC2Input(value: String) {
         _uiState.update { state ->
-            synchronizeModelSelectionUi(
-                state.copy(
-                    modelC2Input = value,
-                    preparedModel = parsePreparedModelFromInputs(
-                        state = state.copy(modelC2Input = value),
-                        source = PreparedCalibrationModelSourceUi.MANUAL_OVERRIDE,
-                    ),
-                ),
-            )
+            calibrationSessionStore.updateManualModelInput(state, c2Input = value)
         }
     }
 
@@ -658,13 +621,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateModelType(type: CalibrationModelType) {
         _uiState.update { state ->
-            prepareSelectedModelForDeployment(
-                state.copy(
-                    modelType = type,
-                    selectedComparisonModel = type,
-                ),
-                forceSelectedFit = true,
-            )
+            calibrationSessionStore.selectModelType(state, type)
         }
         val prepared = _uiState.value.preparedModel
         if (prepared != null && prepared.type == type) {
@@ -990,24 +947,22 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             "[CAL_APP] record clicked route=APP_LIVE_SNAPSHOT recording=${state.isRecording} connected=${state.isConnected} stableVisible=${state.stableWeightActive} refValid=${isCaptureReferenceValid(state.captureReferenceInput)} distancePresent=${hasCaptureDistanceSnapshot(state)}",
         )
         _uiState.update { current ->
-            val nextPoints = current.calibrationPoints + point
-            rebuildCalibrationComparison(
-                current.copy(
-                    latestCalibrationPoint = point,
-                    calibrationPoints = nextPoints,
-                    captureStatus = captureFeedback(
-                        kind = CaptureFeedbackKind.SUCCESS,
-                        message = text(
-                            R.string.capture_status_recorded,
-                            nextPoints.size,
-                            point.index ?: nextPoints.size,
-                        ),
-                        rawReason = point.captureRoute.name,
+            val nextPointCount = current.calibrationPoints.size + 1
+            calibrationSessionStore.appendPoint(
+                state = current,
+                point = point,
+                captureStatus = captureFeedback(
+                    kind = CaptureFeedbackKind.SUCCESS,
+                    message = text(
+                        R.string.capture_status_recorded,
+                        nextPointCount,
+                        point.index ?: nextPointCount,
                     ),
-                    lastAckOrError = text(
-                        R.string.message_calibration_point_recorded_with_count,
-                        nextPoints.size,
-                    ),
+                    rawReason = point.captureRoute.name,
+                ),
+                lastAckOrError = text(
+                    R.string.message_calibration_point_recorded_with_count,
+                    nextPointCount,
                 ),
             )
         }
@@ -1024,7 +979,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendCalibrationSetModel() {
         val state = _uiState.value
-        val prepared = state.preparedModel ?: parsePreparedModelFromInputs(
+        val prepared = state.preparedModel ?: calibrationSessionStore.parsePreparedModelFromInputs(
             state = state,
             source = PreparedCalibrationModelSourceUi.MANUAL_OVERRIDE,
         )
@@ -1254,7 +1209,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 }.onSuccess { session ->
                     recordingSession = session
                     _uiState.update {
-                        withCaptureAvailability(
+                        calibrationSessionStore.withCaptureAvailability(
                             it.copy(
                                 isRecording = true,
                                 recordingDestination = session.destinationLabel,
@@ -1266,7 +1221,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     appendSystemLog("[CAL_UI] recording=true pointRecordEnabled=${_uiState.value.canCaptureCalibrationPoint}")
                 }.onFailure { error ->
                     _uiState.update {
-                        withCaptureAvailability(
+                        calibrationSessionStore.withCaptureAvailability(
                             it.copy(
                                 isRecording = false,
                                 recordingStatus = text(
@@ -1626,7 +1581,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     )
                     appendSystemLog(text(R.string.log_transport_disconnect_safety, detail))
                     _uiState.update { current ->
-                        withCaptureAvailability(
+                        calibrationSessionStore.withCaptureAvailability(
                             current.copy(
                                 safetyStatus = safetyStatus,
                                 faultStatus = faultStatusFromCode(safetyStatus.code),
@@ -1665,7 +1620,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         else -> state.notifyError
                     }
 
-                    withCaptureAvailability(
+                    calibrationSessionStore.withCaptureAvailability(
                         state.copy(
                             connectionState = connection,
                             isConnected = isConnected,
@@ -1722,8 +1677,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     resetSessionStores(clearTestSession = false)
                     degradedStartDialogSuppressed = false
                     _uiState.update { state ->
-                        resetCalibrationSessionState(
-                            withCaptureAvailability(
+                        calibrationSessionStore.reset(
+                            calibrationSessionStore.withCaptureAvailability(
                                 state.copy(
                                     devicePlatformModel = null,
                                     deviceLaserInstalled = null,
@@ -2134,24 +2089,22 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             validFlag = event.validFlag,
                             raw = event.raw,
                         )
-                        val nextPoints = state.calibrationPoints + point
-                        rebuildCalibrationComparison(
-                            state.copy(
-                                latestCalibrationPoint = point,
-                                calibrationPoints = nextPoints,
-                                captureStatus = captureFeedback(
-                                    kind = CaptureFeedbackKind.INFO,
-                                    message = text(
-                                        R.string.capture_status_legacy_recorded,
-                                        nextPoints.size,
-                                        point.index ?: nextPoints.size,
-                                    ),
-                                    rawReason = point.captureRoute.name,
+                        val nextPointCount = state.calibrationPoints.size + 1
+                        calibrationSessionStore.appendPoint(
+                            state = state,
+                            point = point,
+                            captureStatus = captureFeedback(
+                                kind = CaptureFeedbackKind.INFO,
+                                message = text(
+                                    R.string.capture_status_legacy_recorded,
+                                    nextPointCount,
+                                    point.index ?: nextPointCount,
                                 ),
-                                lastAckOrError = text(
-                                    R.string.message_calibration_point_recorded_with_count,
-                                    nextPoints.size,
-                                ),
+                                rawReason = point.captureRoute.name,
+                            ),
+                            lastAckOrError = text(
+                                R.string.message_calibration_point_recorded_with_count,
+                                nextPointCount,
                             ),
                         )
                     }.also {
@@ -2163,7 +2116,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
                     is Event.CalibrationModel -> _uiState.update {
                         val type = event.type ?: CalibrationModelType.LINEAR
-                        synchronizeModelSelectionUi(
+                        calibrationSessionStore.synchronizeModelSelectionUi(
                             it.copy(
                             latestModel = CalibrationModelUi(
                                 type = type,
@@ -2557,7 +2510,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun resetRawConsoleState(forcePublish: Boolean = true) {
-        rawLogBuffer.clear()
+        rawConsoleStore.reset()
         lastRawConsolePublishAtMs = 0L
         if (forcePublish) {
             publishRawConsole(force = true)
@@ -2589,7 +2542,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
         _measurementDisplayState.value = displayState
         _uiState.update {
-            withCaptureAvailability(
+            calibrationSessionStore.withCaptureAvailability(
                 it.copy(
                     distance = displayState.distance,
                     weight = displayState.weight,
@@ -2605,9 +2558,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val now = System.currentTimeMillis()
         if (!force && now - lastRawConsolePublishAtMs < RAW_LOG_PUBLISH_INTERVAL_MS) return
         lastRawConsolePublishAtMs = now
-        _rawConsoleState.value = RawConsoleUiState(
-            rawLogLines = rawLogBuffer.toList(),
-        )
+        _rawConsoleState.value = rawConsoleStore.currentState()
     }
 
     private fun publishTestSessionPanel(force: Boolean = false) {
@@ -2661,20 +2612,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 "last_ignored_carrier=${snapshot.lastIgnoredCarrier?.name ?: "-"} " +
                 "protocol_mode=${snapshot.lastProtocolMode?.name ?: _uiState.value.protocolMode.name}",
         )
-    }
-
-    private fun isHighPriorityLog(line: String): Boolean {
-        val trackTestSessions = shouldTrackTestSessionAutomation(_uiState.value)
-        return line.contains("EVT:FAULT") ||
-            line.contains("EVT:SAFETY") ||
-            line.contains("[FAULT]") ||
-            (trackTestSessions && line.contains("[TEST_SESSION]")) ||
-            line.contains("[DEVICE_CONFIG]") ||
-            line.contains("[LAYER:MEASUREMENT_CONSUME]") ||
-            line.contains("[MEASUREMENT_CONSUME_SUMMARY]") ||
-            line.contains("[CAL_CAPTURE_ATTEMPT]") ||
-            line.contains("[CAL_CAPTURE_RESULT]") ||
-            line.contains("[STREAM_SUBSCRIPTION_RESULT]")
     }
 
     private fun mutableMotionSamplingRows(session: MotionSamplingSessionUi): MutableList<MotionSamplingRowUi> {
@@ -2936,7 +2873,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             recorder.appendRow(session, point)
                         }.onFailure { error ->
                             _uiState.update {
-                                withCaptureAvailability(
+                                calibrationSessionStore.withCaptureAvailability(
                                     it.copy(
                                         isRecording = false,
                                         recordingStatus = text(
@@ -3995,153 +3932,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    private fun withCaptureAvailability(state: UiState): UiState {
-        return state.copy(
-            canCaptureCalibrationPoint = state.isConnected &&
-                state.isRecording &&
-                isCaptureReferenceValid(state.captureReferenceInput) &&
-                hasCaptureDistanceSnapshot(state),
-        )
-    }
-
-    private fun resetCalibrationSessionState(state: UiState): UiState {
-        return synchronizeModelSelectionUi(
-            withCaptureAvailability(
-                state.copy(
-                latestCalibrationPoint = null,
-                calibrationPoints = emptyList(),
-                comparisonResult = null,
-                selectedComparisonModel = state.modelType,
-                captureStatus = null,
-                writeModelStatus = null,
-                preparedModel = null,
-            ),
-            ),
-        )
-    }
-
-    private fun rebuildCalibrationComparison(state: UiState): UiState {
-        val samples = state.calibrationPoints.mapNotNull { point ->
-            val distanceMm = point.distanceMm
-            val referenceWeightKg = point.referenceWeightKg
-            val isValid = point.validFlag != false
-            if (distanceMm == null || referenceWeightKg == null || !isValid) {
-                null
-            } else {
-                CalibrationFitSample(
-                    distanceMm = distanceMm,
-                    referenceWeightKg = referenceWeightKg,
-                )
-            }
-        }
-        return prepareSelectedModelForDeployment(
-            state.copy(
-            comparisonResult = if (samples.isEmpty()) {
-                null
-            } else {
-                CalibrationComparisonEngine.compare(samples)
-            },
-            canCaptureCalibrationPoint = state.isConnected &&
-                state.isRecording &&
-                isCaptureReferenceValid(state.captureReferenceInput) &&
-                hasCaptureDistanceSnapshot(state),
-            ),
-        )
-    }
-
-    private fun prepareSelectedModelForDeployment(
-        state: UiState,
-        forceSelectedFit: Boolean = false,
-    ): UiState {
-        val selectedPreparedModel = fitForType(
-            comparisonResult = state.comparisonResult,
-            type = state.selectedComparisonModel,
-        )?.let { fit ->
-            if (fit.isAvailable) {
-                fit.coefficients?.let { coefficients ->
-                    PreparedCalibrationModelUi(
-                        type = state.selectedComparisonModel,
-                        referenceDistance = coefficients.referenceDistance,
-                        c0 = coefficients.c0,
-                        c1 = coefficients.c1,
-                        c2 = coefficients.c2,
-                        source = PreparedCalibrationModelSourceUi.AUTO_SELECTED_FIT,
-                    )
-                }
-            } else {
-                null
-            }
-        }
-        val shouldUseAutoFit = forceSelectedFit ||
-            state.preparedModel == null ||
-            state.preparedModel.source == PreparedCalibrationModelSourceUi.AUTO_SELECTED_FIT
-        val preparedModel = if (shouldUseAutoFit) {
-            selectedPreparedModel
-        } else {
-            state.preparedModel
-        }
-        val stateWithPrepared = if (shouldUseAutoFit && preparedModel != null) {
-            state.copy(
-                modelType = preparedModel.type,
-                preparedModel = preparedModel,
-                modelRefInput = preparedModel.referenceDistance.toString(),
-                modelC0Input = preparedModel.c0.toString(),
-                modelC1Input = preparedModel.c1.toString(),
-                modelC2Input = preparedModel.c2.toString(),
-            )
-        } else {
-            state.copy(
-                modelType = state.selectedComparisonModel,
-                preparedModel = preparedModel,
-            )
-        }
-        return synchronizeModelSelectionUi(stateWithPrepared)
-    }
-
-    private fun synchronizeModelSelectionUi(state: UiState): UiState {
-        return state.copy(
-            modelOptions = SUPPORTED_CALIBRATION_MODEL_TYPES.map { type ->
-                CalibrationModelOptionUi(
-                    type = type,
-                    selected = type == state.selectedComparisonModel,
-                    available = fitForType(state.comparisonResult, type)?.isAvailable == true,
-                    prepared = type == state.preparedModel?.type,
-                )
-            },
-        )
-    }
-
-    private fun fitForType(
-        comparisonResult: CalibrationComparisonResult?,
-        type: CalibrationModelType,
-    ): CalibrationFitResult? {
-        return when (type) {
-            CalibrationModelType.LINEAR -> comparisonResult?.linear
-            CalibrationModelType.QUADRATIC -> comparisonResult?.quadratic
-        }
-    }
-
-    private fun parsePreparedModelFromInputs(
-        state: UiState,
-        source: PreparedCalibrationModelSourceUi,
-    ): PreparedCalibrationModelUi? {
-        val referenceDistance = state.modelRefInput.toFloatOrNull()
-        val c0 = state.modelC0Input.toFloatOrNull()
-        val c1 = state.modelC1Input.toFloatOrNull()
-        val c2 = state.modelC2Input.toFloatOrNull()
-        if (referenceDistance == null || c0 == null || c1 == null || c2 == null) {
-            return null
-        }
-        return PreparedCalibrationModelUi(
-            type = state.selectedComparisonModel,
-            referenceDistance = referenceDistance,
-            c0 = c0,
-            c1 = c1,
-            c2 = c2,
-            source = source,
-        )
-    }
-
     private fun writeModelFeedback(
         kind: WriteModelFeedbackKind,
         message: String,
@@ -4307,7 +4097,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 recordingSession = null
                 _uiState.update {
-                    withCaptureAvailability(
+                    calibrationSessionStore.withCaptureAvailability(
                         it.copy(
                             isRecording = false,
                             recordingStatus = reason,
@@ -4326,18 +4116,20 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun appendRawLog(direction: String, payload: String, forcePublish: Boolean = false) {
-        val line = "${LOG_TIME_FORMATTER.format(LocalTime.now())} [$direction] $payload"
-        if (rawLogBuffer.size >= MAX_RAW_LOG_LINES) {
-            rawLogBuffer.removeFirst()
-        }
-        rawLogBuffer.addLast(line)
-        publishRawConsole(force = forcePublish || isHighPriorityLog(line))
+        val appendResult = rawConsoleStore.append(
+            direction = direction,
+            payload = payload,
+            forcePublish = forcePublish,
+            trackTestSessions = shouldTrackTestSessionAutomation(_uiState.value),
+        )
+        publishRawConsole(force = appendResult.forcePublish)
     }
 
     private fun shouldAppendIncomingRawLine(line: String): Boolean {
-        if (_uiState.value.verboseStreamLogsEnabled) return true
-        if (line.startsWith("EVT:STREAM", ignoreCase = true)) return false
-        return !CSV_STREAM_REGEX.matches(line.trim())
+        return rawConsoleStore.shouldAppendIncomingRawLine(
+            line = line,
+            verboseStreamLogsEnabled = _uiState.value.verboseStreamLogsEnabled,
+        )
     }
 
     private fun buildMotionSamplingRow(
@@ -4467,8 +4259,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         private const val LIVE_WAVE_PARAM_SEND_DEBOUNCE_MS = 300L
         private const val PENDING_WAVE_TRUTH_REFRESH_ATTEMPTS = 4
         private const val PENDING_WAVE_TRUTH_REFRESH_INTERVAL_MS = 250L
-        private val CSV_STREAM_REGEX = Regex("""^-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?$""")
-        private val LOG_TIME_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
     }
 }
 
