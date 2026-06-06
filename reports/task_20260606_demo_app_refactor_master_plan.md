@@ -170,12 +170,13 @@ cd tools/android_demo
 
 ### B4：WaveControlStateReducer
 
-状态：先审后做；不作为普通低风险包。
+状态：第一阶段已完成。阶段报告见 `reports/task_20260606_demo_app_wave_control_state_reducer.md`。
 
 目标：
 
-- 抽纯 reducer，管理 pending start/stop、wave output truth、snapshot merge context、wave control flags。
-- 把 `resolveAuthoritativeWaveOutput`、`resolveSnapshotStartReady`、`resolveOptimisticStopState`、start/stop availability 相关判断纳入可测试 owner。
+- 已抽纯 reducer，管理 wave output transition、runtime clock、formal wave truth sync、wave control flags。
+- 已把 `resolveAuthoritativeWaveOutput`、`resolveSnapshotStartReady`、`resolveOptimisticStopState` 纳入可测试 owner。
+- pending start/stop lifecycle 和 formal session action 暂不迁移。
 
 保留在 ViewModel：
 
@@ -183,15 +184,13 @@ cd tools/android_demo
 - `viewModelScope` job、truth refresh scheduling。
 - `WaveLifecycleCommandGate` token 调用。
 - test session start/finish 的真实副作用。
+- `PendingWaveStartRequest / PendingWaveStopRequest / PendingWaveStopCompletion` 生命周期。
 
 新增测试：
 
-- Stop invalidates in-flight Start。
-- 新 Start 有新 token 可继续。
-- pending truth refresh 下 snapshot `start_ready=false` 不清掉已知 ready。
-- Stop ACK fallback 可把 wave output optimistic 置 false。
-- 新 formal `EVT:STOP / EVT:SAFETY / EVT:WAVE_OUTPUT` 仍可触发状态更新。
-- Start pending、Stop pending、Running、Ready、Safety blocked 的 availability 输出正确。
+- `WaveLifecycleCommandGateTest` 继续覆盖 Stop invalidates Start、新 Start fresh token。
+- `DemoStartReadyRegressionTest` 继续覆盖 pending truth refresh 下 snapshot `start_ready=false` 不清掉已知 ready、Stop ACK fallback optimistic state、authoritative wave output。
+- `WaveControlStateReducerTest` 新增覆盖 Start pending、Stop pending、Running、Ready、Safety blocked、runtime start/stop clock、formal wave truth sync。
 
 门禁：
 
@@ -300,8 +299,8 @@ cd tools/android_demo
 
 1. B2 `RawConsoleStore`：已完成。
 2. B3 `CalibrationSessionStore`：已完成。
-3. B4 `WaveControlStateReducer`：下一建议包，先补 reducer tests，再做代码迁移。
-4. B5 `MotionSamplingSessionStore`。
+3. B4 `WaveControlStateReducer`：第一阶段已完成；第二阶段只在先审 pending lifecycle / formal session action 后继续。
+4. B5 `MotionSamplingSessionStore`：下一建议包。
 5. B7 `DeviceConfigWriteTracker`。
 6. B8 Presentation model 收口。
 7. B6 `TestSessionBridge`，只有 wave control reducer 稳定后再做。

@@ -180,6 +180,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private val measurementDisplayStore = MeasurementDisplayStore(TELEMETRY_WINDOW_MS)
     private val rawConsoleStore = RawConsoleStore(MAX_RAW_LOG_LINES)
     private val calibrationSessionStore = CalibrationSessionStore()
+    private val waveControlStateReducer = WaveControlStateReducer(
+        timeProvider = { System.currentTimeMillis() },
+    )
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -2690,54 +2693,20 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun currentWaveStateCode(active: Boolean): String = if (active) "RUNNING" else "STOPPED"
-
     private fun UiState.syncFormalWaveTruth(): UiState {
-        val waveCode = currentWaveStateCode(waveOutputActive)
-        return copy(
-            safetyStatus = safetyStatus.copy(
-                runtimeState = runtimeStateLabel(deviceState.name),
-                runtimeCode = deviceState.name,
-                waveState = waveStateLabel(waveCode),
-                waveCode = waveCode,
-            ),
-        )
+        return waveControlStateReducer.syncFormalWaveTruth(this)
     }
 
     private fun UiState.syncWaveControlFlags(): UiState {
-        val startPending = !waveOutputActive &&
-            (pendingWaveStartRequest != null || deviceState == DeviceState.RUNNING)
-        val stopPending = waveOutputActive &&
-            (pendingWaveStopRequest != null || deviceState != DeviceState.RUNNING)
-        return copy(
-            isWaveStartPending = startPending,
-            isWaveStopPending = stopPending,
+        return waveControlStateReducer.syncWaveControlFlags(
+            state = this,
+            hasPendingStart = pendingWaveStartRequest != null,
+            hasPendingStop = pendingWaveStopRequest != null,
         )
     }
 
     private fun UiState.applyWaveOutputTransition(nextWaveOutputActive: Boolean): UiState {
-        val wasRunning = waveOutputActive
-        val isRunning = nextWaveOutputActive
-        return when {
-            !wasRunning && isRunning -> copy(
-                waveOutputActive = true,
-                waveRuntimeStartMs = System.currentTimeMillis(),
-                waveRuntimeElapsedMs = 0L,
-            )
-
-            wasRunning && !isRunning -> {
-                val finalElapsedMs = waveRuntimeStartMs
-                    ?.let { startMs -> (System.currentTimeMillis() - startMs).coerceAtLeast(0L) }
-                    ?: waveRuntimeElapsedMs
-                copy(
-                    waveOutputActive = false,
-                    waveRuntimeStartMs = null,
-                    waveRuntimeElapsedMs = finalElapsedMs,
-                )
-            }
-
-            else -> copy(waveOutputActive = nextWaveOutputActive)
-        }
+        return waveControlStateReducer.applyWaveOutputTransition(this, nextWaveOutputActive)
     }
 
     private fun UiState.resetWaveRuntime(): UiState {
@@ -4262,62 +4231,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 }
 
-internal enum class SnapshotStartReadyMergeContext {
-    AUTHORITATIVE,
-    CONTROL_LIFECYCLE_REFRESH,
-}
-
-internal fun resolveAuthoritativeWaveOutput(
-    currentWaveOutputActive: Boolean,
-    authoritativeTopState: DeviceState,
-    authoritativeWaveOutputActive: Boolean?,
-): Boolean {
-    authoritativeWaveOutputActive?.let { return it }
-    return when (authoritativeTopState) {
-        DeviceState.IDLE, DeviceState.ARMED, DeviceState.FAULT_STOP -> false
-        DeviceState.RUNNING, DeviceState.UNKNOWN -> currentWaveOutputActive
-    }
-}
-
-internal fun shouldTreatSafetyAsWaveStopped(event: Event.Safety): Boolean {
-    return event.wave == WaveState.STOPPED ||
-        event.state == DeviceState.IDLE ||
-        event.state == DeviceState.FAULT_STOP ||
-        event.effect == SafetyEffect.ABNORMAL_STOP ||
-        event.effect == SafetyEffect.RECOVERABLE_PAUSE
-}
-
-// Lifecycle-triggered snapshot refresh is used to reconcile formal control/session truth and
-// should not permanently clear an already-known pre-start ready state with a transient false.
-internal fun resolveSnapshotStartReady(
-    currentStartReady: Boolean?,
-    snapshotStartReady: Boolean?,
-    mergeContext: SnapshotStartReadyMergeContext,
-): Boolean? {
-    return when {
-        snapshotStartReady == null -> currentStartReady
-        snapshotStartReady -> true
-        mergeContext == SnapshotStartReadyMergeContext.CONTROL_LIFECYCLE_REFRESH &&
-            currentStartReady == true -> currentStartReady
-        else -> false
-    }
-}
-
-internal fun mergeProtocolMode(
-    currentMode: ProtocolMode,
-    observedMode: ProtocolMode?,
-): ProtocolMode {
-    return when {
-        currentMode == ProtocolMode.PRIMARY || observedMode == ProtocolMode.PRIMARY -> ProtocolMode.PRIMARY
-        currentMode == ProtocolMode.LEGACY || observedMode == ProtocolMode.LEGACY -> ProtocolMode.LEGACY
-        else -> ProtocolMode.UNKNOWN
-    }
-}
-
-internal fun shouldAttemptPrimarySnapshotRefresh(protocolMode: ProtocolMode): Boolean {
-    return protocolMode != ProtocolMode.LEGACY
-}
-
 internal fun doesObservedDeviceConfigMatchRequested(
     requestedPlatformModel: PlatformModel?,
     requestedLaserInstalled: Boolean?,
@@ -4328,22 +4241,4 @@ internal fun doesObservedDeviceConfigMatchRequested(
         requestedLaserInstalled != null &&
         observedPlatformModel == requestedPlatformModel &&
         observedLaserInstalled == requestedLaserInstalled
-}
-
-internal fun resolveOptimisticStopState(
-    deviceStartReady: Boolean?,
-    deviceBaselineReady: Boolean?,
-    stableWeightActive: Boolean,
-    stableWeight: Float?,
-): DeviceState {
-    return if (
-        deviceStartReady == true &&
-        deviceBaselineReady == true &&
-        stableWeightActive &&
-        stableWeight != null
-    ) {
-        DeviceState.ARMED
-    } else {
-        DeviceState.IDLE
-    }
 }
