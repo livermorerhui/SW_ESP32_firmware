@@ -29,6 +29,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -42,7 +43,10 @@ import com.sonicwave.demo.UiState
 import com.sonicwave.demo.isBaseDeliveryProfile
 import com.sonicwave.demo.isBaseOrPlusDegradedDeliveryProfile
 import com.sonicwave.demo.isPlusDegradedDeliveryProfile
+import com.sonicwave.demo.ui.components.CalibrationCommandCallbacks
+import com.sonicwave.demo.ui.components.CalibrationInputCallbacks
 import com.sonicwave.demo.ui.components.CalibrationToolsSection
+import com.sonicwave.demo.ui.components.CalibrationToolsActions
 import com.sonicwave.demo.ui.components.DeviceConnectSection
 import com.sonicwave.demo.ui.components.DeviceProfileSection
 import com.sonicwave.demo.ui.components.FallStopProtectionSection
@@ -57,6 +61,9 @@ import com.sonicwave.transport.BleScanResult
 @Composable
 fun MainScreen(viewModel: DemoViewModel = viewModel()) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val calibrationActions = remember(viewModel) {
+        buildCalibrationToolsActions(viewModel)
+    }
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions(),
         onResult = { viewModel.refreshPermissionState() },
@@ -147,24 +154,7 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
             if (!deliveryProfile) {
                 CalibrationToolsSection(
                     uiState = uiState,
-                    onZeroInputChange = viewModel::updateZeroInput,
-                    onFactorInputChange = viewModel::updateFactorInput,
-                    onCaptureReferenceChange = viewModel::updateCaptureReferenceInput,
-                    onModelReferenceChange = viewModel::updateModelReferenceInput,
-                    onModelC0Change = viewModel::updateModelC0Input,
-                    onModelC1Change = viewModel::updateModelC1Input,
-                    onModelC2Change = viewModel::updateModelC2Input,
-                    onModelTypeChange = viewModel::updateModelType,
-                    onZero = viewModel::sendZero,
-                    onCalibrate = viewModel::sendCalibrate,
-                    onCapturePoint = viewModel::sendCalibrationCapture,
-                    onStartRecording = viewModel::startRecording,
-                    onStopRecording = viewModel::stopRecording,
-                    onGetModel = viewModel::sendCalibrationGetModel,
-                    onSetModel = viewModel::sendCalibrationSetModel,
-                    onCalibrationZero = viewModel::sendCalibrationZero,
-                    onToggleEngineeringSection = viewModel::toggleEngineeringSection,
-                    onToggleVerboseStreamLogs = viewModel::toggleVerboseStreamLogs,
+                    actions = calibrationActions,
                 )
             }
 
@@ -214,6 +204,33 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
             },
         )
     }
+}
+
+private fun buildCalibrationToolsActions(viewModel: DemoViewModel): CalibrationToolsActions {
+    return CalibrationToolsActions(
+        input = CalibrationInputCallbacks(
+            onZeroInputChange = viewModel::updateZeroInput,
+            onFactorInputChange = viewModel::updateFactorInput,
+            onCaptureReferenceChange = viewModel::updateCaptureReferenceInput,
+            onModelReferenceChange = viewModel::updateModelReferenceInput,
+            onModelC0Change = viewModel::updateModelC0Input,
+            onModelC1Change = viewModel::updateModelC1Input,
+            onModelC2Change = viewModel::updateModelC2Input,
+            onModelTypeChange = viewModel::updateModelType,
+        ),
+        commands = CalibrationCommandCallbacks(
+            onZero = viewModel::sendZero,
+            onCalibrate = viewModel::sendCalibrate,
+            onCapturePoint = viewModel::sendCalibrationCapture,
+            onStartRecording = viewModel::startRecording,
+            onStopRecording = viewModel::stopRecording,
+            onGetModel = viewModel::sendCalibrationGetModel,
+            onSetModel = viewModel::sendCalibrationSetModel,
+            onCalibrationZero = viewModel::sendCalibrationZero,
+            onToggleEngineeringSection = viewModel::toggleEngineeringSection,
+            onToggleVerboseStreamLogs = viewModel::toggleVerboseStreamLogs,
+        ),
+    )
 }
 
 @Composable

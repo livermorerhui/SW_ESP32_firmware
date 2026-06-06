@@ -59,12 +59,7 @@ import kotlin.math.max
 @Composable
 fun MotionSamplingSection(
     uiState: UiState,
-    onStartSampling: () -> Unit,
-    onStopSampling: () -> Unit,
-    onEnableSamplingMode: () -> Unit,
-    onDisableSamplingMode: () -> Unit,
-    onClearSession: () -> Unit,
-    onExportSession: (MotionSamplingExportRequest) -> Unit,
+    actions: MotionSamplingActions,
     modifier: Modifier = Modifier,
 ) {
     val notAvailable = stringResource(R.string.common_not_available)
@@ -186,7 +181,7 @@ fun MotionSamplingSection(
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
-                    onClick = onEnableSamplingMode,
+                    onClick = actions.onEnableSamplingMode,
                     enabled = uiState.isConnected &&
                         uiState.protocolMode == ProtocolMode.PRIMARY &&
                         !uiState.motionSamplingModeEnabled,
@@ -195,7 +190,7 @@ fun MotionSamplingSection(
                     Text(stringResource(R.string.action_enable_motion_sampling_mode))
                 }
                 OutlinedButton(
-                    onClick = onDisableSamplingMode,
+                    onClick = actions.onDisableSamplingMode,
                     enabled = uiState.isConnected &&
                         uiState.protocolMode == ProtocolMode.PRIMARY &&
                         uiState.motionSamplingModeEnabled,
@@ -206,14 +201,14 @@ fun MotionSamplingSection(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
-                    onClick = onStartSampling,
+                    onClick = actions.onStartSampling,
                     enabled = !uiState.isMotionSamplingActive,
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(stringResource(R.string.action_start_motion_sampling))
                 }
                 Button(
-                    onClick = onStopSampling,
+                    onClick = actions.onStopSampling,
                     enabled = uiState.isMotionSamplingActive,
                     modifier = Modifier.weight(1f),
                 ) {
@@ -226,7 +221,7 @@ fun MotionSamplingSection(
                         if (hasStoppedUnexportedSession) {
                             showClearConfirm = true
                         } else {
-                            onClearSession()
+                            actions.onClearSession()
                         }
                     },
                     enabled = !uiState.isMotionSamplingActive && session != null,
@@ -631,7 +626,7 @@ fun MotionSamplingSection(
                     onClick = {
                         // 这里的复核块只帮助操作者确认即将导出的内容，
                         // 不会改动会话行数据、采样时序或运行时判定逻辑。
-                        onExportSession(
+                        actions.onExportSession(
                             MotionSamplingExportRequest(
                                 primaryLabel = selectedPrimaryLabel,
                                 subLabel = selectedSubLabel,
@@ -670,7 +665,7 @@ fun MotionSamplingSection(
             confirmButton = {
                 Button(
                     onClick = {
-                        onClearSession()
+                        actions.onClearSession()
                         showClearConfirm = false
                     },
                     colors = ButtonDefaults.buttonColors(

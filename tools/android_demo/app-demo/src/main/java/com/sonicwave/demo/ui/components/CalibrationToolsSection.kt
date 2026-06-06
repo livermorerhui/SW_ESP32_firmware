@@ -50,24 +50,7 @@ import kotlin.math.max
 @Composable
 fun CalibrationToolsSection(
     uiState: UiState,
-    onZeroInputChange: (String) -> Unit,
-    onFactorInputChange: (String) -> Unit,
-    onCaptureReferenceChange: (String) -> Unit,
-    onModelReferenceChange: (String) -> Unit,
-    onModelC0Change: (String) -> Unit,
-    onModelC1Change: (String) -> Unit,
-    onModelC2Change: (String) -> Unit,
-    onModelTypeChange: (CalibrationModelType) -> Unit,
-    onZero: () -> Unit,
-    onCalibrate: () -> Unit,
-    onCapturePoint: () -> Unit,
-    onStartRecording: () -> Unit,
-    onStopRecording: () -> Unit,
-    onGetModel: () -> Unit,
-    onSetModel: () -> Unit,
-    onCalibrationZero: () -> Unit,
-    onToggleEngineeringSection: () -> Unit,
-    onToggleVerboseStreamLogs: () -> Unit,
+    actions: CalibrationToolsActions,
     modifier: Modifier = Modifier,
 ) {
     val notAvailable = stringResource(R.string.common_not_available)
@@ -109,7 +92,7 @@ fun CalibrationToolsSection(
             )
 
             SectionTitle(stringResource(R.string.label_calibration_step_zero))
-            Button(onClick = onZero) {
+            Button(onClick = actions.commands.onZero) {
                 Text(stringResource(R.string.action_zero))
             }
             Text(
@@ -120,7 +103,7 @@ fun CalibrationToolsSection(
 
             SectionTitle(stringResource(R.string.label_calibration_step_recording))
             Button(
-                onClick = onStartRecording,
+                onClick = actions.commands.onStartRecording,
                 enabled = uiState.isConnected && !uiState.isRecording,
             ) {
                 Text(stringResource(R.string.action_start_recording))
@@ -157,7 +140,7 @@ fun CalibrationToolsSection(
             CaptureResultSummary(uiState = uiState)
             OutlinedTextField(
                 value = uiState.captureReferenceInput,
-                onValueChange = onCaptureReferenceChange,
+                onValueChange = actions.input.onCaptureReferenceChange,
                 label = { Text(stringResource(R.string.field_reference_weight)) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier.fillMaxWidth(),
@@ -172,7 +155,7 @@ fun CalibrationToolsSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Button(
-                onClick = onCapturePoint,
+                onClick = actions.commands.onCapturePoint,
                 enabled = uiState.canCaptureCalibrationPoint,
             ) {
                 Text(stringResource(R.string.action_capture_cal_point))
@@ -221,7 +204,7 @@ fun CalibrationToolsSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Button(
-                onClick = onStopRecording,
+                onClick = actions.commands.onStopRecording,
                 enabled = uiState.isRecording,
             ) {
                 Text(stringResource(R.string.action_stop_recording))
@@ -249,7 +232,7 @@ fun CalibrationToolsSection(
             )
             ModelSelectionOptions(
                 options = uiState.modelOptions,
-                onModelTypeChange = onModelTypeChange,
+                onModelTypeChange = actions.input.onModelTypeChange,
             )
             PreparedModelSummaryCard(
                 preparedModel = uiState.preparedModel,
@@ -290,7 +273,7 @@ fun CalibrationToolsSection(
                 null -> ButtonDefaults.buttonColors()
             }
             Button(
-                onClick = onSetModel,
+                onClick = actions.commands.onSetModel,
                 enabled = uiState.preparedModel != null,
                 colors = writeButtonColors,
             ) {
@@ -314,7 +297,7 @@ fun CalibrationToolsSection(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Button(onClick = onToggleEngineeringSection) {
+            Button(onClick = actions.commands.onToggleEngineeringSection) {
                 Text(
                     stringResource(
                         if (uiState.isEngineeringSectionExpanded) {
@@ -327,10 +310,10 @@ fun CalibrationToolsSection(
             }
             if (uiState.isEngineeringSectionExpanded) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onGetModel) {
+                    Button(onClick = actions.commands.onGetModel) {
                         Text(stringResource(R.string.action_get_model))
                     }
-                    Button(onClick = onCalibrationZero) {
+                    Button(onClick = actions.commands.onCalibrationZero) {
                         Text(stringResource(R.string.action_cal_zero))
                     }
                 }
@@ -352,7 +335,7 @@ fun CalibrationToolsSection(
 
                 OutlinedTextField(
                     value = uiState.modelRefInput,
-                    onValueChange = onModelReferenceChange,
+                    onValueChange = actions.input.onModelReferenceChange,
                     label = { Text(stringResource(R.string.field_model_reference)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth(),
@@ -365,7 +348,7 @@ fun CalibrationToolsSection(
                 )
                 OutlinedTextField(
                     value = uiState.modelC0Input,
-                    onValueChange = onModelC0Change,
+                    onValueChange = actions.input.onModelC0Change,
                     label = { Text(stringResource(R.string.field_model_c0)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth(),
@@ -378,7 +361,7 @@ fun CalibrationToolsSection(
                 )
                 OutlinedTextField(
                     value = uiState.modelC1Input,
-                    onValueChange = onModelC1Change,
+                    onValueChange = actions.input.onModelC1Change,
                     label = { Text(stringResource(R.string.field_model_c1)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth(),
@@ -391,7 +374,7 @@ fun CalibrationToolsSection(
                 )
                 OutlinedTextField(
                     value = uiState.modelC2Input,
-                    onValueChange = onModelC2Change,
+                    onValueChange = actions.input.onModelC2Change,
                     label = { Text(stringResource(R.string.field_model_c2)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth(),
@@ -409,7 +392,7 @@ fun CalibrationToolsSection(
                 )
                 FilterChip(
                     selected = uiState.verboseStreamLogsEnabled,
-                    onClick = onToggleVerboseStreamLogs,
+                    onClick = actions.commands.onToggleVerboseStreamLogs,
                     label = {
                         Text(stringResource(R.string.label_verbose_stream_logs_chip))
                     },
@@ -459,7 +442,7 @@ fun CalibrationToolsSection(
                 )
                 OutlinedTextField(
                     value = uiState.zeroInput,
-                    onValueChange = onZeroInputChange,
+                    onValueChange = actions.input.onZeroInputChange,
                     label = { Text(stringResource(R.string.field_zero)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth(),
@@ -467,13 +450,13 @@ fun CalibrationToolsSection(
                 )
                 OutlinedTextField(
                     value = uiState.factorInput,
-                    onValueChange = onFactorInputChange,
+                    onValueChange = actions.input.onFactorInputChange,
                     label = { Text(stringResource(R.string.field_factor)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
-                Button(onClick = onCalibrate) {
+                Button(onClick = actions.commands.onCalibrate) {
                     Text(stringResource(R.string.action_calibrate))
                 }
             }

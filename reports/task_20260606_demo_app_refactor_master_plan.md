@@ -269,17 +269,18 @@ cd tools/android_demo
 
 ### B8：Presentation model / Compose 参数收口
 
-状态：最后做；不作为业务 owner 第一阶段。
+状态：第一阶段已完成。阶段报告见 `reports/task_20260606_demo_app_presentation_model_stage1.md`。
 
 目标：
 
-- 对 `CalibrationToolsSection`、`MotionSamplingSection`、`MainScreen` 做参数分组。
-- 引入 section-specific presentation DTO 和 callback group。
+- 已对 `CalibrationToolsSection`、`MotionSamplingSection`、`MainScreen` 做 callbacks 参数分组。
+- 已引入 section-specific actions DTO：`CalibrationToolsActions` / `MotionSamplingActions`。
 
 边界：
 
 - 不改视觉、不改交互、不改状态 owner。
 - 不把 UI 内 `rememberSaveable` 的导出弹窗状态搬到 ViewModel。
+- 不引入多 ViewModel / navigation 重写。
 
 ## 6. 冻结项
 
@@ -301,7 +302,7 @@ cd tools/android_demo
 3. B4 `WaveControlStateReducer`：第一阶段已完成；第二阶段只在先审 pending lifecycle / formal session action 后继续。
 4. B5 `MotionSamplingSessionStore`：已完成。
 5. B7 `DeviceConfigWriteTracker`：已完成。
-6. B8 Presentation model 收口。
+6. B8 Presentation model 收口：第一阶段已完成。
 7. B6 `TestSessionBridge`，只有 wave control reducer 稳定后再做。
 
 暂不建议：
