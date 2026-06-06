@@ -183,6 +183,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private val motionSamplingExporter = MotionSamplingExporter(application)
     private val recordingMutex = Mutex()
     private val measurementTrace = DemoMeasurementTrace()
+    private val measurementDisplayStore = MeasurementDisplayStore(TELEMETRY_WINDOW_MS)
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -200,11 +201,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private val waveLifecycleCommandGate = WaveLifecycleCommandGate()
     private var lastStreamAtMs: Long = 0L
     private var telemetrySessionStartMs: Long = 0L
-    private var latestDistance: Float? = null
-    private var latestWeight: Float? = null
-    private var latestMa12: Float? = null
-    private var latestMeasurementValid = false
-    private var latestMeasurementSequence: Long? = null
     private var lastMeasurementDisplayPublishAtMs: Long = 0L
     private var lastRawConsolePublishAtMs: Long = 0L
     private var lastTestSessionPanelPublishAtMs: Long = 0L
@@ -227,8 +223,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private var testSessionStore: TestSessionUi? = null
     private var motionSamplingSessionStore: MotionSamplingSessionUi? = null
     private val rawLogBuffer = ArrayDeque<String>()
-    private val telemetryDisplayBuffer = ArrayDeque<TelemetryPointUi>()
-    private val recentWeightBuffer = ArrayDeque<Float>()
 
     init {
         observeClient()
@@ -2555,13 +2549,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun resetMeasurementDisplayState(forcePublish: Boolean = true) {
-        telemetryDisplayBuffer.clear()
-        recentWeightBuffer.clear()
-        latestDistance = null
-        latestWeight = null
-        latestMa12 = null
-        latestMeasurementValid = false
-        latestMeasurementSequence = null
+        measurementDisplayStore.reset()
         lastMeasurementDisplayPublishAtMs = 0L
         if (forcePublish) {
             publishMeasurementDisplay(force = true)
@@ -2597,23 +2585,17 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val now = System.currentTimeMillis()
         if (!force && now - lastMeasurementDisplayPublishAtMs < DISPLAY_THROTTLE_MS) return
         lastMeasurementDisplayPublishAtMs = now
+        val displayState = measurementDisplayStore.currentSnapshot().state
 
-        _measurementDisplayState.value = MeasurementDisplayUiState(
-            distance = latestDistance,
-            weight = latestWeight,
-            ma12 = latestMa12,
-            measurementValid = latestMeasurementValid,
-            lastMeasurementSequence = latestMeasurementSequence,
-            telemetryPoints = telemetryDisplayBuffer.toList(),
-        )
+        _measurementDisplayState.value = displayState
         _uiState.update {
             withCaptureAvailability(
                 it.copy(
-                    distance = latestDistance,
-                    weight = latestWeight,
-                    ma12 = latestMa12,
-                    measurementValid = latestMeasurementValid,
-                    lastMeasurementSequence = latestMeasurementSequence,
+                    distance = displayState.distance,
+                    weight = displayState.weight,
+                    ma12 = displayState.ma12,
+                    measurementValid = displayState.measurementValid,
+                    lastMeasurementSequence = displayState.lastMeasurementSequence,
                 ),
             )
         }
@@ -2652,42 +2634,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    private fun appendTelemetryDisplayPoint(point: TelemetryPointUi) {
-        telemetryDisplayBuffer.addLast(point)
-        trimTelemetryDisplayBuffer()
-    }
-
-    private fun trimTelemetryDisplayBuffer() {
-        val latestTimestampMs = telemetryDisplayBuffer.lastOrNull()?.timestampMs ?: return
-        val minTimestampMs = latestTimestampMs - TELEMETRY_WINDOW_MS
-        while (telemetryDisplayBuffer.isNotEmpty() &&
-            (telemetryDisplayBuffer.firstOrNull()?.timestampMs ?: latestTimestampMs) < minTimestampMs
-        ) {
-            telemetryDisplayBuffer.removeFirst()
-        }
-    }
-
-    private fun rememberRecentWeight(weight: Float) {
-        recentWeightBuffer.addLast(weight)
-        while (recentWeightBuffer.size > 7) {
-            recentWeightBuffer.removeFirst()
-        }
-    }
-
-    private fun recentMovingAverage(windowSize: Int): Float? {
-        if (recentWeightBuffer.size < windowSize) return null
-        return recentWeightBuffer.toList()
-            .takeLast(windowSize)
-            .average()
-            .toFloat()
-    }
-
     private fun shouldConsumeMeasurementCarrier(sample: Event.StreamSample): Boolean {
-        return when (_uiState.value.protocolMode) {
-            ProtocolMode.LEGACY -> true
-            ProtocolMode.PRIMARY -> sample.carrier == MeasurementCarrier.FORMAL_EVT_STREAM
-            ProtocolMode.UNKNOWN -> sample.carrier == MeasurementCarrier.FORMAL_EVT_STREAM
-        }
+        return measurementDisplayStore.shouldConsume(
+            protocolMode = _uiState.value.protocolMode,
+            sample = sample,
+        )
     }
 
     private fun maybeLogMeasurementConsumeSummary(
@@ -2897,12 +2848,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 weight = sample.weight,
                 reason = sample.reason,
             )
-            recentWeightBuffer.clear()
-            latestDistance = sample.distance
-            latestWeight = sample.weight
-            latestMa12 = sample.ma12.takeIf { sample.ma12Ready }
-            latestMeasurementValid = false
-            latestMeasurementSequence = invalidSequence
+            measurementDisplayStore.applyInvalid(sample)
             publishMeasurementDisplay(force = true)
             if (invalidSequence != null &&
                 invalidSequence % MEASUREMENT_CONSUME_LOG_INTERVAL == 0L
@@ -2924,27 +2870,19 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val sampleSequence = sample.sequence
         val currentState = _uiState.value
         val currentSignals = sessionCaptureSignals
-        rememberRecentWeight(weight)
         val samplingRow = buildMotionSamplingRow(
             state = currentState,
             sample = sample,
             now = now,
         )
-        val point = buildTelemetryPoint(
-            measurementSeq = sampleSequence,
-            deviceTimestampMs = sample.timestampMs,
-            elapsedMs = now - telemetrySessionStartMs,
-            timestampMs = now,
-            distance = distance,
-            unstableWeight = weight,
-            measurementValid = true,
-            ma12 = sample.ma12.takeIf { sample.ma12Ready },
+        val displaySnapshot = measurementDisplayStore.applyValid(
+            sample = sample,
+            nowMs = now,
+            telemetrySessionStartMs = telemetrySessionStartMs,
             stableWeight = currentState.stableWeight.takeIf { currentState.stableWeightActive },
-            stableFlag = currentState.stableWeightActive,
-            ma3 = recentMovingAverage(3),
-            ma5 = recentMovingAverage(5),
-            ma7 = recentMovingAverage(7),
+            stableWeightActive = currentState.stableWeightActive,
         )
+        val point = displaySnapshot.latestPoint ?: return
         val validSnapshot = measurementTrace.recordValid(
             sequence = sampleSequence,
             distance = distance,
@@ -2960,12 +2898,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             null
         }
-        appendTelemetryDisplayPoint(point)
-        latestDistance = distance
-        latestWeight = weight
-        latestMa12 = sample.ma12.takeIf { sample.ma12Ready }
-        latestMeasurementValid = true
-        latestMeasurementSequence = sampleSequence
         samplingRow?.let(::appendMotionSamplingRow)
         testSessionSample?.let(::appendTestSessionSample)
         publishMeasurementDisplay()
@@ -3490,38 +3422,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             }
             appendRawLog("SYS", "WARN $warning | $debug")
         }
-    }
-
-    private fun buildTelemetryPoint(
-        measurementSeq: Long?,
-        deviceTimestampMs: Long?,
-        elapsedMs: Long,
-        timestampMs: Long,
-        distance: Float,
-        unstableWeight: Float,
-        measurementValid: Boolean,
-        ma12: Float?,
-        stableWeight: Float?,
-        stableFlag: Boolean,
-        ma3: Float?,
-        ma5: Float?,
-        ma7: Float?,
-    ): TelemetryPointUi {
-        return TelemetryPointUi(
-            measurementSeq = measurementSeq,
-            deviceTimestampMs = deviceTimestampMs,
-            elapsedMs = elapsedMs,
-            timestampMs = timestampMs,
-            distance = distance,
-            unstableWeight = unstableWeight,
-            measurementValid = measurementValid,
-            ma12 = ma12,
-            stableWeight = stableWeight,
-            ma3 = ma3,
-            ma5 = ma5,
-            ma7 = ma7,
-            stableFlag = stableFlag,
-        )
     }
 
     private fun shouldOfferDegradedStart(state: UiState): Boolean {
