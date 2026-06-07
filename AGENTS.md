@@ -122,6 +122,9 @@
 - 真机 capture 复核实时流订阅链路时，如果未采到 Demo TX 原始行，但已经有 `ACK:STREAM enabled=1` 与 ESP32 `[STREAM_CONTROL] action=set enabled=1`，不得直接判握手失败；ACK 和设备侧执行日志足以证明订阅完成。若 UI 消费层缺结构化日志，应标记为消费层 evidence gap，而不是继续扩大固件协议或校准算法改动。
 - 修改串口采集、PlatformIO monitor、烧录、真机日志、BLE 回放等工具链前，AI 必须先搜索并审计成熟方案，优先使用 PlatformIO / 官方工具 / 项目既有脚本；禁止未经对比就自写底层串口或采集器并让用户反复真机试错
 - 如确需自写工具，必须先说明官方方案为何不适用、替代哪一层能力、如何验证、如何回退
+- Demo APP 重构默认按“小 owner / 小 UI 包 / focused tests / 阶段 smoke”推进；当前已完成 `MeasurementDisplayStore`、`RawConsoleStore`、`CalibrationSessionStore`、`MotionSamplingSessionStore`、`DeviceConfigWriteTracker`、`WaveControlStateReducer`、`WavePendingLifecycleStore`、`TestSessionBridge`、presentation actions、信息架构精简和 legacy UI cleanup 后，不存在必须继续重构的 blocker。后续不得仅因 `DemoViewModel` 或 Compose 文件偏大就继续强拆，只有真实问题、明确复用需求或证据缺口出现时才开新小包
+- Demo APP 当前正式入口是固定顶部 `型号 / 校准 / 采样 / 运行 / 日志`、顶栏 `搜索 / 断开` 和底部 `WaveControlBottomBar`。旧堆叠首页 section、旧连接状态卡片、旧 `ScaleSection` / `WaveSection` / `StableWeightSection` 不应再接回主 UI；如果未来信息架构调整后产生无调用点旧 UI，必须先用调用点审计确认，再单独 cleanup
+- Demo APP UI-only 重构如果只改 presentation 参数、删除无调用点 UI 或整理文案布局，且不触碰 BLE command、capture 语义、ESP32 协议或 ViewModel business owner，本地 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug` 通过后，可用轻量安装打开 smoke 收口；只有触碰控制链、设备写入、实时流订阅、校准采集、capture/audit 脚本或用户反馈异常时，才升级到完整 capture 证据链
 - 涉及 ESP32-S3 N16R8 底座引脚切换时，必须先读取 `docs/system/esp32s3_pin_profiles.md`：
   - 旧底座未到期前，active 固件保持旧底座 profile。
   - 新底座到货并明确切换后，再按待切换 profile 同步 `src/config/GlobalConfig.h`、`docs/hardware.md` 与架构图文案。

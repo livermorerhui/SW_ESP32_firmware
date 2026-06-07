@@ -44,6 +44,8 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 
 2026-06-07 已完成 Demo APP quality baseline smoke 阶段收口：完整 UI / 信息架构 capture `20260607_154532...demo_app_quality_smoke` 采到 6 个用户确认点和 18 个 visual evidence 文件，覆盖默认型号页、固定顶部 Tab、型号页精简、校准页压缩、采样页、运行页和日志页；运行页设备闭环补采 `20260607_161021...demo_app_quality_smoke` 使用 PlatformIO monitor 采到 `WAVE:START / START ALLOW / WAVE:STOP / STOP REQUEST / i2s_stop / STOP_SUMMARY`，`STOP_SUMMARY result=NORMAL stop_reason=MANUAL_STOP`。两轮证据合并后可作为 B2-B8 重构与 B10 信息架构阶段的 quality baseline 通过结论。同步将 `tools/demo_app_quality_smoke_capture.sh` 默认 ESP32 串口采集改为 `platformio`，避免 macOS raw `stty` 乱码；`device config` 写入仍按现场安全条件可选，未作为 blocker。
 
+2026-06-07 已完成 Demo APP 重构阶段收官复盘：B2-B11 采用小 owner / 小 UI 包 / focused tests / 阶段 smoke 推进，已覆盖测量显示、raw console、校准点与模型状态、采样会话、设备配置写入反馈、运行控制纯状态、运行页测试会话、presentation actions、信息架构精简和 legacy UI cleanup。结论是当前 Demo APP 没有必须继续重构的 blocker；后续不应为了降低文件行数继续强拆 `DemoViewModel`、BLE client、command send、完整 event reducer、多 ViewModel 或 navigation。新的重构只能由真实问题、明确复用需求或证据缺口触发。
+
 本总表是 ESP32 固件后续优化的长期入口。一次性报告只作为证据来源，不作为 backlog 真相源。
 
 ## 2. 固定边界
@@ -100,14 +102,33 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 - Demo APP 信息架构第十阶段已完成本地 compile/test/assemble 和真机 baseline smoke，已确认固定 Tab、默认型号页、型号设置精简、当前设备真值显示、保护双开关、内容不重不漏、归零确认弹窗、校准页压缩、采样页默认紧凑、直接开始采样可用、运行页无旧交付边界且系统状态更紧凑。
 - Demo APP `TestSessionBridge` 第一阶段已完成本地 test/assemble，并已补 B6 运行页轻量 smoke；Start -> Stop 有 ESP32 `WAVE:START / WAVE:STOP / STOP_SUMMARY` 证据。完整 Demo APP quality baseline 已在 `20260607_154532` + `20260607_161021` 两轮证据合并后通过。
 - Demo APP `WavePendingLifecycleStore` 已完成本地 test/assemble，并已补运行页真机 smoke；Start -> Stop 有 ESP32 `WAVE:START / WAVE:STOP / STOP_SUMMARY` 证据。完整 Demo APP quality baseline 已在 `20260607_154532` + `20260607_161021` 两轮证据合并后通过。
+- Demo APP `FW-OPT-024` legacy UI cleanup 已完成本地 compile/test/assemble，并已补轻量安装打开 smoke；旧堆叠首页 section 不再作为后续 UI 入口。
 
 Demo APP 后续重构启动原则：
 
-- 先复核 FW-OPT-011 的新可观测性证据链，证明 `STREAM_SUBSCRIPTION_RESULT / MEASUREMENT_CONSUME_SUMMARY / CAL_CAPTURE_ATTEMPT / CAL_CAPTURE_RESULT` 能消除旧 evidence gap。
-- 如果复核通过，Demo APP 可保持现状，不需要马上重构。
-- 如果复核仍暴露消费层或校准录点归因缺口，优先启动 FW-OPT-013 或 FW-OPT-014 的小包重构。
+- 当前没有必须继续重构的 Demo APP blocker；后续默认保持现状。
+- 如果出现 UI 使用问题，先判断是文案/布局/信息架构问题、presentation 参数问题，还是 ViewModel business owner 问题；只改对应 owner。
+- 如果出现实时流、校准录点、Start -> Stop、设备配置写入或采样会话问题，先用专项 capture / audit 证明问题层级，再开小包修复。
 - 禁止第一刀直接做 Demo APP 全量重构；不得在同一包里同时拆连接、控制、遥测、校准、采样、导出和 UI 状态。
 - 重构包默认不改 `EVT:STREAM` wire payload、`STREAM:SET` 合同、固件校准算法、MAX485 参数或正式 SW APP 默认行为。
+- UI-only 小包如果不触碰 BLE command、capture 语义、ESP32 协议或 ViewModel business owner，本地 compile/test/assemble 后可用轻量安装打开 smoke 收口；不需要重复完整 quality baseline。
+
+Demo APP 以后可能需要做的事情：
+
+这些不是当前未完成项，也不是必须重构项；只有触发条件出现时才开新包。
+
+| 可能事项 | 触发条件 | 推荐处理 | 当前结论 |
+| --- | --- | --- | --- |
+| 型号页继续优化 | 用户反馈型号写入反馈仍不直观，或 Base / Plus 真值显示与设备事实不一致 | 先查 ACK / snapshot / `DeviceConfigWriteTracker`，再做型号页 presentation 小包 | 当前不做 |
+| Pro / Ultra 型号解锁 | 产品和固件正式支持 Pro / Ultra，且设备能力字段有正式合同 | 先定义固件 / APP / Demo 合同，再开放 UI 选项 | 当前保持灰色不可选 |
+| 校准“撤回 / 取消写入” | 固件和 APP 合同提供可逆校准事务、草稿模型或 rollback 语义 | 先做跨端合同审计，再改 Demo APP 校准流程 | 当前不做，因为已写入模型没有可逆合同 |
+| 校准页局部拆分 | `CalibrationToolsSection.kt` 出现复用需求、测试困难或新 UI 问题 | 只做 composable 局部拆分，不改校准 owner / BLE command | 当前文件大但不是 blocker |
+| 采样页局部拆分 | `MotionSamplingSection.kt` 出现复用需求、测试困难或新 UI 问题 | 只做 composable 局部拆分，不改采样 session owner / exporter 合同 | 当前文件大但不是 blocker |
+| Device config 写入专项 smoke | 现场安全条件允许，或用户反馈型号 / 保护开关写入不确定 | 用专项 capture 覆盖 ACK、snapshot、UI 当前设备真值和 write tracker | baseline 未强制覆盖，不是 blocker |
+| 运行页导出 / 测试会话增强 | 用户需要新的导出字段、命名规则或分析链路 | 先锁定导出合同，再小包改 exporter / presentation | 当前不做 |
+| 完整 event reducer | 出现多类事件消费互相干扰，且 capture 指向 ViewModel event merge owner | 先写事件身份 / 状态机 / mirror tests，再评估迁移 | 冻结，不主动做 |
+| Command gateway / BLE connection owner | Start/Stop、连接、重连或 command send 反复出现 capture 证明的 owner 问题 | 先做高风险合同审计和专项 capture，再小步迁移 | 冻结，不主动做 |
+| 发布前 release hardening | Demo APP 要公开给别人长期使用或交付外部测试 | 做 release baseline freeze、回归矩阵、capture 兼容性和最小 soak | 按发布阶段另开 |
 
 下一轮真机测试是否需要收集日志：
 

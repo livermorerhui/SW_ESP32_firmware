@@ -309,7 +309,7 @@ cd tools/android_demo
 
 ### B10：Demo APP information architecture simplification
 
-状态：第十阶段已完成，本地验证通过，待用户看效果后补一次 UI smoke。阶段报告见 `reports/task_20260607_demo_app_information_architecture_simplification.md`。
+状态：第十阶段已完成，本地验证通过，baseline smoke 已通过。阶段报告见 `reports/task_20260607_demo_app_information_architecture_simplification.md`。
 
 目标：
 
@@ -338,7 +338,7 @@ cd tools/android_demo
 
 真机：
 
-- 第一阶段已复用 B9 smoke。用户确认连接、实时数据、Start -> Stop、校准工具、motion sampling 和日志入口可用；AI 复核 Android transport、SNAPSHOT/STREAM、ESP32 start/stop/STOP_SUMMARY 和 visual evidence 后判定为 `PASS_CANDIDATE`。第二阶段修正 Tab 固定、顺序、内容去重和归零确认。第三阶段完成型号页精简、连接卡片删除和保护双开关接入。第四阶段完成校准页移动端竖向主流程压缩：开始校准、设备归零、记录、点表、曲线、线性/二次和写入边界已重新组织，并以圆圈信息弹窗承载必要说明。第五阶段按用户反馈继续压缩：删除重复标题、删除常驻录制状态/文件路径/解释按钮、把实时距离和记录同排、模型区只保留线性/二次/写入主操作。第六阶段完成结束按钮化、清空校准点、参考重量/实时距离并排和模型选项拟合状态展示。第七阶段删除高级工程区冗余说明和旧 Z/K 校准路径。第八阶段完成采样页和运行页第一轮深压缩，旧交付边界卡片已删除，工程详情默认收起。第九阶段完成运行页系统状态紧凑化，并将采样模式设备开关从主流程移入采样设置。第十阶段完成型号页当前设备真值和写入状态主卡片反馈；已通过本地 compile/test/assemble，建议用户先看效果后补一次轻量 UI smoke。
+- 第一阶段已复用 B9 smoke。用户确认连接、实时数据、Start -> Stop、校准工具、motion sampling 和日志入口可用；AI 复核 Android transport、SNAPSHOT/STREAM、ESP32 start/stop/STOP_SUMMARY 和 visual evidence 后判定为 `PASS_CANDIDATE`。第二阶段修正 Tab 固定、顺序、内容去重和归零确认。第三阶段完成型号页精简、连接卡片删除和保护双开关接入。第四阶段完成校准页移动端竖向主流程压缩：开始校准、设备归零、记录、点表、曲线、线性/二次和写入边界已重新组织，并以圆圈信息弹窗承载必要说明。第五阶段按用户反馈继续压缩：删除重复标题、删除常驻录制状态/文件路径/解释按钮、把实时距离和记录同排、模型区只保留线性/二次/写入主操作。第六阶段完成结束按钮化、清空校准点、参考重量/实时距离并排和模型选项拟合状态展示。第七阶段删除高级工程区冗余说明和旧 Z/K 校准路径。第八阶段完成采样页和运行页第一轮深压缩，旧交付边界卡片已删除，工程详情默认收起。第九阶段完成运行页系统状态紧凑化，并将采样模式设备开关从主流程移入采样设置。第十阶段完成型号页当前设备真值和写入状态主卡片反馈；本地 compile/test/assemble 与完整 baseline smoke 均已通过。
 
 ### B11：Demo APP legacy UI section cleanup
 
@@ -360,9 +360,56 @@ cd tools/android_demo
 真机：
 
 - 本包只删除未引用文件，功能风险低。
-- 建议做一次轻量安装打开 smoke：打开 Demo APP，确认默认型号页、顶部 Tab、底部运行控制和搜索入口正常显示即可。
+- 轻量安装打开 smoke 已通过：默认型号页、顶部 Tab、底部运行控制和搜索入口正常。
 
-## 6. 冻结项
+## 6. 收官结论
+
+本轮 Demo APP 重构阶段已收口。
+
+已完成范围：
+
+- 测量显示、raw console、校准 session、motion sampling、device config write tracker、wave control reducer、wave pending lifecycle、test session bridge 等小 owner。
+- Compose presentation actions 参数收口。
+- `型号 / 校准 / 采样 / 运行 / 日志` 信息架构精简。
+- legacy UI section cleanup。
+- quality baseline smoke、运行页设备闭环补采和轻量安装打开 smoke。
+
+当前没有必须继续重构的 blocker。
+
+剩余观察项：
+
+- `CalibrationToolsSection.kt` 和 `MotionSamplingSection.kt` 文件仍较大，但当前不是 blocker；只有出现复用、测试困难或真实 UI 问题时才做局部 composable 拆分。
+- `device config` 写入未作为 baseline 必测项；只有现场安全条件允许或出现配置反馈问题时再做专项验证。
+
+冻结项：
+
+- BLE client / connection owner。
+- `client.send` command gateway。
+- 完整 event reducer。
+- 多 ViewModel / navigation 重写。
+- ESP32 固件协议、校准算法、MAX485 参数。
+
+后续触发规则：
+
+- 如果用户说“还能不能用 / 是否要继续重构”，先看 `docs/system/esp32_firmware_optimization_priority_table.md`，默认结论是无必须重构。
+- 如果用户反馈具体 UI 啰嗦、入口不直观或按钮位置问题，优先做信息架构 / presentation 小包，不碰 BLE 或 ViewModel owner。
+- 如果用户反馈 Start/Stop、校准录点、实时数据、采样或设备配置写入异常，先跑专项 capture / audit，再按证据修对应 owner。
+- 如果只是删除无调用点 UI 或整理 presentation 参数，本地 compile/test/assemble + 轻量安装打开 smoke 足够，不重复完整 quality baseline。
+
+以后可能需要做的事情：
+
+| 事项 | 何时做 | 做法 | 当前状态 |
+| --- | --- | --- | --- |
+| 型号页继续优化 | 写入反馈仍不清晰，或当前设备真值与设备事实不一致 | 查 ACK / snapshot / write tracker 后做 presentation 小包 | 可选 |
+| Pro / Ultra 型号开放 | 产品、固件、APP 合同正式支持后 | 先定义跨端合同，再开放 UI | 冻结 |
+| 校准撤回 / 取消写入 | 固件支持可逆事务或 rollback 后 | 先做合同审计，再改校准流程 | 当前不支持 |
+| 校准页 / 采样页局部 composable 拆分 | 真实复用、测试困难或新 UI 问题出现时 | 只拆 UI，不改 BLE / owner | 可选观察 |
+| Device config 写入专项 smoke | 现场安全条件允许或写入反馈有争议 | 专项 capture 覆盖 ACK / snapshot / UI 真值 | 可选 |
+| 测试会话导出增强 | 用户需要新的导出字段或文件规则 | 先锁导出合同，再改 exporter / UI | 可选 |
+| 完整 event reducer / command gateway / BLE connection owner | capture 证明当前 owner 出现真实 blocker | 先审计合同、状态机和证据，再小步迁移 | 高风险冻结 |
+| Demo APP 发布 hardening | 要给外部长期使用或进入发布前验收 | release baseline、回归矩阵、capture 兼容性、最小 soak | 发布阶段另开 |
+
+## 7. 冻结项
 
 以下不进入自动重构，除非出现真实 blocker 或用户明确点名：
 
@@ -373,7 +420,7 @@ cd tools/android_demo
 - Compose UI 视觉重做。
 - ESP32 固件协议、校准算法、MAX485 参数。
 
-## 7. 推荐执行顺序
+## 8. 推荐执行顺序
 
 推荐：
 
@@ -395,7 +442,7 @@ cd tools/android_demo
 - 为了降低行数而拆 UI/连接/控制/校准多个 owner。
 - 在 B4 第二阶段 smoke 前继续开 command send、truth refresh job 或连接 owner。
 
-## 8. 每包固定交付格式
+## 9. 每包固定交付格式
 
 每包必须输出：
 
