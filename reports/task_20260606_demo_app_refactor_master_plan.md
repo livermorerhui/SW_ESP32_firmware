@@ -4,7 +4,7 @@
 文档类型：长期重构计划
 适用范围：`tools/android_demo/app-demo`
 更新日期：2026-06-07
-当前基线：B2-B8 小 owner 重构、B10 信息架构阶段、B6 第一阶段与 B4 第二阶段均已提交；Demo APP quality baseline smoke 已通过
+当前基线：B2-B8 小 owner 重构、B10 信息架构阶段、B6 第一阶段、B4 第二阶段与 B11 legacy UI cleanup 已完成；Demo APP quality baseline smoke 已通过
 
 ## 1. 本轮判型
 
@@ -317,7 +317,7 @@ cd tools/android_demo
 - 默认进入 `型号` 页，优先完成 Base / Plus 设定。
 - `运行` 页只保留系统主状态、遥测曲线、测试会话；连接详情归到 `型号`。
 - 将低频或高风险入口移到对应页：型号设定与保护开关进入 `型号`，校准工具进入 `校准`，motion sampling 进入 `采样`，raw console 进入 `日志`。
-- `DeviceConnectSection` 与 `SystemStatusSection` 支持 compact 默认视图，工程字段仍可展开查看。
+- `SystemStatusSection` 支持 compact 默认视图，工程字段仍可展开查看；旧 `DeviceConnectSection` 已在 B11 删除，连接入口统一保留在顶栏。
 - `SCALE:ZERO` / `CAL:ZERO` 发送前增加确认弹窗，取消时不发送；已写入撤回暂不实现，因为当前固件合同没有可逆事务。
 - 顶栏文案精简为 `SW调试 / 搜索 / 断开`。
 - `型号` 页主操作精简为 `设置型号`：Base / Plus 可选，Pro / Ultra 置灰，距离传感器提示随选择变化，多余状态放入详情。
@@ -339,6 +339,28 @@ cd tools/android_demo
 真机：
 
 - 第一阶段已复用 B9 smoke。用户确认连接、实时数据、Start -> Stop、校准工具、motion sampling 和日志入口可用；AI 复核 Android transport、SNAPSHOT/STREAM、ESP32 start/stop/STOP_SUMMARY 和 visual evidence 后判定为 `PASS_CANDIDATE`。第二阶段修正 Tab 固定、顺序、内容去重和归零确认。第三阶段完成型号页精简、连接卡片删除和保护双开关接入。第四阶段完成校准页移动端竖向主流程压缩：开始校准、设备归零、记录、点表、曲线、线性/二次和写入边界已重新组织，并以圆圈信息弹窗承载必要说明。第五阶段按用户反馈继续压缩：删除重复标题、删除常驻录制状态/文件路径/解释按钮、把实时距离和记录同排、模型区只保留线性/二次/写入主操作。第六阶段完成结束按钮化、清空校准点、参考重量/实时距离并排和模型选项拟合状态展示。第七阶段删除高级工程区冗余说明和旧 Z/K 校准路径。第八阶段完成采样页和运行页第一轮深压缩，旧交付边界卡片已删除，工程详情默认收起。第九阶段完成运行页系统状态紧凑化，并将采样模式设备开关从主流程移入采样设置。第十阶段完成型号页当前设备真值和写入状态主卡片反馈；已通过本地 compile/test/assemble，建议用户先看效果后补一次轻量 UI smoke。
+
+### B11：Demo APP legacy UI section cleanup
+
+状态：已完成，本地验证通过，轻量安装打开 smoke 通过。阶段报告见 `reports/task_20260607_demo_app_legacy_ui_section_cleanup.md`。
+
+目标：
+
+- 删除信息架构改造后已经没有调用点的旧堆叠首页 section。
+- 删除 `DeviceConnectSection`，避免后续误把旧连接状态卡片接回型号页。
+- 删除 `ScaleSection`、`StableWeightSection`、`WaveSection`，避免旧归零 / 旧波形控制入口与当前校准页 / 运行底栏并存。
+
+边界：
+
+- 不改当前 `型号 / 校准 / 采样 / 运行 / 日志` Tab 结构。
+- 不改顶栏搜索 / 断开入口。
+- 不改 `WaveControlBottomBar`、校准页、采样页或运行页可见 UI。
+- 不改 `DemoViewModel`、BLE command、ESP32 协议、固件行为或正式 SW APP。
+
+真机：
+
+- 本包只删除未引用文件，功能风险低。
+- 建议做一次轻量安装打开 smoke：打开 Demo APP，确认默认型号页、顶部 Tab、底部运行控制和搜索入口正常显示即可。
 
 ## 6. 冻结项
 
@@ -362,8 +384,9 @@ cd tools/android_demo
 5. B7 `DeviceConfigWriteTracker`：已完成。
 6. B8 Presentation model 收口：第二阶段已完成。
 7. B9 Demo APP quality baseline smoke：真机 smoke 已复核，当前不再阻塞。
-8. B10 Demo APP information architecture simplification：第十阶段已完成，本地验证通过，待用户看效果后补轻量 UI smoke。
+8. B10 Demo APP information architecture simplification：第十阶段已完成，本地验证通过，baseline smoke 已通过。
 9. B6 `TestSessionBridge`：第一阶段已完成，B6 运行页轻量 smoke 通过候选。
+10. B11 legacy UI section cleanup：已完成，本地验证通过，轻量安装打开 smoke 通过。
 
 暂不建议：
 
