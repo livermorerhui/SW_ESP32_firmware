@@ -4,8 +4,6 @@ import com.sonicwave.demo.MotionSamplingExportRequest
 import com.sonicwave.protocol.CalibrationModelType
 
 data class CalibrationInputCallbacks(
-    val onZeroInputChange: (String) -> Unit,
-    val onFactorInputChange: (String) -> Unit,
     val onCaptureReferenceChange: (String) -> Unit,
     val onModelReferenceChange: (String) -> Unit,
     val onModelC0Change: (String) -> Unit,
@@ -16,10 +14,10 @@ data class CalibrationInputCallbacks(
 
 data class CalibrationCommandCallbacks(
     val onZero: () -> Unit,
-    val onCalibrate: () -> Unit,
     val onCapturePoint: () -> Unit,
     val onStartRecording: () -> Unit,
     val onStopRecording: () -> Unit,
+    val onClearCalibrationPoints: () -> Unit,
     val onGetModel: () -> Unit,
     val onSetModel: () -> Unit,
     val onCalibrationZero: () -> Unit,

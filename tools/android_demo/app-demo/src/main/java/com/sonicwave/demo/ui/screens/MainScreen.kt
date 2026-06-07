@@ -23,13 +23,18 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -40,16 +45,14 @@ import com.sonicwave.demo.PermissionState
 import com.sonicwave.demo.R
 import com.sonicwave.demo.ScanState
 import com.sonicwave.demo.UiState
-import com.sonicwave.demo.isBaseDeliveryProfile
-import com.sonicwave.demo.isBaseOrPlusDegradedDeliveryProfile
-import com.sonicwave.demo.isPlusDegradedDeliveryProfile
 import com.sonicwave.demo.ui.components.CalibrationCommandCallbacks
 import com.sonicwave.demo.ui.components.CalibrationInputCallbacks
 import com.sonicwave.demo.ui.components.CalibrationToolsSection
 import com.sonicwave.demo.ui.components.CalibrationToolsActions
-import com.sonicwave.demo.ui.components.DeviceConnectSection
 import com.sonicwave.demo.ui.components.DeviceProfileSection
 import com.sonicwave.demo.ui.components.FallStopProtectionSection
+import com.sonicwave.demo.ui.components.MotionSamplingActions
+import com.sonicwave.demo.ui.components.MotionSamplingSection
 import com.sonicwave.demo.ui.components.RawConsoleSection
 import com.sonicwave.demo.ui.components.SystemStatusSection
 import com.sonicwave.demo.ui.components.TelemetryChartSection
@@ -61,9 +64,18 @@ import com.sonicwave.transport.BleScanResult
 @Composable
 fun MainScreen(viewModel: DemoViewModel = viewModel()) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val calibrationActions = remember(viewModel) {
-        buildCalibrationToolsActions(viewModel)
+    val motionSamplingActions = remember(viewModel) {
+        buildMotionSamplingActions(viewModel)
     }
+    var selectedTab by rememberSaveable { mutableStateOf(DemoMainTab.DEVICE) }
+    var pendingCalibrationDeviceWrite by rememberSaveable {
+        mutableStateOf<PendingCalibrationDeviceWrite?>(null)
+    }
+    val calibrationActions = buildCalibrationToolsActions(
+        viewModel = viewModel,
+        onZero = { pendingCalibrationDeviceWrite = PendingCalibrationDeviceWrite.SCALE_ZERO },
+        onCalibrationZero = { pendingCalibrationDeviceWrite = PendingCalibrationDeviceWrite.CAL_ZERO },
+    )
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions(),
         onResult = { viewModel.refreshPermissionState() },
@@ -75,21 +87,27 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.screen_title_main)) },
-                actions = {
-                    TextButton(
-                        onClick = { viewModel.openScanSheetAndStartScan() },
-                    ) {
-                        Text(stringResource(R.string.action_search_connect))
-                    }
-                    if (uiState.isConnected) {
-                        TextButton(onClick = viewModel::disconnect) {
-                            Text(stringResource(R.string.action_disconnect))
+            Column {
+                TopAppBar(
+                    title = { Text(stringResource(R.string.screen_title_main)) },
+                    actions = {
+                        TextButton(
+                            onClick = { viewModel.openScanSheetAndStartScan() },
+                        ) {
+                            Text(stringResource(R.string.action_search_connect))
                         }
-                    }
-                },
-            )
+                        if (uiState.isConnected) {
+                            TextButton(onClick = viewModel::disconnect) {
+                                Text(stringResource(R.string.action_disconnect))
+                            }
+                        }
+                    },
+                )
+                DemoMainTabs(
+                    selectedTab = selectedTab,
+                    onTabSelected = { selectedTab = it },
+                )
+            }
         },
         bottomBar = {
             WaveControlBottomBar(
@@ -113,15 +131,6 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            DeviceConnectSection(uiState = uiState)
-
-            DeviceProfileSection(
-                uiState = uiState,
-                onPlatformModelSelected = viewModel::updateSelectedPlatformModel,
-                onLaserInstalledSelected = viewModel::updateSelectedLaserInstalled,
-                onWriteDeviceConfig = viewModel::sendDeviceConfig,
-            )
-
             if (uiState.permissionState is PermissionState.Missing) {
                 PermissionCard(
                     permissionState = uiState.permissionState,
@@ -129,36 +138,29 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
                 )
             }
 
-            SystemStatusSection(uiState = uiState)
-
-            FallStopProtectionSection(
-                uiState = uiState,
-                onToggleEnabled = viewModel::setFallStopProtectionEnabled,
-            )
-
-            val deliveryProfile = isBaseOrPlusDegradedDeliveryProfile(uiState)
-
-            if (deliveryProfile) {
-                DeliveryBoundarySection(uiState = uiState)
-            } else {
-                TelemetryChartSectionHost(
+            when (selectedTab) {
+                DemoMainTab.DEVICE -> DeviceToolsContent(
+                    uiState = uiState,
                     viewModel = viewModel,
-                    stableWeight = uiState.stableWeight,
-                    stableWeightActive = uiState.stableWeightActive,
                 )
-            }
-            if (!deliveryProfile) {
-                TestSessionSectionHost(viewModel = viewModel)
-            }
 
-            if (!deliveryProfile) {
-                CalibrationToolsSection(
+                DemoMainTab.CALIBRATION -> CalibrationToolsSection(
                     uiState = uiState,
                     actions = calibrationActions,
                 )
-            }
 
-            RawConsoleSectionHost(viewModel = viewModel)
+                DemoMainTab.SAMPLING -> MotionSamplingSection(
+                    uiState = uiState,
+                    actions = motionSamplingActions,
+                )
+
+                DemoMainTab.RUN -> RunDashboardContent(
+                    uiState = uiState,
+                    viewModel = viewModel,
+                )
+
+                DemoMainTab.LOGS -> RawConsoleSectionHost(viewModel = viewModel)
+            }
         }
     }
 
@@ -204,13 +206,114 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
             },
         )
     }
+
+    pendingCalibrationDeviceWrite?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { pendingCalibrationDeviceWrite = null },
+            title = { Text(stringResource(pending.titleRes)) },
+            text = { Text(stringResource(pending.messageRes)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingCalibrationDeviceWrite = null
+                        when (pending) {
+                            PendingCalibrationDeviceWrite.SCALE_ZERO -> viewModel.sendZero()
+                            PendingCalibrationDeviceWrite.CAL_ZERO -> viewModel.sendCalibrationZero()
+                        }
+                    },
+                ) {
+                    Text(stringResource(R.string.action_write_to_device))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingCalibrationDeviceWrite = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
 }
 
-private fun buildCalibrationToolsActions(viewModel: DemoViewModel): CalibrationToolsActions {
+private enum class DemoMainTab(val labelRes: Int) {
+    DEVICE(R.string.tab_device),
+    CALIBRATION(R.string.tab_calibration),
+    SAMPLING(R.string.tab_sampling),
+    RUN(R.string.tab_run),
+    LOGS(R.string.tab_logs),
+}
+
+private enum class PendingCalibrationDeviceWrite(
+    val titleRes: Int,
+    val messageRes: Int,
+) {
+    SCALE_ZERO(
+        titleRes = R.string.confirm_scale_zero_title,
+        messageRes = R.string.confirm_scale_zero_message,
+    ),
+    CAL_ZERO(
+        titleRes = R.string.confirm_cal_zero_title,
+        messageRes = R.string.confirm_cal_zero_message,
+    ),
+}
+
+@Composable
+private fun DemoMainTabs(
+    selectedTab: DemoMainTab,
+    onTabSelected: (DemoMainTab) -> Unit,
+) {
+    val tabs = DemoMainTab.values()
+    ScrollableTabRow(
+        selectedTabIndex = tabs.indexOf(selectedTab),
+        edgePadding = 12.dp,
+    ) {
+        tabs.forEach { tab ->
+            Tab(
+                selected = selectedTab == tab,
+                onClick = { onTabSelected(tab) },
+                text = { Text(stringResource(tab.labelRes)) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun RunDashboardContent(
+    uiState: UiState,
+    viewModel: DemoViewModel,
+) {
+    SystemStatusSection(uiState = uiState, compact = true)
+    TelemetryChartSectionHost(
+        viewModel = viewModel,
+        stableWeight = uiState.stableWeight,
+        stableWeightActive = uiState.stableWeightActive,
+    )
+    TestSessionSectionHost(viewModel = viewModel)
+}
+
+@Composable
+private fun DeviceToolsContent(
+    uiState: UiState,
+    viewModel: DemoViewModel,
+) {
+    DeviceProfileSection(
+        uiState = uiState,
+        onPlatformModelSelected = viewModel::updateSelectedPlatformModel,
+        onWriteDeviceConfig = viewModel::sendDeviceConfig,
+    )
+    FallStopProtectionSection(
+        uiState = uiState,
+        onToggleEnabled = viewModel::setFallStopProtectionEnabled,
+        onToggleLeaveEnabled = viewModel::setLeaveProtectionEnabled,
+    )
+}
+
+private fun buildCalibrationToolsActions(
+    viewModel: DemoViewModel,
+    onZero: () -> Unit,
+    onCalibrationZero: () -> Unit,
+): CalibrationToolsActions {
     return CalibrationToolsActions(
         input = CalibrationInputCallbacks(
-            onZeroInputChange = viewModel::updateZeroInput,
-            onFactorInputChange = viewModel::updateFactorInput,
             onCaptureReferenceChange = viewModel::updateCaptureReferenceInput,
             onModelReferenceChange = viewModel::updateModelReferenceInput,
             onModelC0Change = viewModel::updateModelC0Input,
@@ -219,49 +322,29 @@ private fun buildCalibrationToolsActions(viewModel: DemoViewModel): CalibrationT
             onModelTypeChange = viewModel::updateModelType,
         ),
         commands = CalibrationCommandCallbacks(
-            onZero = viewModel::sendZero,
-            onCalibrate = viewModel::sendCalibrate,
+            onZero = onZero,
             onCapturePoint = viewModel::sendCalibrationCapture,
             onStartRecording = viewModel::startRecording,
             onStopRecording = viewModel::stopRecording,
+            onClearCalibrationPoints = viewModel::clearCalibrationPoints,
             onGetModel = viewModel::sendCalibrationGetModel,
             onSetModel = viewModel::sendCalibrationSetModel,
-            onCalibrationZero = viewModel::sendCalibrationZero,
+            onCalibrationZero = onCalibrationZero,
             onToggleEngineeringSection = viewModel::toggleEngineeringSection,
             onToggleVerboseStreamLogs = viewModel::toggleVerboseStreamLogs,
         ),
     )
 }
 
-@Composable
-private fun DeliveryBoundarySection(
-    uiState: UiState,
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(stringResource(R.string.section_delivery_boundary), style = MaterialTheme.typography.titleMedium)
-            Text(
-                text = stringResource(
-                    if (isBaseDeliveryProfile(uiState)) {
-                        R.string.delivery_boundary_profile_base
-                    } else if (isPlusDegradedDeliveryProfile(uiState)) {
-                        R.string.delivery_boundary_profile_plus_degraded
-                    } else {
-                        R.string.delivery_boundary_profile_other
-                    },
-                ),
-                style = MaterialTheme.typography.titleSmall,
-            )
-            Text(
-                text = stringResource(R.string.delivery_boundary_measurement_hidden),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
+private fun buildMotionSamplingActions(viewModel: DemoViewModel): MotionSamplingActions {
+    return MotionSamplingActions(
+        onStartSampling = viewModel::startMotionSampling,
+        onStopSampling = viewModel::stopMotionSampling,
+        onEnableSamplingMode = { viewModel.setMotionSamplingModeEnabled(true) },
+        onDisableSamplingMode = { viewModel.setMotionSamplingModeEnabled(false) },
+        onClearSession = viewModel::clearMotionSamplingSession,
+        onExportSession = viewModel::exportMotionSamplingSession,
+    )
 }
 
 @Composable

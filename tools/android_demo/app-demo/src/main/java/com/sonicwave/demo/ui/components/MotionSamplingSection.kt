@@ -46,10 +46,7 @@ import com.sonicwave.demo.MotionSamplingSubLabel
 import com.sonicwave.demo.R
 import com.sonicwave.demo.UiState
 import com.sonicwave.demo.displayNameZh
-import com.sonicwave.demo.displayName
 import com.sonicwave.demo.safetyEffectLabel
-import com.sonicwave.demo.safetyReasonLabel
-import com.sonicwave.demo.waveStateLabel
 import com.sonicwave.protocol.ProtocolMode
 import java.time.Instant
 import java.time.ZoneId
@@ -132,6 +129,9 @@ fun MotionSamplingSection(
     }
     var exportNotes by rememberSaveable(session?.sessionId) { mutableStateOf("") }
     var showClearConfirm by rememberSaveable(session?.sessionId) { mutableStateOf(false) }
+    var showSamplingSettings by rememberSaveable { mutableStateOf(false) }
+    var showSessionDetails by rememberSaveable(session?.sessionId) { mutableStateOf(false) }
+    var showChartSettings by rememberSaveable(session?.sessionId) { mutableStateOf(false) }
     var maPointsInput by rememberSaveable(session?.sessionId) { mutableStateOf(DEFAULT_MOTION_MA_POINTS.toString()) }
     var appliedMaPoints by rememberSaveable(session?.sessionId) { mutableStateOf(DEFAULT_MOTION_MA_POINTS) }
     val selectedPrimaryLabel = MotionSamplingPrimaryLabel.values().firstOrNull {
@@ -152,53 +152,6 @@ fun MotionSamplingSection(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(
-                text = stringResource(R.string.section_motion_sampling_tool),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = stringResource(R.string.label_motion_sampling_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = stringResource(R.string.label_motion_sampling_ma_research_only),
-                style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF9A3412),
-            )
-            Text(
-                text = if (uiState.motionSamplingModeEnabled) {
-                    stringResource(R.string.label_motion_sampling_mode_enabled)
-                } else {
-                    stringResource(R.string.label_motion_sampling_mode_disabled)
-                },
-                fontWeight = FontWeight.Bold,
-                color = if (uiState.motionSamplingModeEnabled) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = actions.onEnableSamplingMode,
-                    enabled = uiState.isConnected &&
-                        uiState.protocolMode == ProtocolMode.PRIMARY &&
-                        !uiState.motionSamplingModeEnabled,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text(stringResource(R.string.action_enable_motion_sampling_mode))
-                }
-                OutlinedButton(
-                    onClick = actions.onDisableSamplingMode,
-                    enabled = uiState.isConnected &&
-                        uiState.protocolMode == ProtocolMode.PRIMARY &&
-                        uiState.motionSamplingModeEnabled,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text(stringResource(R.string.action_disable_motion_sampling_mode))
-                }
-            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = actions.onStartSampling,
@@ -249,6 +202,54 @@ fun MotionSamplingSection(
                     Text(stringResource(R.string.action_export_motion_sampling_session))
                 }
             }
+            OutlinedButton(onClick = { showSamplingSettings = !showSamplingSettings }) {
+                Text(
+                    stringResource(
+                        if (showSamplingSettings) {
+                            R.string.action_hide_sampling_settings
+                        } else {
+                            R.string.action_show_sampling_settings
+                        },
+                    ),
+                )
+            }
+            if (showSamplingSettings) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = if (uiState.motionSamplingModeEnabled) {
+                            stringResource(R.string.label_motion_sampling_mode_enabled)
+                        } else {
+                            stringResource(R.string.label_motion_sampling_mode_disabled)
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (uiState.motionSamplingModeEnabled) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = actions.onEnableSamplingMode,
+                            enabled = uiState.isConnected &&
+                                uiState.protocolMode == ProtocolMode.PRIMARY &&
+                                !uiState.motionSamplingModeEnabled,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(stringResource(R.string.action_enable_motion_sampling_mode))
+                        }
+                        OutlinedButton(
+                            onClick = actions.onDisableSamplingMode,
+                            enabled = uiState.isConnected &&
+                                uiState.protocolMode == ProtocolMode.PRIMARY &&
+                                uiState.motionSamplingModeEnabled,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(stringResource(R.string.action_disable_motion_sampling_mode))
+                        }
+                    }
+                }
+            }
             if (hasStoppedUnexportedSession) {
                 Text(
                     text = stringResource(R.string.label_motion_sampling_export_recommended),
@@ -277,60 +278,36 @@ fun MotionSamplingSection(
                 )
             }
 
-            Text(
-                text = if (uiState.isMotionSamplingActive) {
-                    stringResource(R.string.label_motion_sampling_state_active)
-                } else {
-                    stringResource(R.string.label_motion_sampling_state_inactive)
-                },
-                fontWeight = FontWeight.Bold,
-                color = if (uiState.isMotionSamplingActive) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
-            uiState.motionSamplingStatus?.let { status ->
-                Text(
-                    text = status,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = stringResource(R.string.label_motion_sampling_live_summary),
+                    text = if (uiState.isMotionSamplingActive) {
+                        stringResource(R.string.label_motion_sampling_state_active)
+                    } else {
+                        stringResource(R.string.label_motion_sampling_state_inactive)
+                    },
                     fontWeight = FontWeight.Bold,
+                    color = if (uiState.isMotionSamplingActive) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                 )
-                Text(stringResource(R.string.label_distance, uiState.distance?.format2() ?: notAvailable))
-                Text(stringResource(R.string.label_weight, uiState.weight?.format2() ?: notAvailable))
                 Text(
                     stringResource(
-                        R.string.label_stable_weight,
+                        R.string.label_motion_sampling_live_compact,
+                        uiState.distance?.format2() ?: notAvailable,
+                        uiState.weight?.format2() ?: notAvailable,
                         uiState.stableWeight?.takeIf { uiState.stableWeightActive }?.format2() ?: notAvailable,
                     ),
-                )
-                Text(
-                    text = stringResource(
-                        R.string.label_motion_sampling_measurement_validity,
-                        if (uiState.streamWarning == null) {
-                            stringResource(R.string.value_motion_sampling_measurement_valid)
-                        } else {
-                            stringResource(R.string.value_motion_sampling_measurement_invalid)
-                        },
-                    ),
                     style = MaterialTheme.typography.bodySmall,
                 )
-                Text(
-                    text = stringResource(
-                        R.string.label_motion_sampling_runtime_context,
-                        uiState.deviceState.displayName(),
-                        waveStateLabel(uiState.safetyStatus.waveCode),
-                        safetyReasonLabel(uiState.safetyStatus.reasonCode),
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                uiState.motionSamplingStatus?.let { status ->
+                    Text(
+                        text = status,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -340,75 +317,87 @@ fun MotionSamplingSection(
                 )
                 if (session == null) {
                     Text(
-                        text = stringResource(R.string.label_motion_sampling_no_session),
+                        text = stringResource(R.string.label_motion_sampling_no_session_compact),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
-                    Text(stringResource(R.string.label_motion_sampling_session_id, session.sessionId))
-                    Text(stringResource(R.string.label_motion_sampling_started_at, formatTimestamp(session.startedAtMs)))
                     Text(
                         stringResource(
-                            R.string.label_motion_sampling_ended_at,
-                            session.endedAtMs?.let(::formatTimestamp)
-                                ?: stringResource(R.string.value_motion_sampling_in_progress),
-                        ),
-                    )
-                    Text(stringResource(R.string.label_motion_sampling_row_count, rowCount))
-                    session.waveFrequencyHz?.let { frequency ->
-                        Text(
-                            stringResource(
-                                R.string.label_motion_sampling_wave_context,
-                                frequency,
-                                session.waveIntensity ?: 0,
-                            ),
-                        )
-                    }
-                    Text(
-                        stringResource(
-                            R.string.label_motion_sampling_session_flags,
-                            if (session.samplingModeEnabled) {
-                                stringResource(R.string.value_motion_sampling_flag_enabled)
-                            } else {
-                                stringResource(R.string.value_motion_sampling_flag_disabled)
-                            },
-                            if (session.waveWasRunningAtSessionStart) {
-                                stringResource(R.string.value_motion_sampling_flag_yes)
-                            } else {
-                                stringResource(R.string.value_motion_sampling_flag_no)
-                            },
+                            R.string.label_motion_sampling_session_compact,
+                            rowCount,
+                            session.waveFrequencyHz?.toString() ?: notAvailable,
+                            session.waveIntensity?.toString() ?: notAvailable,
                         ),
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    session.exportScenarioLabel?.let { scenario ->
-                        val exportPrimaryLabel = MotionSamplingPrimaryLabel.values()
-                            .firstOrNull { it.name == session.exportScenarioCategory }
-                            ?.displayNameZh()
-                            ?: (session.exportScenarioCategory ?: notAvailable)
-                        val exportSubLabel = MotionSamplingSubLabel.values()
-                            .firstOrNull { it.name == scenario }
-                            ?.displayNameZh()
-                            ?: scenario
+                    OutlinedButton(onClick = { showSessionDetails = !showSessionDetails }) {
                         Text(
                             stringResource(
-                                R.string.label_motion_sampling_export_scenario,
-                                exportPrimaryLabel,
-                                exportSubLabel,
+                                if (showSessionDetails) {
+                                    R.string.action_hide_session_details
+                                } else {
+                                    R.string.action_show_session_details
+                                },
+                            ),
+                        )
+                    }
+                    if (showSessionDetails) {
+                        Text(stringResource(R.string.label_motion_sampling_session_id, session.sessionId))
+                        Text(stringResource(R.string.label_motion_sampling_started_at, formatTimestamp(session.startedAtMs)))
+                        Text(
+                            stringResource(
+                                R.string.label_motion_sampling_ended_at,
+                                session.endedAtMs?.let(::formatTimestamp)
+                                    ?: stringResource(R.string.value_motion_sampling_in_progress),
+                            ),
+                        )
+                        Text(
+                            stringResource(
+                                R.string.label_motion_sampling_session_flags,
+                                if (session.samplingModeEnabled) {
+                                    stringResource(R.string.value_motion_sampling_flag_enabled)
+                                } else {
+                                    stringResource(R.string.value_motion_sampling_flag_disabled)
+                                },
+                                if (session.waveWasRunningAtSessionStart) {
+                                    stringResource(R.string.value_motion_sampling_flag_yes)
+                                } else {
+                                    stringResource(R.string.value_motion_sampling_flag_no)
+                                },
                             ),
                             style = MaterialTheme.typography.bodySmall,
                         )
-                    }
-                    session.lastExportCsvPath?.let { path ->
-                        Text(
-                            text = stringResource(R.string.label_motion_sampling_last_export_csv, path),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                    session.lastExportJsonPath?.let { path ->
-                        Text(
-                            text = stringResource(R.string.label_motion_sampling_last_export_json, path),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
+                        session.exportScenarioLabel?.let { scenario ->
+                            val exportPrimaryLabel = MotionSamplingPrimaryLabel.values()
+                                .firstOrNull { it.name == session.exportScenarioCategory }
+                                ?.displayNameZh()
+                                ?: (session.exportScenarioCategory ?: notAvailable)
+                            val exportSubLabel = MotionSamplingSubLabel.values()
+                                .firstOrNull { it.name == scenario }
+                                ?.displayNameZh()
+                                ?: scenario
+                            Text(
+                                stringResource(
+                                    R.string.label_motion_sampling_export_scenario,
+                                    exportPrimaryLabel,
+                                    exportSubLabel,
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        session.lastExportCsvPath?.let { path ->
+                            Text(
+                                text = stringResource(R.string.label_motion_sampling_last_export_csv, path),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        session.lastExportJsonPath?.let { path ->
+                            Text(
+                                text = stringResource(R.string.label_motion_sampling_last_export_json, path),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                     }
                 }
             }
@@ -417,55 +406,68 @@ fun MotionSamplingSection(
                 text = stringResource(R.string.label_motion_sampling_chart_title),
                 fontWeight = FontWeight.Bold,
             )
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { showChartSettings = !showChartSettings }) {
                 Text(
-                    text = stringResource(R.string.label_motion_sampling_ma_controls),
-                    fontWeight = FontWeight.Bold,
-                )
-                OutlinedTextField(
-                    value = maPointsInput,
-                    onValueChange = { value ->
-                        val digitsOnly = value.filter(Char::isDigit)
-                        maPointsInput = digitsOnly
-                        digitsOnly.toIntOrNull()?.let { parsed ->
-                            val clamped = parsed.coerceIn(MOTION_MA_MIN_POINTS, MOTION_MA_MAX_POINTS)
-                            appliedMaPoints = clamped
-                            if (parsed != clamped) {
-                                maPointsInput = clamped.toString()
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    label = {
-                        Text(stringResource(R.string.field_motion_sampling_ma_points))
-                    },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MOTION_MA_PRESETS.forEach { preset ->
-                        FilterChip(
-                            selected = appliedMaPoints == preset,
-                            onClick = {
-                                maPointsInput = preset.toString()
-                                appliedMaPoints = preset
-                            },
-                            label = {
-                                Text(stringResource(R.string.label_motion_sampling_ma_preset, preset))
-                            },
-                        )
-                    }
-                }
-                Text(
-                    text = stringResource(
-                        R.string.label_motion_sampling_ma_points_hint,
-                        MOTION_MA_MIN_POINTS,
-                        MOTION_MA_MAX_POINTS,
-                        appliedMaPoints,
+                    stringResource(
+                        if (showChartSettings) {
+                            R.string.action_hide_chart_settings
+                        } else {
+                            R.string.action_show_chart_settings
+                        },
                     ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            if (showChartSettings) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = stringResource(R.string.label_motion_sampling_ma_controls),
+                        fontWeight = FontWeight.Bold,
+                    )
+                    OutlinedTextField(
+                        value = maPointsInput,
+                        onValueChange = { value ->
+                            val digitsOnly = value.filter(Char::isDigit)
+                            maPointsInput = digitsOnly
+                            digitsOnly.toIntOrNull()?.let { parsed ->
+                                val clamped = parsed.coerceIn(MOTION_MA_MIN_POINTS, MOTION_MA_MAX_POINTS)
+                                appliedMaPoints = clamped
+                                if (parsed != clamped) {
+                                    maPointsInput = clamped.toString()
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = {
+                            Text(stringResource(R.string.field_motion_sampling_ma_points))
+                        },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MOTION_MA_PRESETS.forEach { preset ->
+                            FilterChip(
+                                selected = appliedMaPoints == preset,
+                                onClick = {
+                                    maPointsInput = preset.toString()
+                                    appliedMaPoints = preset
+                                },
+                                label = {
+                                    Text(stringResource(R.string.label_motion_sampling_ma_preset, preset))
+                                },
+                            )
+                        }
+                    }
+                    Text(
+                        text = stringResource(
+                            R.string.label_motion_sampling_ma_points_hint,
+                            MOTION_MA_MIN_POINTS,
+                            MOTION_MA_MAX_POINTS,
+                            appliedMaPoints,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             MotionSamplingChart(
                 rows = rows,
@@ -509,40 +511,6 @@ fun MotionSamplingSection(
                 }
             }
 
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = stringResource(R.string.label_motion_sampling_row_preview_title),
-                    fontWeight = FontWeight.Bold,
-                )
-                val previewRows = session?.rows?.takeLast(8).orEmpty()
-                if (previewRows.isEmpty()) {
-                    Text(
-                        text = stringResource(R.string.label_motion_sampling_row_preview_empty),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    previewRows.forEach { row ->
-                        Text(
-                            text = stringResource(
-                                R.string.label_motion_sampling_preview_row,
-                                row.elapsedMs / 1000f,
-                                row.distanceMm.format2(),
-                                row.liveWeightKg.format2(),
-                                row.runtimeStateCode,
-                                row.safetyReasonCode,
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
-            }
-
-            Text(
-                text = stringResource(R.string.label_motion_sampling_schema_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 

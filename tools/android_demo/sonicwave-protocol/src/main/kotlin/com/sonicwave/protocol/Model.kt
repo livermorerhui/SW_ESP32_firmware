@@ -27,6 +27,7 @@ sealed class Command {
         val c2: Float,
     ) : Command()
     data class FallStopProtectionSet(val enabled: Boolean) : Command()
+    data class LeaveProtectionSet(val enabled: Boolean) : Command()
     data class MotionSamplingModeSet(val enabled: Boolean) : Command()
     data class StreamSet(
         val enabled: Boolean,
@@ -102,6 +103,7 @@ sealed class Event {
         val protectionDegraded: Boolean?,
         val degradedStartAvailable: Boolean?,
         val degradedStartEnabled: Boolean?,
+        val leaveStopEnabled: Boolean?,
         val raw: String,
     ) : Event()
     data class WaveOutput(
@@ -195,6 +197,12 @@ sealed class Event {
     data class FallStopProtection(
         val enabled: Boolean,
         val mode: String?,
+        val raw: String,
+    ) : Event()
+    data class LeaveProtection(
+        val enabled: Boolean,
+        val supported: Boolean,
+        val effect: String?,
         val raw: String,
     ) : Event()
     data class DegradedStart(

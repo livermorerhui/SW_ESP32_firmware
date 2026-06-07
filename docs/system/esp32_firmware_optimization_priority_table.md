@@ -1,6 +1,6 @@
 # ESP32 Firmware Optimization Priority Table
 
-最后更新时间：2026-06-06
+最后更新时间：2026-06-07
 
 ## 1. 当前结论
 
@@ -31,6 +31,10 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 2026-06-06 已完成 `FW-OPT-020 Device config write tracker 抽取`：新增 `DeviceConfigWriteTracker`，将 Demo APP device config 写入 pending request、observed truth match、generic ACK fallback、NACK/Error/timeout 清理和 confirmation refresh 判定从 `DemoViewModel` 抽出。`DemoViewModel` 继续保留 `client.send(Command.DeviceSetConfig)`、watchdog coroutine、中文状态文案、system log 和 snapshot/capability refresh 调用点。本包通过 focused JVM tests 和 `:sonicwave-protocol:test :app-demo:testDebugUnitTest`，未改 `DEVICE:SET_CONFIG` payload、`ACK:DEVICE_CONFIG` 解析合同、ESP32 固件行为或正式 SW APP。
 
 2026-06-06 已完成 `FW-OPT-019 Demo APP UI presentation model 收口` 第一阶段：新增 `SectionPresentationModels`，将 `CalibrationToolsSection` 和 `MotionSamplingSection` 的 UI callbacks 分组为 section-specific actions DTO，并在 `MainScreen` 用 `remember` 构建 calibration actions。该包遵循 Compose state hoisting / plain state holder 边界：业务状态仍由 `DemoViewModel` / stores 暴露，简单 UI element state 继续留在 composable 内。本包通过 `:sonicwave-protocol:test :app-demo:testDebugUnitTest`，未改 UI 视觉、交互、BLE command、ESP32 协议或业务状态 owner。
+
+2026-06-07 已完成 `FW-OPT-021 Demo APP quality baseline smoke` 真机复核：新增 `tools/demo_app_quality_smoke_capture.sh` 和 `tools/demo_app_quality_smoke_audit.py`，用于 B2-B8 多包重构后的轻量真机 smoke。capture `20260607_101316...demo_app_quality_smoke` 的专项 audit 为 `PASS_CANDIDATE`，证明连接后实时数据、Start -> Stop、校准工具、motion sampling 和日志入口可用；Android 采到 `SonicWaveTransport / SNAPSHOT / EVT:STREAM`，ESP32 采到 `WAVE:START / WAVE:STOP / STOP_SUMMARY / MOTION_SAMPLE_MODE`。观察项：device config 写入按现场安全条件未覆盖；Android focus logcat stop 时 stale，但有 stop snapshot、ESP32 串口和 visual evidence 旁证，不作为功能 blocker。
+
+2026-06-07 已完成 `FW-OPT-022 Demo APP information architecture simplification` 第十阶段：顶部标题和操作文案已精简为 `SW调试 / 搜索 / 断开`；默认入口更新为固定顶部 `型号 / 校准 / 采样 / 运行 / 日志`。型号页主操作改为 `设置型号`，只开放 Base / Plus，Pro / Ultra 置灰；Base 显示 `无距离传感器`，Plus 显示 `有距离传感器`，新增 `当前设备：Base（无距离传感器）/ Plus（有距离传感器）` 直接显示设备回传真值，写入状态无需展开详情即可看到；多余配置真值和状态说明收进 `查看详情`。型号页连接状态卡片已移除。保护卡片默认只保留 `摔倒保护` 与 `律动离开` 两个开关，说明和状态收进详情；`律动离开` 复用固件既有 `SAFETY:LEAVE_PROTECTION` / `ACK:LEAVE_PROTECTION` 合同接入 Demo APP protocol / sdk / ViewModel，不改固件 BLE 语义。`SCALE:ZERO` / `CAL:ZERO` 发送前确认保持有效；已写入撤回暂不实现，因为当前固件 / APP 合同没有可逆事务。校准页已进一步压缩：删除重复标题和常驻说明，开始校准 / 设备归零同排，结束校准按钮化，参考重量 / 实时距离同排，记录 / 清空校准点同排，模型区显示线性/二次拟合状态并只保留待写入摘要和写入模型；高级工程区删除冗余说明和旧 Z/K 校准路径，只保留模型回读、工程归零、手动模型参数、详细日志和当前模型摘要。采样页已删除常驻工程说明、raw 行预览和 schema 提示，实时摘要/会话摘要压缩，工程信息和曲线参数收进详情；`开启/关闭采样模式` 从主流程移入 `采样设置`，直接 `开始采样` 即可记录 APP 采样会话。运行页删除旧交付边界卡片，曲线设置和测试会话导出路径默认收起，compact 系统状态卡片完成尺寸和文案密度优化。本包本地 compile/test/assemble 已通过，待用户看效果后补轻量 UI smoke。
 
 本总表是 ESP32 固件后续优化的长期入口。一次性报告只作为证据来源，不作为 backlog 真相源。
 
@@ -70,6 +74,8 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 | FW-OPT-018 | Demo APP Motion sampling session owner | 可选重构 / 采样链可测性 | 已完成 | 否 | P4 | Demo APP 采样链小包 | `MotionSamplingSessionStore.kt`；`MotionSamplingSessionStoreTest.kt`；`MotionSamplingExporter.kt`；`MotionSamplingSection.kt`；`DemoViewModel.kt`；`reports/task_20260606_demo_app_refactor_master_plan.md`；`reports/task_20260606_demo_app_motion_sampling_session_store.md`；本总表 | 已抽 `MotionSamplingSessionStore`：start/stop/clear、row build、dd/dt/dw/dt、export metadata update、session snapshot 回填。保留 exporter IO、`client.send(MotionSamplingModeSet)`、中文状态文案和 system log 调用点。测试覆盖 start metadata、first/second row delta、inactive no append、stop endedAt、clear gating、export metadata |
 | FW-OPT-019 | Demo APP UI presentation model 收口 | 可选重构 / Compose 参数瘦身 | 第一阶段已完成 | 否 | P4 | Demo APP UI 小包 | `SectionPresentationModels.kt`；`MainScreen.kt`；`CalibrationToolsSection.kt`；`MotionSamplingSection.kt`；`reports/task_20260606_demo_app_refactor_master_plan.md`；`reports/task_20260606_demo_app_presentation_model_stage1.md`；本总表 | 已新增 section-specific callbacks DTO：`CalibrationToolsActions` / `MotionSamplingActions`，收口 calibration 与 motion sampling section 参数面。保留 UI local `rememberSaveable` 状态、视觉交互、ViewModel 行为、BLE command 和业务 owner。后续如继续，只做小范围 section props，不做导航 / 多 ViewModel / 视觉重写 |
 | FW-OPT-020 | Demo APP Device config write tracker | 可选重构 / 配置写入反馈可测性 | 已完成 | 否 | P4 | Demo APP 配置写入小包 | `DeviceConfigWriteTracker.kt`；`DeviceConfigWriteTrackerTest.kt`；`DemoViewModel.kt`；`reports/task_20260606_demo_app_refactor_master_plan.md`；`reports/task_20260606_demo_app_device_config_write_tracker.md`；本总表 | 已抽 `DeviceConfigWriteTracker`：pending request、observed config match、mismatch keep pending、generic ACK fallback、NACK/Error/timeout clear pending、confirmation refresh gate。保留 `client.send(DeviceSetConfig)`、watchdog job、snapshot/capability refresh、中文状态文案和 system log 调用点 |
+| FW-OPT-021 | Demo APP quality baseline smoke | 真机 smoke / 重构阶段证据链 | 已通过候选 / 有观察项 | 否 | P4 | Demo APP 阶段收口 | `tools/demo_app_quality_smoke_capture.sh`；`tools/demo_app_quality_smoke_audit.py`；capture `20260607_101316...demo_app_quality_smoke`；`reports/task_20260607_demo_app_quality_baseline_smoke_prep.md`；本总表 | 专项 audit 为 `PASS_CANDIDATE`，连接、实时流、Start -> Stop、校准工具、motion sampling、日志入口已覆盖。device config 未覆盖且 focus logcat stop 时 stale，作为非阻断观察项；后续若 UI 瞬态异常复现，先补采集底座或启用更完整 logcat |
+| FW-OPT-022 | Demo APP information architecture simplification | UI 信息架构 / 默认首页精简 | 第十阶段已完成 / 待轻量 UI smoke | 否 | P3 | Demo APP 可用性提升 | `MainScreen.kt`；`DeviceProfileSection.kt`；`FallStopProtectionSection.kt`；`CalibrationToolsSection.kt`；`MotionSamplingSection.kt`；`TelemetryChartSection.kt`；`TestSessionSection.kt`；`SystemStatusSection.kt`；`DemoViewModel.kt`；`ProtocolCodec.kt`；`SonicWaveClient.kt`；capture `20260607_101316...demo_app_quality_smoke`；`reports/task_20260607_demo_app_information_architecture_simplification.md`；本总表 | 已把默认入口改为固定顶部 `型号 / 校准 / 采样 / 运行 / 日志`，默认进入型号页；型号页主操作为设置 Base / Plus，Pro / Ultra 置灰，新增 `当前设备` 直接显示设备回传的 Base/Plus 与距离传感器状态，写入状态主卡片可见，多余状态收进详情，连接状态卡片移除。保护卡片默认只保留摔倒保护 / 律动离开两个开关，律动离开按固件既有 `SAFETY:LEAVE_PROTECTION` 合同接入 Demo protocol/sdk/ViewModel。`SCALE:ZERO` / `CAL:ZERO` 增加发送前确认，取消不发送；已写入撤回不在当前合同内。校准页已删除重复标题和常驻说明，主操作压缩为开始校准/设备归零、结束校准、参考重量/实时距离、记录/清空校准点、采集数据、曲线、线性/二次拟合状态、待写入摘要和写入模型；高级工程区已删除冗余说明和旧 Z/K 校准路径。采样页完成第一轮内部深压缩，直接 `开始采样` 即可记录 APP 采样会话，设备侧 `DEBUG:MOTION_SAMPLING` 开关收进 `采样设置`。运行页删除旧交付边界卡片，曲线设置和测试会话导出路径默认收起，compact 系统状态完成尺寸和文案密度优化。下一步用户先看效果，再补轻量 UI smoke |
 
 ## 4. 重构收口与真机测试原则
 
@@ -80,6 +86,8 @@ ESP32 固件当前主链可继续作为联调和阶段交付基线。`PLUS + las
 - 不继续深拆不会阻断联调、release hardening 或 minimum soak。
 - 剩余偏重 owner 主要是动作编排 owner，保留比强拆更安全。
 - 后续只有在真机证据证明存在实际问题时，才提升对应专项优先级。
+- B2-B8 多包重构与 B10 信息架构第一阶段已经通过 B9 smoke 候选；后续不需要为了当前阶段继续补测同一 happy path。
+- Demo APP 信息架构第十阶段已完成本地 compile/test/assemble；下一步先让用户看效果，再补轻量 UI smoke，确认固定 Tab、默认型号页、型号设置精简、当前设备真值显示、保护双开关、内容不重不漏、归零确认弹窗、校准页压缩、采样页默认紧凑、直接开始采样可用、运行页无旧交付边界且系统状态更紧凑。
 
 Demo APP 后续重构启动原则：
 

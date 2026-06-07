@@ -282,6 +282,56 @@ cd tools/android_demo
 - 不把 UI 内 `rememberSaveable` 的导出弹窗状态搬到 ViewModel。
 - 不引入多 ViewModel / navigation 重写。
 
+### B9：Demo APP quality baseline smoke
+
+状态：真机 smoke 已复核，结论为通过候选（有采集观察项）。阶段报告见 `reports/task_20260607_demo_app_quality_baseline_smoke_prep.md`。
+
+目标：
+
+- 对 B2-B8 多包重构做轻量真机 smoke，而不是继续扩大重构。
+- 用专项入口 `tools/demo_app_quality_smoke_capture.sh` 固定用户步骤、capture scenario 和 audit。
+- 复核连接、实时流、Start -> Stop、校准工具入口、motion sampling 启停和可选 device config 写入。
+
+边界：
+
+- 不改 Demo APP 业务行为。
+- 不改 ESP32 协议、BLE wire payload、固件行为或正式 SW APP。
+- `device config` 写入只在现场确认安全时执行；否则作为未覆盖观察项。
+- 如果 audit 只显示证据缺口，不直接扩大业务代码改动，先补采集或日志证据。
+
+### B10：Demo APP information architecture simplification
+
+状态：第十阶段已完成，本地验证通过，待用户看效果后补一次 UI smoke。阶段报告见 `reports/task_20260607_demo_app_information_architecture_simplification.md`。
+
+目标：
+
+- 将默认首页从所有 section 纵向堆叠改为 `型号 / 校准 / 采样 / 运行 / 日志` 分区入口，并固定在顶部 app bar 下方。
+- 默认进入 `型号` 页，优先完成 Base / Plus 设定。
+- `运行` 页只保留系统主状态、遥测曲线、测试会话；连接详情归到 `型号`。
+- 将低频或高风险入口移到对应页：型号设定与保护开关进入 `型号`，校准工具进入 `校准`，motion sampling 进入 `采样`，raw console 进入 `日志`。
+- `DeviceConnectSection` 与 `SystemStatusSection` 支持 compact 默认视图，工程字段仍可展开查看。
+- `SCALE:ZERO` / `CAL:ZERO` 发送前增加确认弹窗，取消时不发送；已写入撤回暂不实现，因为当前固件合同没有可逆事务。
+- 顶栏文案精简为 `SW调试 / 搜索 / 断开`。
+- `型号` 页主操作精简为 `设置型号`：Base / Plus 可选，Pro / Ultra 置灰，距离传感器提示随选择变化，多余状态放入详情。
+- 保护卡片默认只保留 `摔倒保护` 与 `律动离开` 两个开关；`律动离开` 复用固件既有 `SAFETY:LEAVE_PROTECTION` 合同接入 Demo protocol / sdk / ViewModel。
+- 型号页连接状态卡片已删除，连接仍由固定顶栏处理。
+- `采样` 页完成第一轮内部深压缩，工程说明、raw 行预览和 schema 提示不再常驻；会话详情和曲线设置默认收起。
+- `运行` 页旧 `当前交付边界` 卡片已删除，曲线设置和测试会话导出路径默认收起。
+- `运行` 页 compact 系统状态卡片完成尺寸和文案密度优化。
+- `采样` 页主流程只保留 `开始采样 / 停止采样 / 清空会话 / 导出会话`；设备侧 `DEBUG:MOTION_SAMPLING` 开关收进 `采样设置`。
+- `型号` 页主卡片显示 `当前设备` 真值，写入状态不再藏在详情里。
+
+边界：
+
+- 不改 `DemoViewModel` business owner。
+- 不改 stores/reducers 合同。
+- 不改固件已有 BLE command 语义、ESP32 固件行为或正式 SW APP。
+- 不删除任何调试能力，只降低默认首页信息密度。
+
+真机：
+
+- 第一阶段已复用 B9 smoke。用户确认连接、实时数据、Start -> Stop、校准工具、motion sampling 和日志入口可用；AI 复核 Android transport、SNAPSHOT/STREAM、ESP32 start/stop/STOP_SUMMARY 和 visual evidence 后判定为 `PASS_CANDIDATE`。第二阶段修正 Tab 固定、顺序、内容去重和归零确认。第三阶段完成型号页精简、连接卡片删除和保护双开关接入。第四阶段完成校准页移动端竖向主流程压缩：开始校准、设备归零、记录、点表、曲线、线性/二次和写入边界已重新组织，并以圆圈信息弹窗承载必要说明。第五阶段按用户反馈继续压缩：删除重复标题、删除常驻录制状态/文件路径/解释按钮、把实时距离和记录同排、模型区只保留线性/二次/写入主操作。第六阶段完成结束按钮化、清空校准点、参考重量/实时距离并排和模型选项拟合状态展示。第七阶段删除高级工程区冗余说明和旧 Z/K 校准路径。第八阶段完成采样页和运行页第一轮深压缩，旧交付边界卡片已删除，工程详情默认收起。第九阶段完成运行页系统状态紧凑化，并将采样模式设备开关从主流程移入采样设置。第十阶段完成型号页当前设备真值和写入状态主卡片反馈；已通过本地 compile/test/assemble，建议用户先看效果后补一次轻量 UI smoke。
+
 ## 6. 冻结项
 
 以下不进入自动重构，除非出现真实 blocker 或用户明确点名：
@@ -303,13 +353,16 @@ cd tools/android_demo
 4. B5 `MotionSamplingSessionStore`：已完成。
 5. B7 `DeviceConfigWriteTracker`：已完成。
 6. B8 Presentation model 收口：第一阶段已完成。
-7. B6 `TestSessionBridge`，只有 wave control reducer 稳定后再做。
+7. B9 Demo APP quality baseline smoke：真机 smoke 已复核，当前不再阻塞。
+8. B10 Demo APP information architecture simplification：第十阶段已完成，本地验证通过，待用户看效果后补轻量 UI smoke。
+9. B6 `TestSessionBridge`，只有 wave control reducer 稳定且 B9/B10 smoke 通过后再做。
 
 暂不建议：
 
 - 直接做 B6 或完整 event reducer。
 - 直接拆 BLE connection owner。
 - 为了降低行数而拆 UI/连接/控制/校准多个 owner。
+- 在 B9 smoke 前继续开 B4 第二阶段。
 
 ## 8. 每包固定交付格式
 

@@ -64,6 +64,7 @@ fun TestSessionSection(
         session.samples.isNotEmpty()
     var showClearConfirm by remember(session?.sessionId) { mutableStateOf(false) }
     var showExportDialog by rememberSaveable(session?.sessionId) { mutableStateOf(false) }
+    var showExportDetails by rememberSaveable(session?.sessionId) { mutableStateOf(false) }
     var pendingPrimaryLabel by rememberSaveable(session?.sessionId) {
         mutableStateOf(TestSessionPrimaryLabel.NORMAL_RHYTHM.name)
     }
@@ -132,11 +133,6 @@ fun TestSessionSection(
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
-                text = stringResource(R.string.label_test_session_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
                 text = stringResource(R.string.label_test_session_status, statusText),
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -148,17 +144,32 @@ fun TestSessionSection(
                 text = stringResource(R.string.label_test_session_sample_count, sampleCount),
                 style = MaterialTheme.typography.bodyMedium,
             )
-            session?.lastExportCsvPath?.let { path ->
-                Text(
-                    text = stringResource(R.string.label_test_session_last_export_csv, path),
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            session?.lastExportJsonPath?.let { path ->
-                Text(
-                    text = stringResource(R.string.label_test_session_last_export_json, path),
-                    style = MaterialTheme.typography.bodySmall,
-                )
+            if (session?.lastExportCsvPath != null || session?.lastExportJsonPath != null) {
+                OutlinedButton(onClick = { showExportDetails = !showExportDetails }) {
+                    Text(
+                        stringResource(
+                            if (showExportDetails) {
+                                R.string.action_hide_export_details
+                            } else {
+                                R.string.action_show_export_details
+                            },
+                        ),
+                    )
+                }
+                if (showExportDetails) {
+                    session.lastExportCsvPath?.let { path ->
+                        Text(
+                            text = stringResource(R.string.label_test_session_last_export_csv, path),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    session.lastExportJsonPath?.let { path ->
+                        Text(
+                            text = stringResource(R.string.label_test_session_last_export_json, path),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
             }
             panelState.notice?.let { message ->
                 Text(

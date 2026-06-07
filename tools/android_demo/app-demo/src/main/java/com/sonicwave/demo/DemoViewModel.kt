@@ -141,6 +141,12 @@ data class UiState(
     val fallStopAckConfirmed: Boolean = false,
     val fallStopCapabilityVerified: Boolean = false,
     val isFallStopSyncInProgress: Boolean = false,
+    val leaveProtectionEnabled: Boolean = true,
+    val leaveProtectionSupported: Boolean = false,
+    val leaveProtectionStateKnown: Boolean = false,
+    val leaveProtectionAckConfirmed: Boolean = false,
+    val leaveProtectionCapabilityVerified: Boolean = false,
+    val isLeaveProtectionSyncInProgress: Boolean = false,
     val isDeviceSheetVisible: Boolean = false,
     val scanResults: List<BleScanResult> = emptyList(),
     val statusLabel: String = "",
@@ -355,6 +361,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         fallStopAckConfirmed = false,
                         fallStopCapabilityVerified = false,
                         isFallStopSyncInProgress = false,
+                        leaveProtectionEnabled = true,
+                        leaveProtectionSupported = false,
+                        leaveProtectionStateKnown = false,
+                        leaveProtectionAckConfirmed = false,
+                        leaveProtectionCapabilityVerified = false,
+                        isLeaveProtectionSyncInProgress = false,
                         testSession = null,
                         testSessionNotice = null,
                         captureStatus = null,
@@ -393,6 +405,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     val probeCapabilities = probe?.capabilities
                     val probedFallStopEnabled = probeCapabilities?.let(::isFallStopEnabled)
+                    val probedLeaveProtectionSupported = probeCapabilities?.let(::isLeaveProtectionSupported)
+                    val probedLeaveProtectionEnabled = probeCapabilities?.let(::isLeaveProtectionEnabled)
                     calibrationSessionStore.withCaptureAvailability(
                         it.copy(
                             isDeviceSheetVisible = false,
@@ -406,6 +420,13 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             fallStopAckConfirmed = false,
                             fallStopCapabilityVerified = probedFallStopEnabled != null,
                             isFallStopSyncInProgress = false,
+                            leaveProtectionSupported = probedLeaveProtectionSupported ?: it.leaveProtectionSupported,
+                            leaveProtectionEnabled = probedLeaveProtectionEnabled ?: it.leaveProtectionEnabled,
+                            leaveProtectionStateKnown = probedLeaveProtectionEnabled != null || it.leaveProtectionStateKnown,
+                            leaveProtectionAckConfirmed = false,
+                            leaveProtectionCapabilityVerified = probedLeaveProtectionSupported != null ||
+                                probedLeaveProtectionEnabled != null,
+                            isLeaveProtectionSyncInProgress = false,
                             protocolMode = mergeProtocolMode(
                                 currentMode = it.protocolMode,
                                 observedMode = probe?.mode,
@@ -518,6 +539,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         fallStopAckConfirmed = false,
                         fallStopCapabilityVerified = false,
                         isFallStopSyncInProgress = false,
+                        leaveProtectionEnabled = true,
+                        leaveProtectionSupported = false,
+                        leaveProtectionStateKnown = false,
+                        leaveProtectionAckConfirmed = false,
+                        leaveProtectionCapabilityVerified = false,
+                        isLeaveProtectionSyncInProgress = false,
                         testSessionNotice = text(R.string.test_session_notice_stopped_disconnect),
                         captureStatus = null,
                         writeModelStatus = null,
@@ -1236,6 +1263,16 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         stopRecordingIfActive(text(R.string.recording_stopped_manual))
     }
 
+    fun clearCalibrationPoints() {
+        val pointCount = _uiState.value.calibrationPoints.size
+        if (pointCount <= 0) return
+
+        _uiState.update { state ->
+            calibrationSessionStore.reset(state)
+        }
+        appendSystemLog("[CAL_APP] points cleared count=$pointCount")
+    }
+
     fun clearTestSession() {
         val session = testSessionStore ?: return
         if (session.status == TestSessionStatusUi.RECORDING) return
@@ -1479,6 +1516,99 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setLeaveProtectionEnabled(enabled: Boolean) {
+        val state = _uiState.value
+        if (!state.isConnected ||
+            state.protocolMode == ProtocolMode.LEGACY ||
+            !state.leaveProtectionSupported ||
+            state.isLeaveProtectionSyncInProgress
+        ) {
+            return
+        }
+
+        val actionLabel = if (enabled) {
+            text(R.string.action_enable_leave_protection)
+        } else {
+            text(R.string.action_disable_leave_protection)
+        }
+
+        _uiState.update {
+            it.copy(
+                isLeaveProtectionSyncInProgress = true,
+                leaveProtectionAckConfirmed = false,
+                leaveProtectionCapabilityVerified = false,
+            )
+        }
+
+        viewModelScope.launch {
+            runCatching {
+                val ack = client.setLeaveProtectionAndAwaitAck(enabled)
+                val probe = runCatching { client.capabilityProbe() }.getOrNull()
+                ack to probe
+            }.onSuccess { (ack, probe) ->
+                val probeCapabilities = probe?.capabilities
+                val actualEnabled = probeCapabilities?.let(::isLeaveProtectionEnabled)
+                if (probe?.mode == ProtocolMode.PRIMARY && actualEnabled != null) {
+                    _uiState.update {
+                        it.copy(
+                            leaveProtectionEnabled = actualEnabled,
+                            leaveProtectionSupported = isLeaveProtectionSupported(probeCapabilities)
+                                ?: it.leaveProtectionSupported,
+                            leaveProtectionStateKnown = true,
+                            leaveProtectionAckConfirmed = false,
+                            leaveProtectionCapabilityVerified = true,
+                            isLeaveProtectionSyncInProgress = false,
+                            capabilityInfo = formatCapabilities(probeCapabilities),
+                            protocolMode = probe.mode,
+                            lastAckOrError = text(R.string.message_sent, actionLabel),
+                        )
+                    }
+                    appendSystemLog(
+                        "[LEAVE_PROTECTION_UI] requested=$enabled applied=$actualEnabled mode=${probe.mode.name}",
+                    )
+                    return@onSuccess
+                }
+
+                _uiState.update {
+                    it.copy(
+                        leaveProtectionEnabled = ack.enabled,
+                        leaveProtectionSupported = ack.supported,
+                        leaveProtectionStateKnown = true,
+                        leaveProtectionAckConfirmed = true,
+                        leaveProtectionCapabilityVerified = false,
+                        isLeaveProtectionSyncInProgress = false,
+                        capabilityInfo = probe?.capabilities?.let(::formatCapabilities) ?: it.capabilityInfo,
+                        protocolMode = mergeProtocolMode(
+                            currentMode = it.protocolMode,
+                            observedMode = probe?.mode ?: ProtocolMode.PRIMARY,
+                        ),
+                        lastAckOrError = text(
+                            R.string.message_sent_with_partial_confirmation,
+                            actionLabel,
+                            probe?.reason ?: text(R.string.leave_protection_capability_sync_soft_failure),
+                        ),
+                    )
+                }
+                appendSystemLog(
+                    "[LEAVE_PROTECTION_UI] ack_confirmed requested=$enabled applied=${ack.enabled} supported=${ack.supported} capability_verify=unavailable effect=${ack.effect ?: "UNKNOWN"} mode=${probe?.mode?.name ?: "PRIMARY"} reason=${probe?.reason ?: "UNKNOWN"}",
+                )
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(
+                        isLeaveProtectionSyncInProgress = false,
+                        leaveProtectionAckConfirmed = false,
+                        leaveProtectionCapabilityVerified = false,
+                        lastAckOrError = text(
+                            R.string.message_send_failed,
+                            actionLabel,
+                            error.message ?: text(R.string.common_not_available),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
     fun exportMotionSamplingSession(request: MotionSamplingExportRequest) {
         val state = _uiState.value
         val session = motionSamplingSessionStore ?: return
@@ -1693,6 +1823,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                     fallStopAckConfirmed = false,
                                     fallStopCapabilityVerified = false,
                                     isFallStopSyncInProgress = false,
+                                    leaveProtectionEnabled = true,
+                                    leaveProtectionSupported = false,
+                                    leaveProtectionStateKnown = false,
+                                    leaveProtectionAckConfirmed = false,
+                                    leaveProtectionCapabilityVerified = false,
+                                    isLeaveProtectionSyncInProgress = false,
                                 ),
                             ),
                         ).resetWaveRuntime()
@@ -1992,6 +2128,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             authoritativeTopState = nextDeviceState,
                             authoritativeWaveOutputActive = event.waveOutputActive,
                         )
+                        val snapshotLeaveStopEnabled = event.leaveStopEnabled
                         val nextReasonCode = event.currentReasonCode ?: it.deviceReasonCode
                         val nextSafetyEffectCode = event.currentSafetyEffect ?: it.deviceSafetyEffectCode
                         syncDegradedStartUi(it.applyWaveOutputTransition(nextWaveOutputActive).copy(
@@ -2026,6 +2163,26 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             stableWeight = event.stableWeightKg ?: it.stableWeight,
                             stableWeightActive = event.baselineReady ?: it.stableWeightActive,
                             isDeviceConfigWritePending = deviceConfigWriteTracker.isPending,
+                            leaveProtectionEnabled = snapshotLeaveStopEnabled ?: it.leaveProtectionEnabled,
+                            leaveProtectionSupported = if (snapshotLeaveStopEnabled != null) {
+                                true
+                            } else {
+                                it.leaveProtectionSupported
+                            },
+                            leaveProtectionStateKnown = snapshotLeaveStopEnabled != null ||
+                                it.leaveProtectionStateKnown,
+                            leaveProtectionAckConfirmed = if (snapshotLeaveStopEnabled != null) {
+                                false
+                            } else {
+                                it.leaveProtectionAckConfirmed
+                            },
+                            leaveProtectionCapabilityVerified = snapshotLeaveStopEnabled != null ||
+                                it.leaveProtectionCapabilityVerified,
+                            isLeaveProtectionSyncInProgress = if (snapshotLeaveStopEnabled != null) {
+                                false
+                            } else {
+                                it.isLeaveProtectionSyncInProgress
+                            },
                         )).syncFormalWaveTruth().syncWaveControlFlags()
                     }.also {
                         reconcileTestSessionWithFormalWaveTruth(
@@ -2133,6 +2290,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         if (platformModel != null && platformModel != PlatformModel.BASE) {
                             preferredLaserPlatformModel = platformModel
                         }
+                        val fallStopEnabled = isFallStopEnabled(event)
+                        val leaveProtectionSupported = isLeaveProtectionSupported(event)
+                        val leaveProtectionEnabled = isLeaveProtectionEnabled(event)
                         state.copy(
                             protocolMode = mergeProtocolMode(
                                 currentMode = state.protocolMode,
@@ -2144,11 +2304,19 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             selectedPlatformModel = platformModel ?: state.selectedPlatformModel,
                             selectedLaserInstalled = laserInstalled ?: state.selectedLaserInstalled,
                             motionSamplingModeEnabled = isMotionSamplingModeEnabled(event),
-                            fallStopEnabled = isFallStopEnabled(event) ?: state.fallStopEnabled,
-                            fallStopStateKnown = isFallStopEnabled(event) != null || state.fallStopStateKnown,
+                            fallStopEnabled = fallStopEnabled ?: state.fallStopEnabled,
+                            fallStopStateKnown = fallStopEnabled != null || state.fallStopStateKnown,
                             fallStopAckConfirmed = false,
-                            fallStopCapabilityVerified = isFallStopEnabled(event) != null,
+                            fallStopCapabilityVerified = fallStopEnabled != null,
                             isFallStopSyncInProgress = false,
+                            leaveProtectionSupported = leaveProtectionSupported ?: state.leaveProtectionSupported,
+                            leaveProtectionEnabled = leaveProtectionEnabled ?: state.leaveProtectionEnabled,
+                            leaveProtectionStateKnown = leaveProtectionEnabled != null ||
+                                state.leaveProtectionStateKnown,
+                            leaveProtectionAckConfirmed = false,
+                            leaveProtectionCapabilityVerified = leaveProtectionSupported != null ||
+                                leaveProtectionEnabled != null,
+                            isLeaveProtectionSyncInProgress = false,
                             deviceConfigStatus = pendingDeviceConfigStatus ?: state.deviceConfigStatus,
                             isDeviceConfigWritePending = deviceConfigWriteTracker.isPending,
                         )
@@ -2228,6 +2396,27 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         }
                         appendSystemLog(
                             "[FALL_STOP_UI] ack enabled=${event.enabled} mode=${event.mode ?: "UNKNOWN"}",
+                        )
+                    }
+
+                    is Event.LeaveProtection -> {
+                        _uiState.update {
+                            it.copy(
+                                leaveProtectionEnabled = event.enabled,
+                                leaveProtectionSupported = event.supported,
+                                leaveProtectionStateKnown = true,
+                                leaveProtectionAckConfirmed = true,
+                                leaveProtectionCapabilityVerified = false,
+                                isLeaveProtectionSyncInProgress = false,
+                                protocolMode = mergeProtocolMode(
+                                    currentMode = it.protocolMode,
+                                    observedMode = ProtocolMode.PRIMARY,
+                                ),
+                                lastAckOrError = event.raw,
+                            )
+                        }
+                        appendSystemLog(
+                            "[LEAVE_PROTECTION_UI] ack enabled=${event.enabled} supported=${event.supported} effect=${event.effect ?: "UNKNOWN"}",
                         )
                     }
 
@@ -3380,6 +3569,14 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         parseCapabilityBoolean(capabilities.values["FALL_STOP_ENABLED"])?.let { return it }
         val suppressed = parseCapabilityBoolean(capabilities.values["FALL_ACTION_SUPPRESSED"]) ?: return null
         return !suppressed
+    }
+
+    private fun isLeaveProtectionSupported(capabilities: Event.Capabilities): Boolean? {
+        return parseCapabilityBoolean(capabilities.values["LEAVE_STOP_SUPPORTED"])
+    }
+
+    private fun isLeaveProtectionEnabled(capabilities: Event.Capabilities): Boolean? {
+        return parseCapabilityBoolean(capabilities.values["LEAVE_STOP_ENABLED"])
     }
 
     private fun enableDemoRealtimeStreamIfSupported(capabilities: Event.Capabilities?) {

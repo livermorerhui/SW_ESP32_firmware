@@ -14,14 +14,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -54,6 +61,7 @@ fun CalibrationToolsSection(
     modifier: Modifier = Modifier,
 ) {
     val notAvailable = stringResource(R.string.common_not_available)
+    var infoTopic by remember { mutableStateOf<CalibrationInfoTopic?>(null) }
     val filteredPoints = uiState.calibrationPoints.filter {
         it.distanceMm != null &&
             it.referenceWeightKg != null &&
@@ -62,208 +70,125 @@ fun CalibrationToolsSection(
 
     Card(modifier = modifier.fillMaxWidth()) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(stringResource(R.string.section_calibration_tools), style = MaterialTheme.typography.titleMedium)
-            Text(
-                text = stringResource(R.string.label_calibration_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            SectionTitleRow(
+                title = stringResource(R.string.label_calibration_flow_start),
+                onInfo = { infoTopic = CalibrationInfoTopic.START },
             )
-            Text(
-                text = stringResource(R.string.label_calibration_workflow),
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = stringResource(R.string.label_calibration_workflow_steps),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(stringResource(R.string.label_distance, uiState.distance?.format2() ?: notAvailable))
-            Text(stringResource(R.string.label_weight, uiState.weight?.format2() ?: notAvailable))
-            Text(stringResource(R.string.label_stable_weight, uiState.stableWeight?.format2() ?: notAvailable))
-            Text(
-                stringResource(
-                    R.string.label_calibration_state,
-                    uiState.calibrationZero?.format2() ?: notAvailable,
-                    uiState.calibrationFactor?.format4() ?: notAvailable,
-                ),
-            )
-
-            SectionTitle(stringResource(R.string.label_calibration_step_zero))
-            Button(onClick = actions.commands.onZero) {
-                Text(stringResource(R.string.action_zero))
-            }
-            Text(
-                text = stringResource(R.string.label_zero_explanation),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            SectionTitle(stringResource(R.string.label_calibration_step_recording))
-            Button(
-                onClick = actions.commands.onStartRecording,
-                enabled = uiState.isConnected && !uiState.isRecording,
-            ) {
-                Text(stringResource(R.string.action_start_recording))
-            }
-            Text(
-                text = if (uiState.isRecording) {
-                    stringResource(R.string.label_recording_state_active)
-                } else {
-                    stringResource(R.string.label_recording_state_inactive)
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = if (uiState.isRecording) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
-            uiState.recordingStatus?.let { status ->
-                Text(
-                    text = status,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            uiState.recordingDestination?.let { destination ->
-                Text(
-                    text = stringResource(R.string.label_recording_destination, destination),
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-
-            SectionTitle(stringResource(R.string.label_calibration_step_capture))
-            CapturePreconditionChecklist(uiState = uiState)
-            CaptureResultSummary(uiState = uiState)
-            OutlinedTextField(
-                value = uiState.captureReferenceInput,
-                onValueChange = actions.input.onCaptureReferenceChange,
-                label = { Text(stringResource(R.string.field_reference_weight)) },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-            )
-            Text(
-                text = stringResource(
-                    R.string.label_capture_live_distance,
-                    uiState.distance?.takeIf { it.isFinite() }?.let { "${it.format2()} mm" } ?: notAvailable,
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Button(
-                onClick = actions.commands.onCapturePoint,
-                enabled = uiState.canCaptureCalibrationPoint,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(stringResource(R.string.action_capture_cal_point))
+                Button(
+                    onClick = actions.commands.onStartRecording,
+                    enabled = uiState.isConnected && !uiState.isRecording,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        stringResource(
+                            if (uiState.isRecording) {
+                                R.string.action_calibration_active
+                            } else {
+                                R.string.action_start_calibration
+                            },
+                        ),
+                    )
+                }
+                OutlinedButton(
+                    onClick = actions.commands.onZero,
+                    enabled = uiState.isConnected,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(stringResource(R.string.action_device_zero))
+                }
             }
-            Text(
-                text = if (uiState.canCaptureCalibrationPoint) {
-                    stringResource(R.string.label_capture_hint_active)
-                } else {
-                    stringResource(R.string.label_capture_hint_requires_recording)
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            if (uiState.isRecording) {
+                OutlinedButton(
+                    onClick = actions.commands.onStopRecording,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.action_finish_calibration))
+                }
+            }
+
+            SectionDivider()
+            SectionTitleRow(
+                title = stringResource(R.string.label_calibration_flow_record),
+                onInfo = { infoTopic = CalibrationInfoTopic.RECORD },
             )
-            Text(
-                text = stringResource(R.string.label_capture_semantics_explanation),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = uiState.captureReferenceInput,
+                    onValueChange = actions.input.onCaptureReferenceChange,
+                    label = { Text(stringResource(R.string.field_reference_weight)) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                )
+                LiveDistanceBox(
+                    value = uiState.distance?.takeIf { it.isFinite() }?.let { "${it.format2()} mm" } ?: notAvailable,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = actions.commands.onCapturePoint,
+                    enabled = uiState.canCaptureCalibrationPoint,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(stringResource(R.string.action_capture_cal_point))
+                }
+                OutlinedButton(
+                    onClick = actions.commands.onClearCalibrationPoints,
+                    enabled = uiState.calibrationPoints.isNotEmpty(),
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = Color(0xFFB91C1C),
+                    ),
+                ) {
+                    Text(stringResource(R.string.action_clear_calibration_points))
+                }
+            }
             CaptureResultCard(feedback = uiState.captureStatus)
 
+            SectionDivider()
+            SectionTitleRow(
+                title = stringResource(R.string.label_calibration_flow_data),
+                onInfo = { infoTopic = CalibrationInfoTopic.PREDICTION },
+            )
             CalibrationPointSummary(uiState = uiState)
             CalibrationPointTable(points = uiState.calibrationPoints)
 
             SectionDivider()
-            SectionTitle(stringResource(R.string.label_calibration_step_compare))
-            Text(
-                text = stringResource(R.string.label_model_comparison_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            SectionTitle(stringResource(R.string.label_calibration_flow_chart))
             CalibrationComparisonChart(
                 comparisonResult = uiState.comparisonResult,
                 points = filteredPoints,
                 selectedModel = uiState.selectedComparisonModel,
             )
-            ModelComparisonSummary(
-                comparisonResult = uiState.comparisonResult,
-                selectedModel = uiState.selectedComparisonModel,
-            )
 
             SectionDivider()
-            SectionTitle(stringResource(R.string.label_calibration_step_stop_recording))
-            Text(
-                text = stringResource(R.string.label_stop_recording_recommended_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Button(
-                onClick = actions.commands.onStopRecording,
-                enabled = uiState.isRecording,
-            ) {
-                Text(stringResource(R.string.action_stop_recording))
-            }
-            Text(
-                text = if (uiState.isRecording) {
-                    stringResource(R.string.label_stop_recording_active_hint)
-                } else {
-                    stringResource(R.string.label_stop_recording_inactive_hint)
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = if (uiState.isRecording) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
-
-            SectionDivider()
-            SectionTitle(stringResource(R.string.label_calibration_step_select_model))
-            Text(
-                text = stringResource(R.string.label_model_selection_behavior),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            SectionTitleRow(
+                title = stringResource(R.string.label_calibration_flow_confirm),
+                onInfo = { infoTopic = CalibrationInfoTopic.WRITE },
             )
             ModelSelectionOptions(
                 options = uiState.modelOptions,
+                comparisonResult = uiState.comparisonResult,
                 onModelTypeChange = actions.input.onModelTypeChange,
             )
             PreparedModelSummaryCard(
                 preparedModel = uiState.preparedModel,
                 comparisonResult = uiState.comparisonResult,
                 selectedModel = uiState.selectedComparisonModel,
-            )
-
-            SectionDivider()
-            SectionTitle(stringResource(R.string.label_calibration_step_apply))
-            Text(
-                text = stringResource(R.string.label_apply_step_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = if (uiState.isRecording) {
-                    stringResource(R.string.label_apply_step_recording_warning)
-                } else {
-                    stringResource(R.string.label_apply_step_ready_after_stop)
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = if (uiState.isRecording) {
-                    Color(0xFFB45309)
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
-            Text(
-                text = stringResource(R.string.label_set_model_primary_explanation),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             WriteModelStatusSummary(feedback = uiState.writeModelStatus)
             val writeButtonColors = when (uiState.writeModelStatus?.kind) {
@@ -276,6 +201,7 @@ fun CalibrationToolsSection(
                 onClick = actions.commands.onSetModel,
                 enabled = uiState.preparedModel != null,
                 colors = writeButtonColors,
+                modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
                     when (uiState.writeModelStatus?.kind) {
@@ -284,19 +210,9 @@ fun CalibrationToolsSection(
                     },
                 )
             }
-            Text(
-                text = stringResource(R.string.label_apply_boundary_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
 
             SectionDivider()
             SectionTitle(stringResource(R.string.label_advanced_engineering_title))
-            Text(
-                text = stringResource(R.string.label_advanced_engineering_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             Button(onClick = actions.commands.onToggleEngineeringSection) {
                 Text(
                     stringResource(
@@ -317,21 +233,6 @@ fun CalibrationToolsSection(
                         Text(stringResource(R.string.action_cal_zero))
                     }
                 }
-                Text(
-                    text = stringResource(R.string.label_model_buttons_explanation),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = stringResource(R.string.label_get_model_explanation),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = stringResource(R.string.label_cal_zero_explanation),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
 
                 OutlinedTextField(
                     value = uiState.modelRefInput,
@@ -341,11 +242,6 @@ fun CalibrationToolsSection(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
-                Text(
-                    text = stringResource(R.string.label_model_reference_explanation),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 OutlinedTextField(
                     value = uiState.modelC0Input,
                     onValueChange = actions.input.onModelC0Change,
@@ -353,11 +249,6 @@ fun CalibrationToolsSection(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                )
-                Text(
-                    text = stringResource(R.string.label_model_c0_explanation),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 OutlinedTextField(
                     value = uiState.modelC1Input,
@@ -367,11 +258,6 @@ fun CalibrationToolsSection(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
-                Text(
-                    text = stringResource(R.string.label_model_c1_explanation),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 OutlinedTextField(
                     value = uiState.modelC2Input,
                     onValueChange = actions.input.onModelC2Change,
@@ -380,31 +266,12 @@ fun CalibrationToolsSection(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
-                Text(
-                    text = stringResource(R.string.label_model_c2_explanation),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = stringResource(R.string.label_manual_override_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 FilterChip(
                     selected = uiState.verboseStreamLogsEnabled,
                     onClick = actions.commands.onToggleVerboseStreamLogs,
                     label = {
                         Text(stringResource(R.string.label_verbose_stream_logs_chip))
                     },
-                )
-                Text(
-                    text = if (uiState.verboseStreamLogsEnabled) {
-                        stringResource(R.string.label_verbose_stream_logs_enabled_hint)
-                    } else {
-                        stringResource(R.string.label_verbose_stream_logs_disabled_hint)
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
                 uiState.latestModel?.let { model ->
@@ -430,38 +297,101 @@ fun CalibrationToolsSection(
                         )
                     }
                 }
-                SectionDivider()
-                Text(
-                    text = stringResource(R.string.label_legacy_calibration_title),
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    text = stringResource(R.string.label_calibrate_explanation),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                OutlinedTextField(
-                    value = uiState.zeroInput,
-                    onValueChange = actions.input.onZeroInputChange,
-                    label = { Text(stringResource(R.string.field_zero)) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                )
-                OutlinedTextField(
-                    value = uiState.factorInput,
-                    onValueChange = actions.input.onFactorInputChange,
-                    label = { Text(stringResource(R.string.field_factor)) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                )
-                Button(onClick = actions.commands.onCalibrate) {
-                    Text(stringResource(R.string.action_calibrate))
-                }
             }
         }
     }
+
+    infoTopic?.let { topic ->
+        CalibrationInfoDialog(
+            topic = topic,
+            onDismiss = { infoTopic = null },
+        )
+    }
+}
+
+private enum class CalibrationInfoTopic {
+    START,
+    DEVICE_ZERO,
+    RECORD,
+    PREDICTION,
+    WRITE,
+}
+
+@Composable
+private fun SectionTitleRow(
+    title: String,
+    onInfo: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            text = title,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = stringResource(R.string.action_info_icon),
+            modifier = Modifier
+                .clickable(onClick = onInfo)
+                .padding(horizontal = 8.dp, vertical = 2.dp),
+            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+@Composable
+private fun LiveDistanceBox(
+    value: String,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = {},
+        label = { Text(stringResource(R.string.label_live_distance_short)) },
+        modifier = modifier,
+        readOnly = true,
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
+    )
+}
+
+@Composable
+private fun CalibrationInfoDialog(
+    topic: CalibrationInfoTopic,
+    onDismiss: () -> Unit,
+) {
+    val title = stringResource(
+        when (topic) {
+            CalibrationInfoTopic.START -> R.string.calibration_info_start_title
+            CalibrationInfoTopic.DEVICE_ZERO -> R.string.calibration_info_device_zero_title
+            CalibrationInfoTopic.RECORD -> R.string.calibration_info_record_title
+            CalibrationInfoTopic.PREDICTION -> R.string.calibration_info_prediction_title
+            CalibrationInfoTopic.WRITE -> R.string.calibration_info_write_title
+        },
+    )
+    val message = stringResource(
+        when (topic) {
+            CalibrationInfoTopic.START -> R.string.calibration_info_start_message
+            CalibrationInfoTopic.DEVICE_ZERO -> R.string.calibration_info_device_zero_message
+            CalibrationInfoTopic.RECORD -> R.string.calibration_info_record_message
+            CalibrationInfoTopic.PREDICTION -> R.string.calibration_info_prediction_message
+            CalibrationInfoTopic.WRITE -> R.string.calibration_info_write_message
+        },
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(message) },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_got_it))
+            }
+        },
+    )
 }
 
 @Composable
@@ -509,12 +439,14 @@ private fun WriteModelStatusSummary(feedback: WriteModelFeedbackUi?) {
 @Composable
 private fun ModelSelectionOptions(
     options: List<CalibrationModelOptionUi>,
+    comparisonResult: CalibrationComparisonResult?,
     onModelTypeChange: (CalibrationModelType) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         options.forEach { option ->
             ModelSelectionCard(
                 option = option,
+                fit = fitForModelType(comparisonResult, option.type),
                 onClick = { onModelTypeChange(option.type) },
             )
         }
@@ -524,6 +456,7 @@ private fun ModelSelectionOptions(
 @Composable
 private fun ModelSelectionCard(
     option: CalibrationModelOptionUi,
+    fit: CalibrationFitResult?,
     onClick: () -> Unit,
 ) {
     val label = when (option.type) {
@@ -544,13 +477,13 @@ private fun ModelSelectionCard(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.5.dp, borderColor, RoundedCornerShape(14.dp))
-            .background(backgroundColor, RoundedCornerShape(14.dp))
+            .border(1.2.dp, borderColor, RoundedCornerShape(10.dp))
+            .background(backgroundColor, RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
-            .padding(12.dp),
+            .padding(horizontal = 10.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = label,
                 fontWeight = FontWeight.Bold,
@@ -561,39 +494,114 @@ private fun ModelSelectionCard(
                 },
             )
             Text(
-                text = if (option.available) {
-                    stringResource(R.string.label_model_option_ready)
-                } else {
-                    stringResource(R.string.label_model_option_not_ready)
-                },
+                text = fitStatusLabel(fit = fit),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = fitStatusColor(fit = fit),
             )
         }
-        Column(
-            horizontalAlignment = androidx.compose.ui.Alignment.End,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            if (option.selected) {
-                Text(
-                    text = stringResource(R.string.label_model_option_selected),
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-            if (option.prepared) {
-                Text(
-                    text = stringResource(R.string.label_model_option_prepared),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF0F766E),
-                )
-            }
-        }
+        Text(
+            text = when {
+                option.prepared -> stringResource(R.string.label_model_option_prepared_short)
+                option.selected -> stringResource(R.string.label_model_option_selected_short)
+                option.available -> stringResource(R.string.label_model_option_ready_short)
+                else -> stringResource(R.string.label_model_option_not_ready_short)
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = when {
+                option.prepared -> Color(0xFF0F766E)
+                option.selected -> MaterialTheme.colorScheme.primary
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
     }
 }
 
 @Composable
+private fun fitStatusLabel(fit: CalibrationFitResult?): String {
+    return when {
+        fit?.isAvailable != true -> stringResource(R.string.label_fit_status_insufficient)
+        fit.monotonic == true -> stringResource(R.string.label_fit_status_pass)
+        else -> stringResource(R.string.label_fit_status_fail)
+    }
+}
+
+@Composable
+private fun fitStatusColor(fit: CalibrationFitResult?): Color {
+    return when {
+        fit?.isAvailable != true -> MaterialTheme.colorScheme.onSurfaceVariant
+        fit.monotonic == true -> Color(0xFF0F766E)
+        else -> Color(0xFFB91C1C)
+    }
+}
+
+private fun fitForModelType(
+    comparisonResult: CalibrationComparisonResult?,
+    type: CalibrationModelType,
+): CalibrationFitResult? {
+    return when (type) {
+        CalibrationModelType.LINEAR -> comparisonResult?.linear
+        CalibrationModelType.QUADRATIC -> comparisonResult?.quadratic
+    }
+}
+
+@Composable
+private fun CompactPreparedModelSummary(preparedModel: PreparedCalibrationModelUi?) {
+    if (preparedModel == null) return
+
+    val modelTypeLabel = when (preparedModel.type) {
+        CalibrationModelType.LINEAR -> stringResource(R.string.model_type_linear)
+        CalibrationModelType.QUADRATIC -> stringResource(R.string.model_type_quadratic)
+    }
+    Text(
+        text = stringResource(
+            R.string.label_prepared_model_compact,
+            modelTypeLabel,
+            preparedModel.referenceDistance.format2(),
+            preparedModel.c0.format6(),
+            preparedModel.c1.format6(),
+            preparedModel.c2.format6(),
+        ),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
 private fun PreparedModelSummaryCard(
+    preparedModel: PreparedCalibrationModelUi?,
+    comparisonResult: CalibrationComparisonResult?,
+    selectedModel: CalibrationModelType,
+) {
+    val selectedFit = when (selectedModel) {
+        CalibrationModelType.LINEAR -> comparisonResult?.linear
+        CalibrationModelType.QUADRATIC -> comparisonResult?.quadratic
+    }
+    val waitingText = if (selectedFit == null || selectedFit.isAvailable) {
+        null
+    } else {
+        stringResource(
+            R.string.label_model_fit_insufficient,
+            selectedFit.sampleCount,
+            selectedFit.requiredPointCount,
+        )
+    }
+
+    if (preparedModel == null) {
+        waitingText?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
+
+    CompactPreparedModelSummary(preparedModel = preparedModel)
+}
+
+@Composable
+private fun LegacyPreparedModelSummaryCard(
     preparedModel: PreparedCalibrationModelUi?,
     comparisonResult: CalibrationComparisonResult?,
     selectedModel: CalibrationModelType,
