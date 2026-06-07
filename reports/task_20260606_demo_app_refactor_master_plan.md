@@ -170,13 +170,14 @@ cd tools/android_demo
 
 ### B4：WaveControlStateReducer
 
-状态：第一阶段已完成。阶段报告见 `reports/task_20260606_demo_app_wave_control_state_reducer.md`。
+状态：第二阶段已完成，运行页真机 smoke 通过候选。第一阶段报告见 `reports/task_20260606_demo_app_wave_control_state_reducer.md`；第二阶段报告见 `reports/task_20260607_demo_app_wave_pending_lifecycle_store.md`。
 
 目标：
 
 - 已抽纯 reducer，管理 wave output transition、runtime clock、formal wave truth sync、wave control flags。
 - 已把 `resolveAuthoritativeWaveOutput`、`resolveSnapshotStartReady`、`resolveOptimisticStopState` 纳入可测试 owner。
-- pending start/stop lifecycle 和 formal session action 暂不迁移。
+- pending start/stop lifecycle 已在第二阶段抽到 `WavePendingLifecycleStore`。
+- formal session action 继续由 B6 `TestSessionBridge` + `DemoViewModel` 协作，不进入 B4 第二阶段继续迁移。
 
 保留在 ViewModel：
 
@@ -184,13 +185,14 @@ cd tools/android_demo
 - `viewModelScope` job、truth refresh scheduling。
 - `WaveLifecycleCommandGate` token 调用。
 - test session start/finish 的真实副作用。
-- `PendingWaveStartRequest / PendingWaveStopRequest / PendingWaveStopCompletion` 生命周期。
+- UI notice、system log、test session panel publish。
 
 新增测试：
 
 - `WaveLifecycleCommandGateTest` 继续覆盖 Stop invalidates Start、新 Start fresh token。
 - `DemoStartReadyRegressionTest` 继续覆盖 pending truth refresh 下 snapshot `start_ready=false` 不清掉已知 ready、Stop ACK fallback optimistic state、authoritative wave output。
 - `WaveControlStateReducerTest` 新增覆盖 Start pending、Stop pending、Running、Ready、Safety blocked、runtime start/stop clock、formal wave truth sync。
+- `WavePendingLifecycleStoreTest` 新增覆盖 begin start、begin stop、ensure stop idempotent、consume stop、clear start / stop。
 
 门禁：
 
@@ -350,7 +352,7 @@ cd tools/android_demo
 
 1. B2 `RawConsoleStore`：已完成。
 2. B3 `CalibrationSessionStore`：已完成。
-3. B4 `WaveControlStateReducer`：第一阶段已完成；第二阶段只在先审 pending lifecycle / formal session action 后继续。
+3. B4 `WaveControlStateReducer`：第二阶段已完成，运行页真机 smoke 通过候选；不继续迁 command send。
 4. B5 `MotionSamplingSessionStore`：已完成。
 5. B7 `DeviceConfigWriteTracker`：已完成。
 6. B8 Presentation model 收口：第一阶段已完成。
@@ -363,7 +365,7 @@ cd tools/android_demo
 - 继续扩大 B6 到 command send、exporter 或完整 event reducer。
 - 直接拆 BLE connection owner。
 - 为了降低行数而拆 UI/连接/控制/校准多个 owner。
-- 在 B6 smoke 前继续开 B4 第二阶段或连接 owner。
+- 在 B4 第二阶段 smoke 前继续开 command send、truth refresh job 或连接 owner。
 
 ## 8. 每包固定交付格式
 

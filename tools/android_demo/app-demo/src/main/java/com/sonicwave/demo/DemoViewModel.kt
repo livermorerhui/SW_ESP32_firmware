@@ -153,22 +153,6 @@ data class UiState(
     val isConnecting: Boolean = false,
 )
 
-private data class PendingWaveStartRequest(
-    val freq: Int,
-    val intensity: Int,
-    val requestedAtMs: Long,
-)
-
-private data class PendingWaveStopRequest(
-    val requestedAtMs: Long,
-)
-
-private data class PendingWaveStopCompletion(
-    val result: String,
-    val stopReason: String,
-    val stopSource: String,
-)
-
 class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private val client = SonicWaveClient(application)
     private val recorder = TelemetryRecorder(application)
@@ -185,6 +169,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     )
     private val motionSamplingStore = MotionSamplingSessionStore()
     private val deviceConfigWriteTracker = DeviceConfigWriteTracker()
+    private val wavePendingLifecycleStore = WavePendingLifecycleStore(
+        nowProvider = { System.currentTimeMillis() },
+    )
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -206,9 +193,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private var lastRawConsolePublishAtMs: Long = 0L
     private var lastTestSessionPanelPublishAtMs: Long = 0L
     private var recordingSession: RecordingSession? = null
-    private var pendingWaveStartRequest: PendingWaveStartRequest? = null
-    private var pendingWaveStopRequest: PendingWaveStopRequest? = null
-    private var pendingWaveStopCompletion: PendingWaveStopCompletion? = null
     private var lastRequestedWaveParams: Pair<Int, Int>? = null
     private var sessionCaptureSignals: SessionCaptureSignals = SessionCaptureSignals()
     private var disconnectRequested: Boolean = false
@@ -300,9 +284,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         awaitingModelWriteResult = false
         clearPendingDeviceConfigWriteState()
         pendingWriteModelType = null
-        pendingWaveStartRequest = null
-        pendingWaveStopRequest = null
-        pendingWaveStopCompletion = null
+        wavePendingLifecycleStore.clearAll()
         preferredLaserPlatformModel = PlatformModel.PLUS
         degradedStartDialogSuppressed = false
         sessionCaptureSignals = SessionCaptureSignals()
@@ -481,9 +463,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         awaitingModelWriteResult = false
         clearPendingDeviceConfigWriteState()
         pendingWriteModelType = null
-        pendingWaveStartRequest = null
-        pendingWaveStopRequest = null
-        pendingWaveStopCompletion = null
+        wavePendingLifecycleStore.clearAll()
         degradedStartDialogSuppressed = false
         finishTestSessionIfRecording(
             result = "ABNORMAL_STOP",
@@ -781,13 +761,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        pendingWaveStopRequest = null
-        pendingWaveStopCompletion = null
+        wavePendingLifecycleStore.clearAll()
         val startCommandToken = waveLifecycleCommandGate.beginStart()
-        pendingWaveStartRequest = PendingWaveStartRequest(
+        wavePendingLifecycleStore.beginStart(
             freq = freq,
             intensity = intensity,
-            requestedAtMs = System.currentTimeMillis(),
         )
         lastRequestedWaveParams = null
         _uiState.update { it.syncWaveControlFlags() }
@@ -797,8 +775,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 client.send(Command.WaveSet(freqHz = freq, intensity = intensity))
                 if (!waveLifecycleCommandGate.canContinueStart(
                         token = startCommandToken,
-                        hasPendingStart = pendingWaveStartRequest != null,
-                        hasPendingStop = pendingWaveStopRequest != null,
+                        hasPendingStart = wavePendingLifecycleStore.hasPendingStart,
+                        hasPendingStop = wavePendingLifecycleStore.hasPendingStop,
                     )
                 ) {
                     appendSystemLog("[WAVE_UI] stale start command suppressed after WAVE:SET")
@@ -808,8 +786,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             }.onSuccess {
                 if (waveLifecycleCommandGate.canContinueStart(
                         token = startCommandToken,
-                        hasPendingStart = pendingWaveStartRequest != null,
-                        hasPendingStop = pendingWaveStopRequest != null,
+                        hasPendingStart = wavePendingLifecycleStore.hasPendingStart,
+                        hasPendingStop = wavePendingLifecycleStore.hasPendingStop,
                     )
                 ) {
                     lastRequestedWaveParams = freq to intensity
@@ -823,14 +801,14 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             }.onFailure { error ->
                 if (!waveLifecycleCommandGate.canContinueStart(
                         token = startCommandToken,
-                        hasPendingStart = pendingWaveStartRequest != null,
-                        hasPendingStop = pendingWaveStopRequest != null,
+                        hasPendingStart = wavePendingLifecycleStore.hasPendingStart,
+                        hasPendingStop = wavePendingLifecycleStore.hasPendingStop,
                     )
                 ) {
                     appendSystemLog("[WAVE_UI] stale start failure ignored reason=${error.message ?: "UNKNOWN"}")
                     return@onFailure
                 }
-                pendingWaveStartRequest = null
+                wavePendingLifecycleStore.clearStart()
                 cancelPendingWaveStop("START_SEND_FAILURE")
                 _uiState.update {
                     it.copy(
@@ -848,10 +826,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     fun sendWaveStop() {
         liveWaveParamSendJob?.cancel()
         waveLifecycleCommandGate.invalidateForStop()
-        pendingWaveStartRequest = null
-        pendingWaveStopRequest = PendingWaveStopRequest(
-            requestedAtMs = System.currentTimeMillis(),
-        )
+        wavePendingLifecycleStore.beginStop()
         lastRequestedWaveParams = null
         stagePendingWaveStopCompletion(
             result = "NORMAL_STOP",
@@ -1773,9 +1748,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     awaitingModelWriteResult = false
                     clearPendingDeviceConfigWriteState()
                     pendingWriteModelType = null
-                    pendingWaveStartRequest = null
-                    pendingWaveStopRequest = null
-                    pendingWaveStopCompletion = null
+                    wavePendingLifecycleStore.clearAll()
                     lastRequestedWaveParams = null
                     liveWaveParamSendJob?.cancel()
                     waveTruthRefreshJob?.cancel()
@@ -1899,11 +1872,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             stopReason = event.stopReason,
                             stopSource = event.stopSource,
                         )
-                        if (pendingWaveStopRequest == null && _uiState.value.waveOutputActive) {
-                            pendingWaveStopRequest = PendingWaveStopRequest(
-                                requestedAtMs = System.currentTimeMillis(),
-                            )
-                        }
+                        wavePendingLifecycleStore.ensureStopRequestIf(_uiState.value.waveOutputActive)
                         cancelPendingWaveStart(
                             "EVT_STOP:${event.stopReason}:${event.stopSource}:${event.effect.name}:${event.state.name}",
                         )
@@ -1965,7 +1934,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     }.also {
                         if (event.state == DeviceState.IDLE || event.state == DeviceState.FAULT_STOP) {
                             cancelPendingWaveStart("EVT_STATE_${event.state.name}")
-                            if (pendingWaveStopCompletion == null &&
+                            if (!wavePendingLifecycleStore.hasPendingStopCompletion &&
                                 testSessionStore?.status == TestSessionStatusUi.RECORDING
                             ) {
                                 stagePendingWaveStopCompletion(
@@ -2014,14 +1983,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 stableWeightActive = if (clearsStableBaseline) false else it.stableWeightActive,
                             )).syncFormalWaveTruth().syncWaveControlFlags()
                         }
-                        if (pendingWaveStopRequest == null &&
-                            (_uiState.value.waveOutputActive ||
-                                testSessionStore?.status == TestSessionStatusUi.RECORDING)
-                        ) {
-                            pendingWaveStopRequest = PendingWaveStopRequest(
-                                requestedAtMs = System.currentTimeMillis(),
-                            )
-                        }
+                        wavePendingLifecycleStore.ensureStopRequestIf(
+                            _uiState.value.waveOutputActive ||
+                                testSessionStore?.status == TestSessionStatusUi.RECORDING,
+                        )
                         stagePendingWaveStopCompletion(
                             result = if (faultStatus.codeName == "USER_LEFT_PLATFORM") {
                                 "AUTO_STOP"
@@ -2084,14 +2049,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             cancelPendingWaveStart(
                                 "EVT_SAFETY:${event.reason}:${event.effect.name}:${event.state.name}:${event.wave.name}",
                             )
-                            if (pendingWaveStopRequest == null &&
-                                (_uiState.value.waveOutputActive ||
-                                    testSessionStore?.status == TestSessionStatusUi.RECORDING)
-                            ) {
-                                pendingWaveStopRequest = PendingWaveStopRequest(
-                                    requestedAtMs = System.currentTimeMillis(),
-                                )
-                            }
+                            wavePendingLifecycleStore.ensureStopRequestIf(
+                                _uiState.value.waveOutputActive ||
+                                    testSessionStore?.status == TestSessionStatusUi.RECORDING,
+                            )
                             stagePendingWaveStopCompletion(
                                 result = when (event.effect) {
                                     SafetyEffect.ABNORMAL_STOP -> "ABNORMAL_STOP"
@@ -2475,7 +2436,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
                     is Event.Ack -> {
                         val systemLogs = mutableListOf<String>()
-                        val acknowledgedManualStop = pendingWaveStopRequest != null &&
+                        val acknowledgedManualStop = wavePendingLifecycleStore.hasPendingStop &&
                             event.raw.equals("ACK:OK", ignoreCase = true)
                         val captureStatus = if (awaitingCalibrationCaptureResult) {
                             awaitingCalibrationCaptureResult = false
@@ -2848,8 +2809,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private fun UiState.syncWaveControlFlags(): UiState {
         return waveControlStateReducer.syncWaveControlFlags(
             state = this,
-            hasPendingStart = pendingWaveStartRequest != null,
-            hasPendingStop = pendingWaveStopRequest != null,
+            hasPendingStart = wavePendingLifecycleStore.hasPendingStart,
+            hasPendingStop = wavePendingLifecycleStore.hasPendingStop,
         )
     }
 
@@ -3036,9 +2997,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         freq: Int? = null,
         intensity: Int? = null,
     ) {
-        val pending = pendingWaveStartRequest ?: return
+        val pending = wavePendingLifecycleStore.startRequest ?: return
         if (testSessionStore?.status == TestSessionStatusUi.RECORDING) {
-            pendingWaveStartRequest = null
+            wavePendingLifecycleStore.clearStart()
             cancelPendingWaveTruthRefreshIfIdle()
             _uiState.update { it.syncWaveControlFlags() }
             return
@@ -3046,7 +3007,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
         val trackTestSessions = shouldTrackTestSessionAutomation(_uiState.value)
         if (!trackTestSessions) {
-            pendingWaveStartRequest = null
+            wavePendingLifecycleStore.clearStart()
             cancelPendingWaveTruthRefreshIfIdle()
             _uiState.update {
                 it.copy(testSessionNotice = null).syncWaveControlFlags()
@@ -3058,7 +3019,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             freq = freq ?: pending.freq,
             intensity = intensity ?: pending.intensity,
         )
-        pendingWaveStartRequest = null
+        wavePendingLifecycleStore.clearStart()
         cancelPendingWaveTruthRefreshIfIdle()
         _uiState.update {
             it.copy(
@@ -3072,8 +3033,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun cancelPendingWaveStart(source: String) {
-        val pending = pendingWaveStartRequest ?: return
-        pendingWaveStartRequest = null
+        val pending = wavePendingLifecycleStore.clearStart() ?: return
         cancelPendingWaveTruthRefreshIfIdle()
         val trackTestSessions = shouldTrackTestSessionAutomation(_uiState.value)
         _uiState.update {
@@ -3094,7 +3054,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         stopReason: String,
         stopSource: String,
     ) {
-        pendingWaveStopCompletion = PendingWaveStopCompletion(
+        wavePendingLifecycleStore.stageStopCompletion(
             result = result,
             stopReason = stopReason,
             stopSource = stopSource,
@@ -3105,10 +3065,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun confirmPendingWaveStop(source: String) {
-        val pending = pendingWaveStopRequest
-        val completion = pendingWaveStopCompletion
-        pendingWaveStopRequest = null
-        pendingWaveStopCompletion = null
+        val stopConsumption = wavePendingLifecycleStore.consumeStop()
+        val pending = stopConsumption.request
+        val completion = stopConsumption.completion
         cancelPendingWaveTruthRefreshIfIdle()
         val trackTestSessions = shouldTrackTestSessionAutomation(_uiState.value)
         _uiState.update {
@@ -3134,9 +3093,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun cancelPendingWaveStop(source: String) {
-        val pending = pendingWaveStopRequest
-        pendingWaveStopRequest = null
-        pendingWaveStopCompletion = null
+        val pending = wavePendingLifecycleStore.clearStop()
         cancelPendingWaveTruthRefreshIfIdle()
         val trackTestSessions = shouldTrackTestSessionAutomation(_uiState.value)
         _uiState.update {
@@ -3204,8 +3161,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
         if (testSessionBridge.shouldFinishForInactiveTruth(
                 session = testSessionStore,
-                hasPendingStopRequest = pendingWaveStopRequest != null,
-                hasPendingStopCompletion = pendingWaveStopCompletion != null,
+                hasPendingStopRequest = wavePendingLifecycleStore.hasPendingStop,
+                hasPendingStopCompletion = wavePendingLifecycleStore.hasPendingStopCompletion,
             )
         ) {
             ensurePendingWaveStopCompletionForInactiveTruth()
@@ -3216,7 +3173,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private fun ensurePendingWaveStopCompletionForInactiveTruth() {
         if (!testSessionBridge.shouldStageInactiveStopCompletion(
                 session = testSessionStore,
-                hasPendingStopCompletion = pendingWaveStopCompletion != null,
+                hasPendingStopCompletion = wavePendingLifecycleStore.hasPendingStopCompletion,
             )
         ) return
         val stopPlan = testSessionBridge.buildInactiveStopPlan(sessionCaptureSignals)
@@ -3228,9 +3185,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun hasPendingWaveLifecycleTruthRefresh(): Boolean {
-        return pendingWaveStartRequest != null ||
-            pendingWaveStopRequest != null ||
-            pendingWaveStopCompletion != null
+        return wavePendingLifecycleStore.hasPendingLifecycle
     }
 
     private fun currentSnapshotStartReadyMergeContext(): SnapshotStartReadyMergeContext {
