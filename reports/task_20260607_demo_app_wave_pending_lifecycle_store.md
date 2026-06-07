@@ -1,6 +1,6 @@
 # Demo APP Wave Pending Lifecycle Store
 
-状态：B4 第二阶段完成 / 运行页真机 smoke 通过候选
+状态：B4 第二阶段完成 / 运行页真机 smoke 已通过
 文档类型：阶段交付报告
 适用范围：`tools/android_demo/app-demo`
 更新时间：2026-06-07
@@ -93,6 +93,7 @@ Directory '/opt/homebrew/Cellar/openjdk@17/17.0.18/libexec/openjdk.jdk/Contents/
 - 专项 audit：`PARTIAL_PASS_EVIDENCE_GAP`
 - B4 目标证据：通过候选。ESP32 串口采到 `WAVE:START`、`WAVE:STOP`、`STOP_SUMMARY`；Android focus log 采到持续 `SNAPSHOT` 和 `EVT:STREAM`；fatal runtime evidence 为 0。
 - audit partial 原因：本次未采到完整 quality baseline 的连接实时可见、信息架构、校准 / motion sampling / device config 工具区人工 marker。它们不是 B4 `WavePendingLifecycleStore` 的运行页 Start -> Stop blocker。
+- 后续完整 quality baseline 已通过：`20260607_154532` 覆盖 UI / 信息架构 marker，`20260607_161021` 使用 PlatformIO monitor 补齐运行页 ESP32 Start -> Stop 设备闭环。
 
 ## 6. 未覆盖范围
 
@@ -103,7 +104,7 @@ Directory '/opt/homebrew/Cellar/openjdk@17/17.0.18/libexec/openjdk.jdk/Contents/
 
 ## 7. 是否需要真机
 
-已补运行页真机 smoke。B4 目标链路可作为通过候选；完整 Demo APP quality baseline 如需正式写“全量通过”，仍需另补信息架构和工具区 marker。
+已补运行页真机 smoke。B4 目标链路通过；完整 Demo APP quality baseline 已在后续 capture 中补齐，不再需要为了当前 B4 第二阶段重复同一 happy path。
 
 ## 8. 下一步建议
 

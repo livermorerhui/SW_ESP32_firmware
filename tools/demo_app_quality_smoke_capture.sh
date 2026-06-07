@@ -13,7 +13,7 @@ usage() {
 Usage:
   tools/demo_app_quality_smoke_capture.sh devices
   tools/demo_app_quality_smoke_capture.sh install [--android-serial SERIAL]
-  tools/demo_app_quality_smoke_capture.sh start [--android-serial SERIAL] [--esp32-port PORT] [--capture-profile PROFILE]
+  tools/demo_app_quality_smoke_capture.sh start [--android-serial SERIAL] [--esp32-port PORT] [--capture-profile PROFILE] [--esp32-mode MODE]
   tools/demo_app_quality_smoke_capture.sh mark --note TEXT
   tools/demo_app_quality_smoke_capture.sh stop --result pass|fail|observe --summary TEXT
   tools/demo_app_quality_smoke_capture.sh stop "SUMMARY"
@@ -96,7 +96,7 @@ start_capture() {
         capture_profile="$2"
         shift 2
         ;;
-      --android-serial|--esp32-port|--esp32-baud)
+      --android-serial|--esp32-port|--esp32-baud|--esp32-mode)
         require_option_value "$1" "${2:-}"
         forwarded+=("$1" "$2")
         shift 2
@@ -115,7 +115,7 @@ start_capture() {
     --strategy ESP32_RUNTIME
     --scenario demo_app_quality_smoke
     --backend-mode skip
-    --esp32-mode auto
+    --esp32-mode platformio
     --no-full-logcat
   )
   if ((${#forwarded[@]} > 0)); then
@@ -218,6 +218,9 @@ Install current Demo APP:
 
 Start capture:
   tools/demo_app_quality_smoke_capture.sh start
+
+Notes:
+  This wrapper defaults to PlatformIO serial monitor for ESP32 evidence, because it preserves readable ESP32 text logs more reliably than raw stty capture on the current macOS setup.
 
 If there are multiple phones or ESP32 serial ports:
   tools/demo_app_quality_smoke_capture.sh start --android-serial <phone_serial> --esp32-port <esp32_port>

@@ -1,6 +1,6 @@
 # Demo APP TestSessionBridge Stage 1
 
-状态：第一阶段完成 / B6 运行页轻量 smoke 已通过候选
+状态：第一阶段完成 / B6 运行页轻量 smoke 已通过
 文档类型：阶段交付报告
 适用范围：`tools/android_demo/app-demo`
 更新时间：2026-06-07
@@ -78,6 +78,7 @@ Directory '/opt/homebrew/Cellar/openjdk@17/17.0.18/libexec/openjdk.jdk/Contents/
 - B6 目标证据：通过候选。ESP32 串口采到 `WAVE:START`、`WAVE:STOP`、`STOP_SUMMARY`；Android focus log 采到 `SNAPSHOT` 和 `EVT:STREAM`，无 fatal runtime evidence。
 - audit partial 原因：本次未采到信息架构、连接后实时可见、校准 / motion sampling / device config 工具区的人工 marker。它们属于完整 quality baseline smoke 的覆盖缺口，不是 B6 `TestSessionBridge` 运行页 Start -> Stop blocker。
 - 采集工具修复：`tools/demo_app_quality_smoke_capture.sh stop "SUMMARY"` 现已兼容用户自然写法，等价于 `stop --result pass --summary "SUMMARY"`；`stop --help` 不再误判为 stop 失败。
+- 后续完整 quality baseline 已通过：`20260607_154532` 覆盖 UI / 信息架构 marker，`20260607_161021` 使用 PlatformIO monitor 补齐运行页 ESP32 Start -> Stop 设备闭环。
 
 ## 6. 未覆盖范围
 
@@ -88,11 +89,7 @@ Directory '/opt/homebrew/Cellar/openjdk@17/17.0.18/libexec/openjdk.jdk/Contents/
 
 ## 7. 是否需要真机
 
-已补 B6 运行页轻量 smoke。若后续要给完整 Demo APP quality baseline 写“全量通过”，还需另跑或补 marker 覆盖：
-
-- 信息架构：默认型号页、顶部 Tab 固定、内容不重复。
-- 工具区：校准入口、motion sampling、可选 device config / protection switches。
-- 人工 marker：连接后实时数据可见、Start -> Stop 体感、工具区 smoke。
+已补 B6 运行页轻量 smoke。完整 Demo APP quality baseline 已在后续 capture 中补齐，不再需要为了当前 B6 第一阶段重复同一 happy path。
 
 ## 8. 下一步建议
 

@@ -4,7 +4,7 @@
 文档类型：长期重构计划
 适用范围：`tools/android_demo/app-demo`
 更新日期：2026-06-07
-当前基线：`148789a feat(demo): simplify information architecture` + 当前工作区 B6 第一阶段重构
+当前基线：B2-B8 小 owner 重构、B10 信息架构阶段、B6 第一阶段与 B4 第二阶段均已提交；Demo APP quality baseline smoke 已通过
 
 ## 1. 本轮判型
 
@@ -51,17 +51,19 @@
 - 已完成 `MeasurementDisplayStore`，measurement display 纯状态逻辑已离开 ViewModel。
 - 已完成 `RawConsoleStore`，raw console buffer / filter / high-priority publish 纯状态逻辑已离开 ViewModel。
 - 已完成 `CalibrationSessionStore`，校准点集 / model comparison / prepared model / option sync 纯状态逻辑已离开 ViewModel。
+- 已完成 `TestSessionBridge` 第一阶段，运行页测试会话与 formal wave truth 桥接逻辑已离开 ViewModel。
+- 已完成 `WavePendingLifecycleStore`，wave start / stop pending lifecycle 已离开 ViewModel。
 - 已存在 `TelemetryRecorder`、`TestSessionManager`、`TestSessionExporter`、`MotionSamplingExporter`、`DemoMeasurementTrace`、`WaveLifecycleCommandGate`。
 - UI 已按 section 拆分，但 `CalibrationToolsSection.kt` 和 `MotionSamplingSection.kt` 仍较大。
 
 当前 ViewModel 仍承担：
 
 - 连接、扫描、capability probe、snapshot refresh。
-- `WAVE:SET / START / STOP` 发送、pending start/stop、truth refresh。
+- `WAVE:SET / START / STOP` 发送、truth refresh。
 - 校准录点入口、校准模型写入、ACK/NACK/Error 接入、写模型反馈。
 - raw flow collect、业务日志调用点、raw console publish throttle。
 - motion sampling session start/stop/row build/export 状态。
-- test session 与 formal wave truth 的桥接。
+- test session exporter IO、panel publish 与运行页副作用编排。
 - safety/fault/snapshot/event -> UI state 映射。
 
 ## 4. 总体结论
@@ -170,7 +172,7 @@ cd tools/android_demo
 
 ### B4：WaveControlStateReducer
 
-状态：第二阶段已完成，运行页真机 smoke 通过候选。第一阶段报告见 `reports/task_20260606_demo_app_wave_control_state_reducer.md`；第二阶段报告见 `reports/task_20260607_demo_app_wave_pending_lifecycle_store.md`。
+状态：第二阶段已完成，运行页真机 smoke 通过；完整 quality baseline 已通过。第一阶段报告见 `reports/task_20260606_demo_app_wave_control_state_reducer.md`；第二阶段报告见 `reports/task_20260607_demo_app_wave_pending_lifecycle_store.md`。
 
 目标：
 
@@ -238,7 +240,7 @@ cd tools/android_demo
 
 ### B6：TestSessionBridge
 
-状态：第一阶段已完成，B6 运行页轻量 smoke 通过候选。阶段报告见 `reports/task_20260607_demo_app_test_session_bridge_stage1.md`。
+状态：第一阶段已完成，B6 运行页轻量 smoke 通过；完整 quality baseline 已通过。阶段报告见 `reports/task_20260607_demo_app_test_session_bridge_stage1.md`。
 
 目标：
 
@@ -254,7 +256,7 @@ cd tools/android_demo
 
 风险：
 
-- 该包触碰运行页 Start/Stop 与 test session 绑定关系，已补 B6 运行页轻量 smoke：用户体感通过，ESP32 采到 `WAVE:START / WAVE:STOP / STOP_SUMMARY`。完整 quality baseline 仍缺信息架构和工具区人工 marker，不作为 B6 blocker。
+- 该包触碰运行页 Start/Stop 与 test session 绑定关系，已补 B6 运行页轻量 smoke：用户体感通过，ESP32 采到 `WAVE:START / WAVE:STOP / STOP_SUMMARY`。后续完整 quality baseline 已通过：`20260607_154532` 覆盖 UI / 信息架构 marker，`20260607_161021` 使用 PlatformIO monitor 补齐运行页 ESP32 Start -> Stop 设备闭环。
 - 不应继续在同一包迁移 BLE command send、完整 event reducer 或 exporter。
 
 ### B7：DeviceConfigWriteTracker
