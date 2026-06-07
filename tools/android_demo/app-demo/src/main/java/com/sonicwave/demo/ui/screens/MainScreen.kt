@@ -44,19 +44,25 @@ import com.sonicwave.demo.DemoViewModel
 import com.sonicwave.demo.PermissionState
 import com.sonicwave.demo.R
 import com.sonicwave.demo.ScanState
+import com.sonicwave.demo.TelemetryPointUi
+import com.sonicwave.demo.TestSessionPanelUiState
 import com.sonicwave.demo.UiState
 import com.sonicwave.demo.ui.components.CalibrationCommandCallbacks
 import com.sonicwave.demo.ui.components.CalibrationInputCallbacks
 import com.sonicwave.demo.ui.components.CalibrationToolsSection
 import com.sonicwave.demo.ui.components.CalibrationToolsActions
+import com.sonicwave.demo.ui.components.DeviceToolsActions
 import com.sonicwave.demo.ui.components.DeviceProfileSection
 import com.sonicwave.demo.ui.components.FallStopProtectionSection
 import com.sonicwave.demo.ui.components.MotionSamplingActions
 import com.sonicwave.demo.ui.components.MotionSamplingSection
+import com.sonicwave.demo.ui.components.RawConsoleActions
 import com.sonicwave.demo.ui.components.RawConsoleSection
 import com.sonicwave.demo.ui.components.SystemStatusSection
 import com.sonicwave.demo.ui.components.TelemetryChartSection
+import com.sonicwave.demo.ui.components.TestSessionActions
 import com.sonicwave.demo.ui.components.TestSessionSection
+import com.sonicwave.demo.ui.components.WaveControlActions
 import com.sonicwave.demo.ui.components.WaveControlBottomBar
 import com.sonicwave.transport.BleScanResult
 
@@ -64,8 +70,23 @@ import com.sonicwave.transport.BleScanResult
 @Composable
 fun MainScreen(viewModel: DemoViewModel = viewModel()) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val measurementDisplayState by viewModel.measurementDisplayState.collectAsStateWithLifecycle()
+    val testSessionPanelState by viewModel.testSessionPanelState.collectAsStateWithLifecycle()
+    val rawConsoleState by viewModel.rawConsoleState.collectAsStateWithLifecycle()
+    val deviceToolsActions = remember(viewModel) {
+        buildDeviceToolsActions(viewModel)
+    }
     val motionSamplingActions = remember(viewModel) {
         buildMotionSamplingActions(viewModel)
+    }
+    val waveControlActions = remember(viewModel) {
+        buildWaveControlActions(viewModel)
+    }
+    val testSessionActions = remember(viewModel) {
+        buildTestSessionActions(viewModel)
+    }
+    val rawConsoleActions = remember(viewModel) {
+        buildRawConsoleActions(viewModel)
     }
     var selectedTab by rememberSaveable { mutableStateOf(DemoMainTab.DEVICE) }
     var pendingCalibrationDeviceWrite by rememberSaveable {
@@ -112,14 +133,7 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
         bottomBar = {
             WaveControlBottomBar(
                 uiState = uiState,
-                onFreqInputChange = viewModel::updateFreqInput,
-                onIntensityInputChange = viewModel::updateIntensityInput,
-                onFreqInputCommit = viewModel::commitFreqInput,
-                onIntensityInputCommit = viewModel::commitIntensityInput,
-                onFreqPresetSelected = viewModel::setPresetFrequency,
-                onIntensityPresetSelected = viewModel::setPresetIntensity,
-                onStart = viewModel::sendWaveStart,
-                onStop = viewModel::sendWaveStop,
+                actions = waveControlActions,
             )
         },
     ) { padding ->
@@ -141,7 +155,7 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
             when (selectedTab) {
                 DemoMainTab.DEVICE -> DeviceToolsContent(
                     uiState = uiState,
-                    viewModel = viewModel,
+                    actions = deviceToolsActions,
                 )
 
                 DemoMainTab.CALIBRATION -> CalibrationToolsSection(
@@ -156,10 +170,15 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
 
                 DemoMainTab.RUN -> RunDashboardContent(
                     uiState = uiState,
-                    viewModel = viewModel,
+                    telemetryPoints = measurementDisplayState.telemetryPoints,
+                    testSessionPanelState = testSessionPanelState,
+                    testSessionActions = testSessionActions,
                 )
 
-                DemoMainTab.LOGS -> RawConsoleSectionHost(viewModel = viewModel)
+                DemoMainTab.LOGS -> RawConsoleSection(
+                    rawLogLines = rawConsoleState.rawLogLines,
+                    actions = rawConsoleActions,
+                )
             }
         }
     }
@@ -279,31 +298,45 @@ private fun DemoMainTabs(
 @Composable
 private fun RunDashboardContent(
     uiState: UiState,
-    viewModel: DemoViewModel,
+    telemetryPoints: List<TelemetryPointUi>,
+    testSessionPanelState: TestSessionPanelUiState,
+    testSessionActions: TestSessionActions,
 ) {
     SystemStatusSection(uiState = uiState, compact = true)
-    TelemetryChartSectionHost(
-        viewModel = viewModel,
+    TelemetryChartSection(
+        telemetryPoints = telemetryPoints,
         stableWeight = uiState.stableWeight,
         stableWeightActive = uiState.stableWeightActive,
     )
-    TestSessionSectionHost(viewModel = viewModel)
+    TestSessionSection(
+        panelState = testSessionPanelState,
+        actions = testSessionActions,
+    )
 }
 
 @Composable
 private fun DeviceToolsContent(
     uiState: UiState,
-    viewModel: DemoViewModel,
+    actions: DeviceToolsActions,
 ) {
     DeviceProfileSection(
         uiState = uiState,
-        onPlatformModelSelected = viewModel::updateSelectedPlatformModel,
-        onWriteDeviceConfig = viewModel::sendDeviceConfig,
+        onPlatformModelSelected = actions.onPlatformModelSelected,
+        onWriteDeviceConfig = actions.onWriteDeviceConfig,
     )
     FallStopProtectionSection(
         uiState = uiState,
-        onToggleEnabled = viewModel::setFallStopProtectionEnabled,
-        onToggleLeaveEnabled = viewModel::setLeaveProtectionEnabled,
+        onToggleEnabled = actions.onToggleFallStopEnabled,
+        onToggleLeaveEnabled = actions.onToggleLeaveProtectionEnabled,
+    )
+}
+
+private fun buildDeviceToolsActions(viewModel: DemoViewModel): DeviceToolsActions {
+    return DeviceToolsActions(
+        onPlatformModelSelected = viewModel::updateSelectedPlatformModel,
+        onWriteDeviceConfig = viewModel::sendDeviceConfig,
+        onToggleFallStopEnabled = viewModel::setFallStopProtectionEnabled,
+        onToggleLeaveProtectionEnabled = viewModel::setLeaveProtectionEnabled,
     )
 }
 
@@ -347,39 +380,28 @@ private fun buildMotionSamplingActions(viewModel: DemoViewModel): MotionSampling
     )
 }
 
-@Composable
-private fun TelemetryChartSectionHost(
-    viewModel: DemoViewModel,
-    stableWeight: Float?,
-    stableWeightActive: Boolean,
-) {
-    val measurementDisplayState by viewModel.measurementDisplayState.collectAsStateWithLifecycle()
-    TelemetryChartSection(
-        telemetryPoints = measurementDisplayState.telemetryPoints,
-        stableWeight = stableWeight,
-        stableWeightActive = stableWeightActive,
+private fun buildWaveControlActions(viewModel: DemoViewModel): WaveControlActions {
+    return WaveControlActions(
+        onFreqInputChange = viewModel::updateFreqInput,
+        onIntensityInputChange = viewModel::updateIntensityInput,
+        onFreqInputCommit = viewModel::commitFreqInput,
+        onIntensityInputCommit = viewModel::commitIntensityInput,
+        onFreqPresetSelected = viewModel::setPresetFrequency,
+        onIntensityPresetSelected = viewModel::setPresetIntensity,
+        onStart = viewModel::sendWaveStart,
+        onStop = viewModel::sendWaveStop,
     )
 }
 
-@Composable
-private fun TestSessionSectionHost(
-    viewModel: DemoViewModel,
-) {
-    val panelState by viewModel.testSessionPanelState.collectAsStateWithLifecycle()
-    TestSessionSection(
-        panelState = panelState,
+private fun buildTestSessionActions(viewModel: DemoViewModel): TestSessionActions {
+    return TestSessionActions(
         onClearSession = viewModel::clearTestSession,
         onExportSession = viewModel::exportTestSession,
     )
 }
 
-@Composable
-private fun RawConsoleSectionHost(
-    viewModel: DemoViewModel,
-) {
-    val rawConsoleState by viewModel.rawConsoleState.collectAsStateWithLifecycle()
-    RawConsoleSection(
-        rawLogLines = rawConsoleState.rawLogLines,
+private fun buildRawConsoleActions(viewModel: DemoViewModel): RawConsoleActions {
+    return RawConsoleActions(
         onClear = viewModel::clearRawLog,
     )
 }

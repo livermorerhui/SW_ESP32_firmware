@@ -51,8 +51,7 @@ import java.util.Locale
 @Composable
 fun TestSessionSection(
     panelState: TestSessionPanelUiState,
-    onClearSession: () -> Unit,
-    onExportSession: (TestSessionExportRequest) -> Unit,
+    actions: TestSessionActions,
     modifier: Modifier = Modifier,
 ) {
     val session = panelState.session
@@ -285,7 +284,7 @@ fun TestSessionSection(
             confirmButton = {
                 Button(
                     onClick = {
-                        onExportSession(exportRequestPreview)
+                        actions.onExportSession(exportRequestPreview)
                         showExportDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(
@@ -313,7 +312,7 @@ fun TestSessionSection(
                 TextButton(
                     onClick = {
                         showClearConfirm = false
-                        onClearSession()
+                        actions.onClearSession()
                     },
                 ) {
                     Text(stringResource(R.string.action_confirm_clear))

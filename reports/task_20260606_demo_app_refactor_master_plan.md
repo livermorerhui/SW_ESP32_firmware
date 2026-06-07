@@ -53,6 +53,7 @@
 - 已完成 `CalibrationSessionStore`，校准点集 / model comparison / prepared model / option sync 纯状态逻辑已离开 ViewModel。
 - 已完成 `TestSessionBridge` 第一阶段，运行页测试会话与 formal wave truth 桥接逻辑已离开 ViewModel。
 - 已完成 `WavePendingLifecycleStore`，wave start / stop pending lifecycle 已离开 ViewModel。
+- 已完成 `FW-OPT-019` 第二阶段，MainScreen 统一组装 device / wave / test session / raw console presentation actions。
 - 已存在 `TelemetryRecorder`、`TestSessionManager`、`TestSessionExporter`、`MotionSamplingExporter`、`DemoMeasurementTrace`、`WaveLifecycleCommandGate`。
 - UI 已按 section 拆分，但 `CalibrationToolsSection.kt` 和 `MotionSamplingSection.kt` 仍较大。
 
@@ -274,12 +275,14 @@ cd tools/android_demo
 
 ### B8：Presentation model / Compose 参数收口
 
-状态：第一阶段已完成。阶段报告见 `reports/task_20260606_demo_app_presentation_model_stage1.md`。
+状态：第二阶段已完成。第一阶段报告见 `reports/task_20260606_demo_app_presentation_model_stage1.md`；第二阶段报告见 `reports/task_20260607_demo_app_presentation_model_stage2.md`。
 
 目标：
 
 - 已对 `CalibrationToolsSection`、`MotionSamplingSection`、`MainScreen` 做 callbacks 参数分组。
 - 已引入 section-specific actions DTO：`CalibrationToolsActions` / `MotionSamplingActions`。
+- 第二阶段已扩展 `DeviceToolsActions`、`WaveControlActions`、`TestSessionActions`、`RawConsoleActions`。
+- 第二阶段已让 `DeviceToolsContent`、`RunDashboardContent`、`WaveControlBottomBar`、`TestSessionSection`、`RawConsoleSection` 消费 actions DTO，而不是直接接收 `DemoViewModel` 或散落回调。
 
 边界：
 
@@ -357,7 +360,7 @@ cd tools/android_demo
 3. B4 `WaveControlStateReducer`：第二阶段已完成，运行页真机 smoke 通过候选；不继续迁 command send。
 4. B5 `MotionSamplingSessionStore`：已完成。
 5. B7 `DeviceConfigWriteTracker`：已完成。
-6. B8 Presentation model 收口：第一阶段已完成。
+6. B8 Presentation model 收口：第二阶段已完成。
 7. B9 Demo APP quality baseline smoke：真机 smoke 已复核，当前不再阻塞。
 8. B10 Demo APP information architecture simplification：第十阶段已完成，本地验证通过，待用户看效果后补轻量 UI smoke。
 9. B6 `TestSessionBridge`：第一阶段已完成，B6 运行页轻量 smoke 通过候选。
