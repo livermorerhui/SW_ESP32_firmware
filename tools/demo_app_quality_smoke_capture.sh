@@ -16,6 +16,7 @@ Usage:
   tools/demo_app_quality_smoke_capture.sh start [--android-serial SERIAL] [--esp32-port PORT] [--capture-profile PROFILE]
   tools/demo_app_quality_smoke_capture.sh mark --note TEXT
   tools/demo_app_quality_smoke_capture.sh stop --result pass|fail|observe --summary TEXT
+  tools/demo_app_quality_smoke_capture.sh stop "SUMMARY"
   tools/demo_app_quality_smoke_capture.sh audit [CAPTURE_DIR]
   tools/demo_app_quality_smoke_capture.sh status
   tools/demo_app_quality_smoke_capture.sh reveal
@@ -123,6 +124,32 @@ start_capture() {
   exec "${command[@]}"
 }
 
+normalize_stop_args() {
+  if (($# == 0)); then
+    return 0
+  fi
+
+  case "$1" in
+    --*)
+      printf '%s\0' "$@"
+      return 0
+      ;;
+    pass|fail|observe)
+      local result="$1"
+      shift
+      printf '%s\0' --result "$result"
+      if (($# > 0)); then
+        printf '%s\0' --summary "$*"
+      fi
+      return 0
+      ;;
+    *)
+      printf '%s\0' --result pass --summary "$*"
+      return 0
+      ;;
+  esac
+}
+
 case "$COMMAND" in
   install)
     shift
@@ -134,8 +161,18 @@ case "$COMMAND" in
     ;;
   stop)
     shift
+    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+      usage
+      exit 0
+    fi
     require_capture_script
-    stop_output="$("$CAPTURE_SCRIPT" stop "$@")"
+    stop_args=()
+    if (($# > 0)); then
+      while IFS= read -r -d '' arg; do
+        stop_args+=("$arg")
+      done < <(normalize_stop_args "$@")
+    fi
+    stop_output="$("$CAPTURE_SCRIPT" stop "${stop_args[@]}")"
     printf '%s\n' "$stop_output"
     capture_dir="$(printf '%s\n' "$stop_output" | awk 'NF { line=$0 } END { print line }')"
     if [[ -z "$capture_dir" || ! -d "$capture_dir" ]]; then

@@ -1,10 +1,10 @@
 # Demo APP Refactor Master Plan
 
-状态：总审计与详细计划
+状态：总审计、详细计划与阶段进度
 文档类型：长期重构计划
 适用范围：`tools/android_demo/app-demo`
-更新日期：2026-06-06
-当前基线：`e283f25 refactor(demo): extract measurement display store` + 当前工作区 B2/B3 重构
+更新日期：2026-06-07
+当前基线：`148789a feat(demo): simplify information architecture` + 当前工作区 B6 第一阶段重构
 
 ## 1. 本轮判型
 
@@ -236,23 +236,24 @@ cd tools/android_demo
 
 ### B6：TestSessionBridge
 
-状态：中风险；建议排在 B4/B5 后。
+状态：第一阶段已完成，B6 运行页轻量 smoke 通过候选。阶段报告见 `reports/task_20260607_demo_app_test_session_bridge_stage1.md`。
 
 目标：
 
-- 把 formal wave truth 与 test session start/finish 的桥接逻辑抽成可测试 owner。
-- 管理 pending start/stop completion、sessionCaptureSignals merge、finish reason。
+- 已把 formal wave truth 与 test session start/finish 的桥接逻辑抽成 `TestSessionBridge`。
+- 已迁移 test session start、clear、export metadata mark、sample append、finish、`TEST:START` / `STOP_SUMMARY` 接入、inactive truth stop plan 和 sample build。
+- 已让 session frequency fallback、recording/finished gate 和 stop reason fallback 进入 focused tests。
 
 保留在 ViewModel：
 
-- `TestSessionManager` 可继续作为 session data owner。
-- ViewModel 继续负责日志、UI notice、publish panel。
-- 不改 exporter。
+- `client.send`、wave start/stop pending request、truth refresh job、`WaveLifecycleCommandGate` token 调用仍在 ViewModel。
+- ViewModel 继续负责日志、UI notice、publish panel、`SessionCaptureSignals` 上游 merge。
+- `TestSessionExporter` 文件 IO 和导出格式不改。
 
 风险：
 
-- 容易影响 Start/Stop 体感和 capture 结果。
-- 启动前必须复用 `WaveLifecycleCommandGateTest` 和 wave stop race capture 经验。
+- 该包触碰运行页 Start/Stop 与 test session 绑定关系，已补 B6 运行页轻量 smoke：用户体感通过，ESP32 采到 `WAVE:START / WAVE:STOP / STOP_SUMMARY`。完整 quality baseline 仍缺信息架构和工具区人工 marker，不作为 B6 blocker。
+- 不应继续在同一包迁移 BLE command send、完整 event reducer 或 exporter。
 
 ### B7：DeviceConfigWriteTracker
 
@@ -355,14 +356,14 @@ cd tools/android_demo
 6. B8 Presentation model 收口：第一阶段已完成。
 7. B9 Demo APP quality baseline smoke：真机 smoke 已复核，当前不再阻塞。
 8. B10 Demo APP information architecture simplification：第十阶段已完成，本地验证通过，待用户看效果后补轻量 UI smoke。
-9. B6 `TestSessionBridge`，只有 wave control reducer 稳定且 B9/B10 smoke 通过后再做。
+9. B6 `TestSessionBridge`：第一阶段已完成，B6 运行页轻量 smoke 通过候选。
 
 暂不建议：
 
-- 直接做 B6 或完整 event reducer。
+- 继续扩大 B6 到 command send、exporter 或完整 event reducer。
 - 直接拆 BLE connection owner。
 - 为了降低行数而拆 UI/连接/控制/校准多个 owner。
-- 在 B9 smoke 前继续开 B4 第二阶段。
+- 在 B6 smoke 前继续开 B4 第二阶段或连接 owner。
 
 ## 8. 每包固定交付格式
 

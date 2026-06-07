@@ -172,7 +172,7 @@ private data class PendingWaveStopCompletion(
 class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private val client = SonicWaveClient(application)
     private val recorder = TelemetryRecorder(application)
-    private val testSessionManager = TestSessionManager()
+    private val testSessionBridge = TestSessionBridge(nowProvider = { System.currentTimeMillis() })
     private val testSessionExporter = TestSessionExporter(application)
     private val motionSamplingExporter = MotionSamplingExporter(application)
     private val recordingMutex = Mutex()
@@ -1274,10 +1274,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearTestSession() {
-        val session = testSessionStore ?: return
-        if (session.status == TestSessionStatusUi.RECORDING) return
-        val sessionId = session.sessionId
-        testSessionStore = null
+        val clearResult = testSessionBridge.clearIfFinished(testSessionStore)
+        val sessionId = clearResult.clearedSessionId ?: return
+        testSessionStore = clearResult.session
         _uiState.update {
             it.copy(
                 testSessionNotice = text(R.string.test_session_notice_cleared),
@@ -1301,12 +1300,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             runCatching {
                 testSessionExporter.exportSession(session, request)
             }.onSuccess { result ->
-                testSessionStore = testSessionStore
-                    ?.takeIf { it.sessionId == session.sessionId }
-                    ?.copy(
-                        lastExportCsvPath = result.csvDestinationLabel,
-                        lastExportJsonPath = result.jsonDestinationLabel,
-                    )
+                testSessionStore = testSessionBridge.markExported(
+                    session = testSessionStore,
+                    expectedSessionId = session.sessionId,
+                    csvPath = result.csvDestinationLabel,
+                    jsonPath = result.jsonDestinationLabel,
+                )
                 _uiState.update {
                     it.copy(
                         testSessionNotice = text(
@@ -2792,26 +2791,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    private fun mutableTestSessionSamples(session: TestSessionUi): MutableList<TestSessionSampleUi> {
-        return session.samples as? MutableList<TestSessionSampleUi> ?: session.samples.toMutableList()
-    }
-
     private fun appendTestSessionSample(sample: TestSessionSampleUi) {
         if (!shouldTrackTestSessionAutomation(_uiState.value)) return
-        val session = testSessionStore ?: return
-        if (session.status != TestSessionStatusUi.RECORDING) return
-        val samples = mutableTestSessionSamples(session)
-        samples.add(sample)
-        testSessionStore = session.copy(
-            samples = samples,
-            summary = session.summary.copy(
-                baselineReady = (session.summary.baselineReady == true) || sample.baselineReady,
-                stableWeight = sample.stableWeight ?: session.summary.stableWeight,
-                finalMainState = sample.mainState.ifBlank { session.summary.finalMainState ?: "" },
-                finalAbnormalDurationMs = sample.abnormalDurationMs ?: session.summary.finalAbnormalDurationMs,
-                finalDangerDurationMs = sample.dangerDurationMs ?: session.summary.finalDangerDurationMs,
-                sampleCount = samples.size,
-            ),
+        testSessionStore = testSessionBridge.appendSample(
+            session = testSessionStore,
+            sample = sample,
         )
     }
 
@@ -2966,7 +2950,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             buildTestSessionSample(
                 telemetryPoint = point,
                 signals = currentSignals,
-                sessionStartMs = testSessionStore?.startedAtMs,
             )
         } else {
             null
@@ -3038,14 +3021,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         intensity: Int,
     ) {
         if (!shouldTrackTestSessionAutomation(_uiState.value)) return
-        val now = System.currentTimeMillis()
-        testSessionStore = testSessionManager.startSession(
-            nowMs = now,
-            freqHz = freq,
+        testSessionStore = testSessionBridge.startSession(
+            freq = freq,
             intensity = intensity,
             fallStopEnabled = _uiState.value.fallStopEnabled,
             signals = sessionCaptureSignals,
-        ).copy(samples = mutableListOf())
+        )
         publishTestSessionPanel(force = true)
         appendSystemLog("[TEST_SESSION] started id=${testSessionStore?.sessionId ?: "-"}")
     }
@@ -3178,10 +3159,17 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         freqHz: Float? = null,
         intensity: Int? = null,
     ) {
-        if (!shouldTrackTestSessionAutomation(_uiState.value)) return
-        if (testSessionStore?.status == TestSessionStatusUi.RECORDING) return
+        if (!testSessionBridge.shouldStartFromFormalTruth(
+                trackTestSessions = shouldTrackTestSessionAutomation(_uiState.value),
+                session = testSessionStore,
+            )
+        ) return
         startNewTestSession(
-            freq = resolveFormalSessionFrequency(freqHz),
+            freq = testSessionBridge.resolveFormalSessionFrequency(
+                freqHz = freqHz,
+                signals = sessionCaptureSignals,
+                fallbackFreq = _uiState.value.freq,
+            ),
             intensity = intensity ?: sessionCaptureSignals.intensity ?: _uiState.value.intensity,
         )
         _uiState.update {
@@ -3214,10 +3202,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        if (
-            testSessionStore?.status == TestSessionStatusUi.RECORDING ||
-            pendingWaveStopRequest != null ||
-            pendingWaveStopCompletion != null
+        if (testSessionBridge.shouldFinishForInactiveTruth(
+                session = testSessionStore,
+                hasPendingStopRequest = pendingWaveStopRequest != null,
+                hasPendingStopCompletion = pendingWaveStopCompletion != null,
+            )
         ) {
             ensurePendingWaveStopCompletionForInactiveTruth()
             confirmPendingWaveStop(source)
@@ -3225,24 +3214,17 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun ensurePendingWaveStopCompletionForInactiveTruth() {
-        if (pendingWaveStopCompletion != null || testSessionStore?.status != TestSessionStatusUi.RECORDING) return
-        val stopSource = sessionCaptureSignals.stopSource
+        if (!testSessionBridge.shouldStageInactiveStopCompletion(
+                session = testSessionStore,
+                hasPendingStopCompletion = pendingWaveStopCompletion != null,
+            )
+        ) return
+        val stopPlan = testSessionBridge.buildInactiveStopPlan(sessionCaptureSignals)
         stagePendingWaveStopCompletion(
-            result = if (stopSource == "USER_MANUAL_OTHER") {
-                "NORMAL_STOP"
-            } else {
-                "AUTO_STOP"
-            },
-            stopReason = sessionCaptureSignals.stopReason.takeUnless { it.isBlank() || it == "NONE" }
-                ?: "WAVE_OUTPUT_INACTIVE",
-            stopSource = stopSource,
+            result = stopPlan.result,
+            stopReason = stopPlan.stopReason,
+            stopSource = stopPlan.stopSource,
         )
-    }
-
-    private fun resolveFormalSessionFrequency(freqHz: Float?): Int {
-        return freqHz?.roundToInt()
-            ?: sessionCaptureSignals.freqHz?.roundToInt()
-            ?: _uiState.value.freq
     }
 
     private fun hasPendingWaveLifecycleTruthRefresh(): Boolean {
@@ -3310,24 +3292,18 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         finalAbnormalDurationMs: Long? = sessionCaptureSignals.abnormalDurationMs,
         finalDangerDurationMs: Long? = sessionCaptureSignals.dangerDurationMs,
     ) {
-        var finishedSessionId: String? = null
-        val session = testSessionStore
-        if (session?.status == TestSessionStatusUi.RECORDING) {
-            val finished = testSessionManager.finishSession(
-                session = session,
-                finishedAtMs = System.currentTimeMillis(),
-                result = result,
-                stopReason = stopReason,
-                stopSource = stopSource,
-                finalMainState = finalMainState,
-                finalAbnormalDurationMs = finalAbnormalDurationMs,
-                finalDangerDurationMs = finalDangerDurationMs,
-            )
-            finishedSessionId = finished.sessionId
-            testSessionStore = finished
-        }
+        val finishResult = testSessionBridge.finishIfRecording(
+            session = testSessionStore,
+            result = result,
+            stopReason = stopReason,
+            stopSource = stopSource,
+            finalMainState = finalMainState,
+            finalAbnormalDurationMs = finalAbnormalDurationMs,
+            finalDangerDurationMs = finalDangerDurationMs,
+        )
+        testSessionStore = finishResult.session
         publishTestSessionPanel(force = true)
-        finishedSessionId?.let { sessionId ->
+        finishResult.finishedSessionId?.let { sessionId ->
             appendSystemLog(
                 "[TEST_SESSION] finished id=$sessionId result=$result stop_reason=$stopReason stop_source=$stopSource",
             )
@@ -3354,13 +3330,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     intensityNorm = event.intensityNorm ?: sessionCaptureSignals.intensityNorm,
                     stableWeight = event.stableWeight ?: sessionCaptureSignals.stableWeight,
                 )
-                testSessionStore = testSessionStore?.let { session ->
-                    if (session.status != TestSessionStatusUi.RECORDING) {
-                        session
-                    } else {
-                        testSessionManager.applyTestStart(session, event)
-                    }
-                }
+                testSessionStore = testSessionBridge.applyTestStart(testSessionStore, event)
                 publishTestSessionPanel(force = true)
             }
 
@@ -3394,17 +3364,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
             is SessionLogEvent.StopSummary -> {
                 val trackTestSessions = shouldTrackTestSessionAutomation(_uiState.value)
-                testSessionStore = testSessionStore?.let { session ->
-                    if (!trackTestSessions || session.status == TestSessionStatusUi.RECORDING) {
-                        session
-                    } else {
-                        testSessionManager.applyStopSummary(
-                            session = session,
-                            event = event,
-                            observedAtMs = System.currentTimeMillis(),
-                        )
-                    }
-                }
+                testSessionStore = testSessionBridge.applyStopSummary(
+                    session = testSessionStore,
+                    event = event,
+                    trackTestSessions = trackTestSessions,
+                )
                 if (trackTestSessions) {
                     _uiState.update {
                         it.copy(
@@ -3439,36 +3403,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private fun buildTestSessionSample(
         telemetryPoint: TelemetryPointUi,
         signals: SessionCaptureSignals,
-        sessionStartMs: Long?,
     ): TestSessionSampleUi? {
-        val session = testSessionStore ?: return null
-        if (session.status != TestSessionStatusUi.RECORDING) return null
-        return TestSessionSampleUi(
-            measurementSeq = telemetryPoint.measurementSeq,
-            deviceTimestampMs = telemetryPoint.deviceTimestampMs,
-            timestampMs = if (sessionStartMs == null) {
-                0L
-            } else {
-                (telemetryPoint.timestampMs - sessionStartMs).coerceAtLeast(0L)
-            },
-            measurementValid = telemetryPoint.measurementValid,
-            baselineReady = signals.baselineReady,
-            stableWeight = signals.stableWeight,
-            weight = telemetryPoint.weight,
-            distance = telemetryPoint.distance,
-            ma12 = telemetryPoint.ma12,
-            ma3 = telemetryPoint.ma3,
-            ma5 = telemetryPoint.ma5,
-            mainMa12 = signals.mainMa12,
-            deviation = signals.deviation,
-            ratio = signals.ratio,
-            mainState = signals.mainState,
-            abnormalDurationMs = signals.abnormalDurationMs,
-            dangerDurationMs = signals.dangerDurationMs,
-            stopReason = signals.stopReason,
-            stopSource = signals.stopSource,
-            eventAux = signals.pendingEventAux ?: "NONE",
-            riskAdvisory = signals.riskAdvisory,
+        return testSessionBridge.buildSample(
+            session = testSessionStore,
+            telemetryPoint = telemetryPoint,
+            signals = signals,
         )
     }
 
