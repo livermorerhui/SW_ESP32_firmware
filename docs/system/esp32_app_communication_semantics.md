@@ -4,6 +4,8 @@
 
 本文是当前 ESP32 firmware 与正式 SW APP 之间的通讯语义说明。
 
+> 后续 `DEVICE_OWNED_SESSION` 的倒计时、步骤执行、方案上传和运行状态字段不在当前 wire contract 中；以 [ESP32 Autonomous Training Session Contract](./esp32_autonomous_training_session_contract.md) 为唯一目标合同，并必须通过 capability/version gate 与旧协议隔离。
+
 它回答三件事：
 
 1. ESP32 当前真实导出了哪些上行语义。
