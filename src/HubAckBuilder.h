@@ -80,6 +80,14 @@ inline String cap(
   return out;
 }
 
+inline String deviceIdentity(const String& deviceId, int version) {
+  String out;
+  out.reserve(72);
+  appendKeyValue(out, "ACK:DEVICE_ID id=", deviceId.c_str());
+  appendKeyIntValue(out, " version=", version);
+  return out;
+}
+
 inline String deviceConfig(PlatformModel platformModel, bool laserInstalled) {
   String out;
   out.reserve(80);

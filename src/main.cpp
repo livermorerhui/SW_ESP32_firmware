@@ -4,6 +4,7 @@
 #include "config/GlobalConfig.h"
 #include "core/EventBus.h"
 #include "core/CommandBus.h"
+#include "core/FirmwareDeviceIdentityProvider.h"
 #include "core/SystemStateMachine.h"
 #include "HubAckBuilder.h"
 #include "modules/wave/WaveModule.h"
@@ -88,6 +89,24 @@ public:
             PROTO_VER,
             l->platformModel(),
             l->laserInstalled());
+        return true;
+      }
+
+      case CmdType::DEVICE_IDENTITY_QUERY: {
+        String deviceId;
+        if (!FirmwareDeviceIdentityProvider::readFromEfuse(deviceId) ||
+            !FirmwareDeviceIdentityProvider::isValid(deviceId)) {
+          Serial.println("[DEVICE_IDENTITY] result=unavailable");
+          outAck = "NACK:DEVICE_ID_UNAVAILABLE";
+          return false;
+        }
+        Serial.printf(
+            "[DEVICE_IDENTITY] result=ok version=%d id_suffix=%s\n",
+            FirmwareDeviceIdentityProvider::kIdentityVersion,
+            FirmwareDeviceIdentityProvider::logSuffix(deviceId).c_str());
+        outAck = HubAckBuilder::deviceIdentity(
+            deviceId,
+            FirmwareDeviceIdentityProvider::kIdentityVersion);
         return true;
       }
 

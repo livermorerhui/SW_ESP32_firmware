@@ -276,6 +276,7 @@ MBEDTLS_SHA256_STUB = r"""
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 typedef struct {
   uint8_t bytes[32];
@@ -289,6 +290,35 @@ inline int mbedtls_sha256_finish(mbedtls_sha256_context*, uint8_t output[32]) {
   for (size_t i = 0; i < 32; ++i) output[i] = 0;
   return 0;
 }
+
+inline int mbedtls_sha256_ret(const uint8_t* input, size_t length, uint8_t output[32], int) {
+  static const uint8_t expectedInput[] = {
+    'S','W','-','F','I','R','M','W','A','R','E','-','D','E','V','I','C','E','-','I','D','-','V','1',':',
+    0x24, 0x6f, 0x28, 0x12, 0x34, 0x56,
+  };
+  static const uint8_t expectedDigest[] = {
+    0xb2,0xde,0x0c,0xaf,0xc1,0x5d,0x6c,0x4e,0x6c,0x1b,0xb7,0x0d,0xb3,0x4f,0xaf,0xaf,
+    0x6f,0x00,0xd1,0x94,0xa5,0x4e,0xc4,0xdc,0xb4,0xb5,0xc4,0x21,0x8a,0x21,0x6b,0xce,
+  };
+  if (length != sizeof(expectedInput) || std::memcmp(input, expectedInput, sizeof(expectedInput)) != 0) {
+    return -1;
+  }
+  std::memcpy(output, expectedDigest, sizeof(expectedDigest));
+  return 0;
+}
+"""
+
+
+ESP_MAC_STUB = r"""
+#pragma once
+#include <cstdint>
+#include "esp_err.h"
+
+inline esp_err_t esp_efuse_mac_get_default(uint8_t mac[6]) {
+  const uint8_t fixture[6] = {0x24, 0x6f, 0x28, 0x12, 0x34, 0x56};
+  for (int index = 0; index < 6; ++index) mac[index] = fixture[index];
+  return ESP_OK;
+}
 """
 
 
@@ -301,6 +331,7 @@ TEST_MAIN = r"""
 #include "core/ProtocolCodec.h"
 #include "GoldenFrames.h"
 #include "HubAckBuilder.h"
+#include "core/FirmwareDeviceIdentityProvider.h"
 #include "ota/FirmwareOtaManager.h"
 #include "modules/laser/BaselineEvidenceEvaluator.h"
 #include "modules/laser/CalibrationRuntime.h"
@@ -1486,6 +1517,29 @@ void test_hub_ack_builder_core_contracts() {
   expect_reason(HubAckBuilder::simpleNack("").c_str(), "NACK:");
   expect_reason(HubAckBuilder::startRejected(FaultCode::FAULT_LOCKED).c_str(), "NACK:FAULT_LOCKED");
   expect_reason(HubAckBuilder::startRejected(FaultCode::NOT_ARMED).c_str(), "NACK:NOT_ARMED");
+
+  encoded = HubAckBuilder::deviceIdentity("sw1_b2de0cafc15d6c4e6c1bb70db34fafaf", 1);
+  expect_reason(encoded.c_str(), GoldenFrames::ack_device_identity_v1);
+}
+
+void test_firmware_device_identity_contract() {
+  const uint8_t baseMac[] = {0x24, 0x6f, 0x28, 0x12, 0x34, 0x56};
+  String deviceId;
+  assert(FirmwareDeviceIdentityProvider::deriveFromBaseMac(baseMac, deviceId));
+  expect_reason(deviceId.c_str(), "sw1_b2de0cafc15d6c4e6c1bb70db34fafaf");
+  String efuseDeviceId;
+  assert(FirmwareDeviceIdentityProvider::readFromEfuse(efuseDeviceId));
+  expect_reason(efuseDeviceId.c_str(), deviceId.c_str());
+  assert(FirmwareDeviceIdentityProvider::isValid(deviceId));
+  expect_reason(FirmwareDeviceIdentityProvider::logSuffix(deviceId).c_str(), "b34fafaf");
+  assert(!FirmwareDeviceIdentityProvider::isValid("sw1_B2DE0CAFC15D6C4E6C1BB70DB34FAFAF"));
+  assert(!FirmwareDeviceIdentityProvider::isValid("24:6f:28:12:34:56"));
+
+  Command command{};
+  String error;
+  assert(ProtocolCodec::parseCommand("DEVICE:IDENTITY?", command, error));
+  assert(command.type == CmdType::DEVICE_IDENTITY_QUERY);
+  assert(!ProtocolCodec::parseCommand("DEVICE:IDENTITY? extra=1", command, error));
 }
 
 void test_hub_ack_builder_calibration_contracts() {
@@ -1663,6 +1717,7 @@ int main() {
   test_protocol_encode_stream_contract();
   test_protocol_encode_stop_and_safety_contract();
   test_hub_ack_builder_core_contracts();
+  test_firmware_device_identity_contract();
   test_hub_ack_builder_calibration_contracts();
   test_hub_ack_builder_safety_contracts();
   test_firmware_ota_begin_parser_and_data_frame();
@@ -1738,6 +1793,7 @@ def golden_frame_constants(cases: list[dict[str, object]]) -> str:
   by_id = {required_string(case, "id", 0): required_string(case, "frame", 0) for case in cases}
   required_ids = [
     "ack_cap_plus_v1",
+    "ack_device_identity_v1",
     "snapshot_slim_ready_v1",
     "snapshot_slim_fault_v1",
   ]
@@ -1771,6 +1827,7 @@ def run() -> None:
     (temp / "esp_heap_caps.h").write_text(ESP_HEAP_CAPS_STUB, encoding="utf-8")
     (temp / "esp_partition.h").write_text(ESP_PARTITION_STUB, encoding="utf-8")
     (temp / "esp_ota_ops.h").write_text(ESP_OTA_OPS_STUB, encoding="utf-8")
+    (temp / "esp_mac.h").write_text(ESP_MAC_STUB, encoding="utf-8")
     (temp / "mbedtls").mkdir()
     (temp / "mbedtls/sha256.h").write_text(MBEDTLS_SHA256_STUB, encoding="utf-8")
     (temp / "GoldenFrames.h").write_text(golden_frame_constants(golden_frames), encoding="utf-8")
@@ -1799,6 +1856,7 @@ def run() -> None:
       str(ROOT / "src/modules/laser/StopOutcomeSummaryEvaluator.cpp"),
       str(ROOT / "src/core/RuntimeProtectionPolicy.cpp"),
       str(ROOT / "src/core/SafetyActionContractEvaluator.cpp"),
+      str(ROOT / "src/core/FirmwareDeviceIdentityProvider.cpp"),
       str(ROOT / "src/ota/FirmwareRollbackConfirmation.cpp"),
       str(ROOT / "src/ota/FirmwareOtaManager.cpp"),
       "-o",
