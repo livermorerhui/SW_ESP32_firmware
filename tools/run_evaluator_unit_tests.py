@@ -236,6 +236,8 @@ ESP_OTA_OPS_STUB = r"""
 
 typedef int esp_ota_handle_t;
 
+#define ESP_ERR_OTA_ROLLBACK_FAILED (-5)
+
 typedef enum {
   ESP_OTA_IMG_UNDEFINED = 0,
   ESP_OTA_IMG_VALID = 1,
@@ -269,6 +271,9 @@ inline esp_err_t esp_ota_get_state_partition(const esp_partition_t*, esp_ota_img
   return ESP_OK;
 }
 inline esp_err_t esp_ota_mark_app_valid_cancel_rollback() { return ESP_OK; }
+inline esp_err_t esp_ota_mark_app_invalid_rollback_and_reboot() {
+  return ESP_ERR_OTA_ROLLBACK_FAILED;
+}
 """
 
 
@@ -292,19 +297,31 @@ inline int mbedtls_sha256_finish(mbedtls_sha256_context*, uint8_t output[32]) {
 }
 
 inline int mbedtls_sha256_ret(const uint8_t* input, size_t length, uint8_t output[32], int) {
-  static const uint8_t expectedInput[] = {
+  static const uint8_t identityInput[] = {
     'S','W','-','F','I','R','M','W','A','R','E','-','D','E','V','I','C','E','-','I','D','-','V','1',':',
     0x24, 0x6f, 0x28, 0x12, 0x34, 0x56,
   };
-  static const uint8_t expectedDigest[] = {
+  static const uint8_t identityDigest[] = {
     0xb2,0xde,0x0c,0xaf,0xc1,0x5d,0x6c,0x4e,0x6c,0x1b,0xb7,0x0d,0xb3,0x4f,0xaf,0xaf,
     0x6f,0x00,0xd1,0x94,0xa5,0x4e,0xc4,0xdc,0xb4,0xb5,0xc4,0x21,0x8a,0x21,0x6b,0xce,
   };
-  if (length != sizeof(expectedInput) || std::memcmp(input, expectedInput, sizeof(expectedInput)) != 0) {
-    return -1;
+  static const uint8_t tagInput[] = {
+    'S','W','-','B','L','E','-','I','D','E','N','T','I','T','Y','-','T','A','G','-','V','1',':',
+    's','w','1','_','b','2','d','e','0','c','a','f','c','1','5','d','6','c','4','e','6','c','1','b','b','7','0','d','b','3','4','f','a','f','a','f',
+  };
+  static const uint8_t tagDigest[] = {
+    0x3a,0x28,0xaf,0xa9,0x28,0x35,0x1d,0x0e,0x2f,0x35,0x3a,0x99,0x7d,0x89,0x56,0x85,
+    0x72,0x66,0x87,0x75,0xf5,0x9c,0x76,0xb2,0xd6,0xf5,0x94,0x3c,0x54,0x90,0x54,0x38,
+  };
+  if (length == sizeof(identityInput) && std::memcmp(input, identityInput, sizeof(identityInput)) == 0) {
+    std::memcpy(output, identityDigest, sizeof(identityDigest));
+    return 0;
   }
-  std::memcpy(output, expectedDigest, sizeof(expectedDigest));
-  return 0;
+  if (length == sizeof(tagInput) && std::memcmp(input, tagInput, sizeof(tagInput)) == 0) {
+    std::memcpy(output, tagDigest, sizeof(tagDigest));
+    return 0;
+  }
+  return -1;
 }
 """
 
@@ -332,6 +349,7 @@ TEST_MAIN = r"""
 #include "GoldenFrames.h"
 #include "HubAckBuilder.h"
 #include "core/FirmwareDeviceIdentityProvider.h"
+#include "transport/ble/BleIdentityTag.h"
 #include "ota/FirmwareOtaManager.h"
 #include "modules/laser/BaselineEvidenceEvaluator.h"
 #include "modules/laser/CalibrationRuntime.h"
@@ -1542,6 +1560,24 @@ void test_firmware_device_identity_contract() {
   assert(!ProtocolCodec::parseCommand("DEVICE:IDENTITY? extra=1", command, error));
 }
 
+void test_ble_identity_tag_contract() {
+  uint8_t payload[BleIdentityTag::kPayloadBytes]{};
+  assert(BleIdentityTag::build(
+      "sw1_b2de0cafc15d6c4e6c1bb70db34fafaf", "BASE", payload));
+  assert(payload[0] == 1);
+  assert(payload[1] == 1);
+  const uint8_t expectedTag[BleIdentityTag::kTagBytes] = {
+      0x3a, 0x28, 0xaf, 0xa9, 0x28, 0x35, 0x1d, 0x0e};
+  assert(std::memcmp(payload + 2, expectedTag, sizeof(expectedTag)) == 0);
+  assert(BleIdentityTag::isValidPayload(payload, sizeof(payload)));
+  const std::string serviceData = BleIdentityTag::serviceData(payload);
+  assert(serviceData.size() == BleIdentityTag::kPayloadBytes);
+  assert(std::memcmp(serviceData.data(), payload, sizeof(payload)) == 0);
+  assert(BleIdentityTag::modelCodeForName("plus") == 2);
+  assert(BleIdentityTag::modelCodeForName("unknown") == 0);
+  assert(BleIdentityTag::kServiceDataAdBytes <= BleIdentityTag::kLegacyBlePayloadLimit);
+}
+
 void test_hub_ack_builder_calibration_contracts() {
   String encoded = HubAckBuilder::calibrationPoint(
       3,
@@ -1718,6 +1754,7 @@ int main() {
   test_protocol_encode_stop_and_safety_contract();
   test_hub_ack_builder_core_contracts();
   test_firmware_device_identity_contract();
+  test_ble_identity_tag_contract();
   test_hub_ack_builder_calibration_contracts();
   test_hub_ack_builder_safety_contracts();
   test_firmware_ota_begin_parser_and_data_frame();
@@ -1857,6 +1894,7 @@ def run() -> None:
       str(ROOT / "src/core/RuntimeProtectionPolicy.cpp"),
       str(ROOT / "src/core/SafetyActionContractEvaluator.cpp"),
       str(ROOT / "src/core/FirmwareDeviceIdentityProvider.cpp"),
+      str(ROOT / "src/transport/ble/BleIdentityTag.cpp"),
       str(ROOT / "src/ota/FirmwareRollbackConfirmation.cpp"),
       str(ROOT / "src/ota/FirmwareOtaManager.cpp"),
       "-o",
