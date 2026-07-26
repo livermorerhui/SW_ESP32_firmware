@@ -378,9 +378,12 @@ void setup() {
 #endif
   );
 
-  // Init order: state machine -> modules -> startup measurement gate -> BLE transport.
+  // Rollback confirmation must precede sensor readiness; transient external
+  // sensor state must not decide whether a new app is bootable.
+  // Init order: state machine -> rollback confirmation -> modules -> startup measurement gate -> BLE transport.
   // EventBus is connected to BLE only after BLE queues are initialized; startup samples are recovered by SNAPSHOT.
   g_fsm.begin(&g_eventBus, &g_wave);
+  FirmwareRollbackConfirmation::confirmIfPending();
 
   g_wave.begin(&g_eventBus);
   g_laser.begin(&g_eventBus, &g_fsm, &g_wave);
@@ -390,7 +393,6 @@ void setup() {
   g_ble.setDisconnectSink(&g_handler);
   g_ble.setPlatformSnapshotOwner(&g_fsm);
   waitForMeasurementStartupResolved();
-  FirmwareRollbackConfirmation::confirmIfPending();
   g_bleDeviceName = buildBleDeviceName(g_laser.platformModel());
   g_ble.begin(&g_cmdBus,
       g_bleDeviceName.c_str(),

@@ -5,6 +5,8 @@
 
 namespace {
 
+constexpr size_t kMinimumStartupFreeHeapBytes = 32U * 1024U;
+
 struct RollbackEvidence {
   bool hasEvidence = false;
   String event;
@@ -33,14 +35,48 @@ void setEvidence(const String& event, const String& result, const String& reason
   slot.freeHeap = freeHeap;
 }
 
+void requestRollbackOrRecovery(const esp_partition_t* running, const char* reason) {
+  setEvidence("rollback", "requested", reason ? reason : "unknown", running);
+  Serial.printf(
+      "[OTA_ROLLBACK] event=rollback result=requested reason=%s partition=%s\n",
+      reason ? reason : "unknown",
+      running ? running->label : "unknown");
+
+  const esp_err_t rollbackErr = esp_ota_mark_app_invalid_rollback_and_reboot();
+  if (rollbackErr == ESP_ERR_OTA_ROLLBACK_FAILED) {
+    setEvidence("recovery", "required", "no_valid_fallback", running);
+    Serial.println(
+        "[OTA_ROLLBACK] event=recovery result=required reason=no_valid_fallback code=USB_RECOVERY_REQUIRED");
+    return;
+  }
+  if (rollbackErr != ESP_OK) {
+    setEvidence("recovery", "required", "rollback_reboot_failed", running);
+    Serial.printf(
+        "[OTA_ROLLBACK] event=recovery result=required reason=rollback_reboot_failed err=%d code=USB_RECOVERY_REQUIRED\n",
+        static_cast<int>(rollbackErr));
+    return;
+  }
+
+  // The ESP-IDF API normally reboots before returning. Keep a diagnostic if a
+  // platform variant returns successfully so the evidence is still explicit.
+  setEvidence("rollback", "reboot_requested", reason ? reason : "unknown", running);
+  Serial.println("[OTA_ROLLBACK] event=rollback result=reboot_requested");
+}
+
 bool startupSelfCheckPasses(const esp_partition_t* running) {
   if (!running) {
     setEvidence("self_check", "failure", "running_partition_unavailable", running);
     Serial.println("[OTA_ROLLBACK] event=self_check result=failure reason=running_partition_unavailable");
     return false;
   }
+#if defined(SW_OTA_ROLLBACK_TEST_INJECT_SELF_CHECK_FAILURE)
+  setEvidence("self_check", "failure", "test_injected", running);
+  Serial.println(
+      "[OTA_ROLLBACK] event=self_check result=failure reason=test_injected code=TEST_ONLY_ROLLBACK_FAILURE");
+  return false;
+#endif
   const size_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-  if (freeHeap < 32U * 1024U) {
+  if (freeHeap < kMinimumStartupFreeHeapBytes) {
     setEvidence("self_check", "failure", "low_heap", running, static_cast<uint32_t>(freeHeap));
     Serial.printf("[OTA_ROLLBACK] event=self_check result=failure reason=low_heap free_heap=%u partition=%s\n",
         static_cast<unsigned>(freeHeap),
@@ -126,7 +162,9 @@ void FirmwareRollbackConfirmation::confirmIfPending() {
 
   if (!startupSelfCheckPasses(running)) {
     setEvidence("mark_valid", "skipped", "self_check_failed", running);
-    Serial.println("[OTA_ROLLBACK] event=mark_valid result=skipped reason=self_check_failed code=ROLLBACK_CONFIRM_FAILED");
+    Serial.println(
+        "[OTA_ROLLBACK] event=mark_valid result=skipped reason=self_check_failed code=ROLLBACK_CONFIRM_FAILED");
+    requestRollbackOrRecovery(running, "self_check_failed");
     return;
   }
 
@@ -137,5 +175,6 @@ void FirmwareRollbackConfirmation::confirmIfPending() {
   } else {
     setEvidence("mark_valid", "failure", "mark_valid_failed", running);
     Serial.printf("[OTA_ROLLBACK] event=mark_valid result=failure err=%d\n", static_cast<int>(markErr));
+    requestRollbackOrRecovery(running, "mark_valid_failed");
   }
 }

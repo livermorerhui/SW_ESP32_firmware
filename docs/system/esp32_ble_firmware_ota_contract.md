@@ -337,6 +337,15 @@ Minimum validation before release:
 ## v2 Hardening
 
 - Optional write-without-response transfer window with `ota_window_ack`; v1 remains the default fallback.
-- Rollback confirmation: new firmware marks itself valid only after startup self-check has completed; boot logs must include `[OTA_ROLLBACK] event=self_check ...` and either `mark_valid result=success`, `mark_valid result=skipped`, or `skip reason=not_pending`.
+- Rollback confirmation: new firmware marks itself valid only after the minimal startup self-check has completed; this check runs before measurement-sensor readiness and does not depend on BLE or transient external sensor state. Boot logs must include `[OTA_ROLLBACK] event=self_check ...` and either `mark_valid result=success`, `rollback result=requested`, `recovery result=required`, or `skip reason=not_pending`.
+- If the self-check or `mark_valid` fails, the owner calls `esp_ota_mark_app_invalid_rollback_and_reboot()`. If no other valid app is available, the device emits `code=USB_RECOVERY_REQUIRED` and must be recovered through the USB baseline path; it must not loop through BLE OTA.
 - Signed manifest verification.
 - Backend manifest distribution / gray release.
+
+Bootchain maintenance boundary:
+
+- The APP/BLE release path writes only the inactive application partition and
+  never replaces the Bootloader, partition table, or `otadata` initializer.
+- A USB `usb_bootchain_baseline` package is a separate maintenance asset with
+  its own manifest, fixed flash layout, hashes, and explicit write confirmation;
+  it must never be uploaded as a backend OTA release or sent through BLE.
