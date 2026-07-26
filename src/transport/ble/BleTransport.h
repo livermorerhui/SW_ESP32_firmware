@@ -13,6 +13,7 @@
 #include "core/CommandBus.h"
 #include "core/ProtocolCodec.h"
 #include "ota/FirmwareOtaManager.h"
+#include "transport/ble/BleIdentityTag.h"
 
 class BleDisconnectSink {
 public:
@@ -190,6 +191,7 @@ private:
   bool tryHandleDirectQuery(const String& s);
   bool businessCommandBlockedByOta(const String& s) const;
   void applyAdvertisingPowerProfile() const;
+  void refreshIdentityTag(const char* modelName);
   void setAdvertisingProfile(AdvertisingProfile profile, bool restartIfNeeded);
   void maybeRelaxAdvertisingProfile(uint32_t nowMs);
   TickType_t controlTaskIdleWaitTicks() const;
@@ -282,6 +284,8 @@ private:
   uint32_t advertisingProfileStartedAtMs = 0;
   std::string advertisedDeviceName;
   std::string advertisedModelName;
+  uint8_t identityTagPayload[BleIdentityTag::kPayloadBytes]{};
+  bool identityTagAvailable = false;
   bool advertisingActive = false;
   uint32_t advertisingStartRequests = 0;
   uint32_t advertisingStopRequests = 0;

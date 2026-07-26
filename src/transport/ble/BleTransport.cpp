@@ -1,4 +1,5 @@
 #include "BleTransport.h"
+#include "core/FirmwareDeviceIdentityProvider.h"
 #include "core/FirmwareLogPolicy.h"
 #include "core/LogMarkers.h"
 #include "core/SystemStateMachine.h"
@@ -343,6 +344,7 @@ void BleTransport::begin(CommandBus* cb, const char* deviceName, const char* adv
       (advertisedModel != nullptr && advertisedModel[0] != '\0') ? advertisedModel : nullptr;
   advertisedDeviceName = resolvedDeviceName;
   advertisedModelName = resolvedAdvertisedModel ? resolvedAdvertisedModel : "";
+  refreshIdentityTag(advertisedModelName.c_str());
   BLEDevice::init(resolvedDeviceName);
   BLEDevice::setCustomGapHandler(BleTransport::gapEventThunk);
   BLEDevice::setPower(kBleDefaultTxPowerLevel);
@@ -405,6 +407,7 @@ void BleTransport::updateAdvertisingIdentity(const char* deviceName, const char*
   advertisedDeviceName = resolvedDeviceName;
   advertisedModelName =
       (advertisedModel != nullptr && advertisedModel[0] != '\0') ? advertisedModel : "";
+  refreshIdentityTag(advertisedModelName.c_str());
 
   configureAdvertising(
       advertisedDeviceName.c_str(),
@@ -880,13 +883,19 @@ void BleTransport::configureAdvertising(const char* deviceName, const char* adve
   advData.setCompleteServices(BLEUUID(SERVICE_UUID));
 
   BLEAdvertisementData scanRespData;
-  scanRespData.setName(deviceName ? deviceName : BLE_DEVICE_NAME);
-  String serviceData = String("proto=") + String(PROTO_VER) + ";fw=" + FW_VER;
-  if (advertisedModel != nullptr && advertisedModel[0] != '\0') {
-    serviceData += ";model=";
-    serviceData += advertisedModel;
+  if (identityTagAvailable) {
+    scanRespData.setServiceData(
+        BLEUUID(SERVICE_UUID),
+        BleIdentityTag::serviceData(identityTagPayload));
+  } else {
+    scanRespData.setName(deviceName ? deviceName : BLE_DEVICE_NAME);
+    String serviceData = String("proto=") + String(PROTO_VER) + ";fw=" + FW_VER;
+    if (advertisedModel != nullptr && advertisedModel[0] != '\0') {
+      serviceData += ";model=";
+      serviceData += advertisedModel;
+    }
+    scanRespData.setServiceData(BLEUUID(SERVICE_UUID), std::string(serviceData.c_str()));
   }
-  scanRespData.setServiceData(BLEUUID(SERVICE_UUID), std::string(serviceData.c_str()));
 
   adv->setAdvertisementData(advData);
   adv->setScanResponseData(scanRespData);
@@ -901,6 +910,24 @@ void BleTransport::configureAdvertising(const char* deviceName, const char* adve
   }
   adv->setMinPreferred(0x06);
   adv->setMaxPreferred(0x12);
+}
+
+void BleTransport::refreshIdentityTag(const char* modelName) {
+  String deviceId;
+  identityTagAvailable =
+      FirmwareDeviceIdentityProvider::readFromEfuse(deviceId) &&
+      FirmwareDeviceIdentityProvider::isValid(deviceId) &&
+      BleIdentityTag::build(deviceId.c_str(), modelName, identityTagPayload);
+  if (!identityTagAvailable) {
+    Serial.println("[BLE_IDENTITY_TAG] state=unavailable fallback=legacy_scan_response");
+    return;
+  }
+  Serial.printf(
+      "[BLE_IDENTITY_TAG] state=available version=%u model_code=%u payload_bytes=%u ad_bytes=%u\n",
+      static_cast<unsigned>(identityTagPayload[0]),
+      static_cast<unsigned>(identityTagPayload[1]),
+      static_cast<unsigned>(BleIdentityTag::kPayloadBytes),
+      static_cast<unsigned>(BleIdentityTag::kServiceDataAdBytes));
 }
 
 void BleTransport::applyAdvertisingPowerProfile() const {

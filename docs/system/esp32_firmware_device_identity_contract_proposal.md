@@ -1,6 +1,6 @@
 # ESP32 固件设备身份合同（拟议）
 
-状态：`proposed`。固件、Android、backend 的基础代码和 focused tests 已完成；尚缺真实设备 readback、数据库 migration 和 iOS 实现/联调证据，因此还不能写成已全面生效的正式 OTA 合同。
+状态：`proposed`。固件、Android、backend 的基础代码和 focused tests 已完成；尚缺真实设备 readback、数据库 migration 和 iOS 实现/联调证据，因此还不能写成已全面生效的正式 OTA 合同。2026-07-23 产品要求已扩展：仅有 iPhone/iPad 的旧固件设备也必须能完成第一次迁移；第 5 节旧的 Android-only 限制已废止，待跨仓 implementation blueprint 落地。
 
 ## 1. 目的与边界
 
@@ -103,7 +103,8 @@ firmwareIdentityVersion=1
 
 ```text
 旧固件（无 DEVICE:IDENTITY?）
--> Android 既有 legacy_ble_address OTA
+-> Android：既有 legacy_ble_address OTA
+   或 iPhone/iPad：通过旧 CAP? 的 board/version/build 精确命中 source-compatibility bootstrap OTA
 -> 身份基础固件（支持 DEVICE:IDENTITY?）
 -> Android/iOS 读取 firmware_device_id
 -> firmware_device_id 发布策略
@@ -111,10 +112,11 @@ firmwareIdentityVersion=1
 
 约束：
 
-1. iOS OTA 不负责把旧设备迁移到身份基础固件，避免在无稳定身份时绕过灰度。
-2. 迁移发布必须使用 `legacy_ble_address`，并保留 Android 真机成功链证据。
-3. 迁移完成前，`firmware_device_id` 策略遇到旧设备只给“需先完成设备身份升级”的明确结果。
-4. 旧 release record 的含义保持不变；不得把既有地址白名单静默重解释为新 ID 白名单。
+1. iPhone/iPad 旧设备的第一次迁移必须按正式 source-compatibility 合同实现：它只匹配旧 `CAP?` 回读的 board/version/build，不使用 Android MAC、`CBPeripheral.identifier`、设备名称或本地缓存 ID。
+2. source compatibility 条件必须写入并受 manifest 签名保护；该 bootstrap route 只服务一次性身份迁移包，不允许逐设备 allowlist/denylist、按设备灰度或强制升级。旧固件没有可验证设备身份时，不得假装有逐设备控制能力。
+3. Android 继续保留 `legacy_ble_address` 迁移路径；该地址白名单不得静默重解释为新 ID 白名单。
+4. 迁移成功后，Android/iPhone/iPad 都必须 readback `DEVICE:IDENTITY?`，后续发布只使用 `firmware_device_id`。
+5. iOS OTA 目前仍被冻结；本节是产品/合同要求，不代表 iOS 已实现或真机已通过。
 
 ## 6. Owner 与禁止事项
 
