@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "contract": "identity_tag_v1",
+  "algorithm": "SHA-256(UTF-8('SW-BLE-IDENTITY-TAG-V1:' + firmwareDeviceId))[0:8]",
+  "payload": "version(1) + modelCode(1) + tag(8)",
+  "vectors": [
+    {
+      "vectorId": "formal-base-efuse-fixture-v1",
+      "firmwareDeviceId": "sw1_b2de0cafc15d6c4e6c1bb70db34fafaf",
+      "modelCode": 1,
+      "modelName": "BASE",
+      "tagHex": "3A28AFA928351D0E",
+      "payloadHex": "01013A28AFA928351D0E",
+      "origin": "FirmwareDeviceIdentityProvider evaluator fixture"
+    },
+    {
+      "vectorId": "synthetic-plus-formal-fixture-v1",
+      "firmwareDeviceId": "sw1_11111111111111111111111111111111",
+      "modelCode": 2,
+      "modelName": "PLUS",
+      "tagHex": "F9531EA3D8A6E25D",
+      "payloadHex": "0102F9531EA3D8A6E25D",
+      "origin": "Synthetic formal test identity; not a physical device"
+    }
+  ]
+}

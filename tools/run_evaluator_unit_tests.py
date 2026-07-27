@@ -9,6 +9,8 @@ the evaluator sources with a tiny Arduino.h stub and runs focused assertions.
 from __future__ import annotations
 
 import json
+import hashlib
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -16,6 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 GOLDEN_FRAME_FIXTURE = ROOT / "docs/protocol/golden_frames/sonicwave_ble_frames_v1.jsonl"
+IDENTITY_TAG_VECTOR_FIXTURE = ROOT / "docs/protocol/golden_vectors/identity_tag_v1_vectors.json"
 
 
 ARDUINO_STUB = r"""
@@ -277,7 +280,7 @@ inline esp_err_t esp_ota_mark_app_invalid_rollback_and_reboot() {
 """
 
 
-MBEDTLS_SHA256_STUB = r"""
+MBEDTLS_SHA256_STUB_PREFIX = r"""
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -305,22 +308,14 @@ inline int mbedtls_sha256_ret(const uint8_t* input, size_t length, uint8_t outpu
     0xb2,0xde,0x0c,0xaf,0xc1,0x5d,0x6c,0x4e,0x6c,0x1b,0xb7,0x0d,0xb3,0x4f,0xaf,0xaf,
     0x6f,0x00,0xd1,0x94,0xa5,0x4e,0xc4,0xdc,0xb4,0xb5,0xc4,0x21,0x8a,0x21,0x6b,0xce,
   };
-  static const uint8_t tagInput[] = {
-    'S','W','-','B','L','E','-','I','D','E','N','T','I','T','Y','-','T','A','G','-','V','1',':',
-    's','w','1','_','b','2','d','e','0','c','a','f','c','1','5','d','6','c','4','e','6','c','1','b','b','7','0','d','b','3','4','f','a','f','a','f',
-  };
-  static const uint8_t tagDigest[] = {
-    0x3a,0x28,0xaf,0xa9,0x28,0x35,0x1d,0x0e,0x2f,0x35,0x3a,0x99,0x7d,0x89,0x56,0x85,
-    0x72,0x66,0x87,0x75,0xf5,0x9c,0x76,0xb2,0xd6,0xf5,0x94,0x3c,0x54,0x90,0x54,0x38,
-  };
   if (length == sizeof(identityInput) && std::memcmp(input, identityInput, sizeof(identityInput)) == 0) {
     std::memcpy(output, identityDigest, sizeof(identityDigest));
     return 0;
   }
-  if (length == sizeof(tagInput) && std::memcmp(input, tagInput, sizeof(tagInput)) == 0) {
-    std::memcpy(output, tagDigest, sizeof(tagDigest));
-    return 0;
-  }
+"""
+
+
+MBEDTLS_SHA256_STUB_SUFFIX = r"""
   return -1;
 }
 """
@@ -347,6 +342,7 @@ TEST_MAIN = r"""
 
 #include "core/ProtocolCodec.h"
 #include "GoldenFrames.h"
+#include "IdentityTagVectors.h"
 #include "HubAckBuilder.h"
 #include "core/FirmwareDeviceIdentityProvider.h"
 #include "transport/ble/BleIdentityTag.h"
@@ -1561,18 +1557,18 @@ void test_firmware_device_identity_contract() {
 }
 
 void test_ble_identity_tag_contract() {
-  uint8_t payload[BleIdentityTag::kPayloadBytes]{};
-  assert(BleIdentityTag::build(
-      "sw1_b2de0cafc15d6c4e6c1bb70db34fafaf", "BASE", payload));
-  assert(payload[0] == 1);
-  assert(payload[1] == 1);
-  const uint8_t expectedTag[BleIdentityTag::kTagBytes] = {
-      0x3a, 0x28, 0xaf, 0xa9, 0x28, 0x35, 0x1d, 0x0e};
-  assert(std::memcmp(payload + 2, expectedTag, sizeof(expectedTag)) == 0);
-  assert(BleIdentityTag::isValidPayload(payload, sizeof(payload)));
-  const std::string serviceData = BleIdentityTag::serviceData(payload);
-  assert(serviceData.size() == BleIdentityTag::kPayloadBytes);
-  assert(std::memcmp(serviceData.data(), payload, sizeof(payload)) == 0);
+  for (size_t index = 0; index < IdentityTagVectors::kCount; ++index) {
+    const auto& vector = IdentityTagVectors::kVectors[index];
+    uint8_t payload[BleIdentityTag::kPayloadBytes]{};
+    assert(BleIdentityTag::build(vector.firmwareDeviceId, vector.modelName, payload));
+    assert(payload[0] == BleIdentityTag::kVersion);
+    assert(payload[1] == vector.modelCode);
+    assert(std::memcmp(payload, vector.payload, sizeof(payload)) == 0);
+    assert(BleIdentityTag::isValidPayload(payload, sizeof(payload)));
+    const std::string serviceData = BleIdentityTag::serviceData(payload);
+    assert(serviceData.size() == BleIdentityTag::kPayloadBytes);
+    assert(std::memcmp(serviceData.data(), payload, sizeof(payload)) == 0);
+  }
   assert(BleIdentityTag::modelCodeForName("plus") == 2);
   assert(BleIdentityTag::modelCodeForName("unknown") == 0);
   assert(BleIdentityTag::kServiceDataAdBytes <= BleIdentityTag::kLegacyBlePayloadLimit);
@@ -1805,6 +1801,50 @@ def load_golden_frames() -> list[dict[str, object]]:
   return cases
 
 
+def load_identity_tag_vectors() -> list[dict[str, object]]:
+  if not IDENTITY_TAG_VECTOR_FIXTURE.exists():
+    raise FileNotFoundError(f"identity tag vector fixture not found: {IDENTITY_TAG_VECTOR_FIXTURE}")
+
+  document = json.loads(IDENTITY_TAG_VECTOR_FIXTURE.read_text(encoding="utf-8"))
+  if document.get("schemaVersion") != 1 or document.get("contract") != "identity_tag_v1":
+    raise AssertionError("identity tag vector fixture has an unsupported contract")
+  vectors = document.get("vectors")
+  if not isinstance(vectors, list) or not vectors:
+    raise AssertionError("identity tag vector fixture has no vectors")
+
+  seen_ids: set[str] = set()
+  for index, vector in enumerate(vectors, start=1):
+    if not isinstance(vector, dict):
+      raise AssertionError(f"identity tag vector {index}: expected object")
+    vector_id = required_string(vector, "vectorId", index)
+    if vector_id in seen_ids:
+      raise AssertionError(f"duplicate identity tag vector id: {vector_id}")
+    seen_ids.add(vector_id)
+    firmware_device_id = required_string(vector, "firmwareDeviceId", index)
+    model_name = required_string(vector, "modelName", index)
+    model_code = required_int(vector, "modelCode", index)
+    tag_hex = required_string(vector, "tagHex", index)
+    payload_hex = required_string(vector, "payloadHex", index)
+    if not re.fullmatch(r"sw1_[a-f0-9]{32}", firmware_device_id):
+      raise AssertionError(f"{vector_id}: invalid firmwareDeviceId")
+    if not 0 <= model_code <= 255:
+      raise AssertionError(f"{vector_id}: invalid modelCode")
+    if not re.fullmatch(r"[A-F0-9]{16}", tag_hex):
+      raise AssertionError(f"{vector_id}: invalid tagHex")
+    if not re.fullmatch(r"[A-F0-9]{20}", payload_hex):
+      raise AssertionError(f"{vector_id}: invalid payloadHex")
+    if payload_hex[:2] != "01" or int(payload_hex[2:4], 16) != model_code or payload_hex[4:] != tag_hex:
+      raise AssertionError(f"{vector_id}: payload fields do not match vector metadata")
+    calculated_tag = hashlib.sha256(
+        f"SW-BLE-IDENTITY-TAG-V1:{firmware_device_id}".encode("utf-8")
+    ).hexdigest()[:16].upper()
+    if calculated_tag != tag_hex:
+      raise AssertionError(f"{vector_id}: tagHex does not match the identity tag algorithm")
+    if model_name not in {"BASE", "PLUS", "PRO", "ULTRA"}:
+      raise AssertionError(f"{vector_id}: unsupported modelName")
+  return vectors
+
+
 def required_string(case: dict[str, object], field: str, line_number: int) -> str:
   value = case.get(field)
   if not isinstance(value, str) or not value:
@@ -1850,12 +1890,72 @@ def golden_frame_constants(cases: list[dict[str, object]]) -> str:
   return "\n".join(lines)
 
 
+def identity_tag_vector_constants(vectors: list[dict[str, object]]) -> str:
+  lines = [
+    "#pragma once",
+    "",
+    "#include <cstddef>",
+    "#include <cstdint>",
+    "",
+    "namespace IdentityTagVectors {",
+    "struct Vector {",
+    "  const char* firmwareDeviceId;",
+    "  const char* modelName;",
+    "  uint8_t modelCode;",
+    "  uint8_t payload[10];",
+    "};",
+    "",
+    "constexpr Vector kVectors[] = {",
+  ]
+  for vector in vectors:
+    payload = bytes.fromhex(required_string(vector, "payloadHex", 0))
+    values = ", ".join(f"0x{value:02x}" for value in payload)
+    lines.append(
+        "  {"
+        f'"{escape_cpp_string(required_string(vector, "firmwareDeviceId", 0))}", '
+        f'"{escape_cpp_string(required_string(vector, "modelName", 0))}", '
+        f'{required_int(vector, "modelCode", 0)}, '
+        f"{{{values}}}"
+        "},"
+    )
+  lines.extend([
+    "};",
+    "constexpr size_t kCount = sizeof(kVectors) / sizeof(kVectors[0]);",
+    "}  // namespace IdentityTagVectors",
+    "",
+  ])
+  return "\n".join(lines)
+
+
+def mbedtls_sha256_stub(vectors: list[dict[str, object]]) -> str:
+  lines = [MBEDTLS_SHA256_STUB_PREFIX]
+  for index, vector in enumerate(vectors):
+    source = (
+        "SW-BLE-IDENTITY-TAG-V1:"
+        + required_string(vector, "firmwareDeviceId", index)
+    ).encode("utf-8")
+    digest = hashlib.sha256(source).digest()
+    input_values = ",".join(f"0x{value:02x}" for value in source)
+    digest_values = ",".join(f"0x{value:02x}" for value in digest)
+    lines.extend([
+      f"  static const uint8_t tagInput{index}[] = {{{input_values}}};",
+      f"  static const uint8_t tagDigest{index}[] = {{{digest_values}}};",
+      f"  if (length == sizeof(tagInput{index}) && std::memcmp(input, tagInput{index}, sizeof(tagInput{index})) == 0) {{",
+      f"    std::memcpy(output, tagDigest{index}, sizeof(tagDigest{index}));",
+      "    return 0;",
+      "  }",
+    ])
+  lines.append(MBEDTLS_SHA256_STUB_SUFFIX)
+  return "\n".join(lines)
+
+
 def escape_cpp_string(value: str) -> str:
   return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def run() -> None:
   golden_frames = load_golden_frames()
+  identity_tag_vectors = load_identity_tag_vectors()
   with tempfile.TemporaryDirectory(prefix="sw_eval_tests_") as temp_dir:
     temp = Path(temp_dir)
     (temp / "Arduino.h").write_text(ARDUINO_STUB, encoding="utf-8")
@@ -1866,8 +1966,13 @@ def run() -> None:
     (temp / "esp_ota_ops.h").write_text(ESP_OTA_OPS_STUB, encoding="utf-8")
     (temp / "esp_mac.h").write_text(ESP_MAC_STUB, encoding="utf-8")
     (temp / "mbedtls").mkdir()
-    (temp / "mbedtls/sha256.h").write_text(MBEDTLS_SHA256_STUB, encoding="utf-8")
+    (temp / "mbedtls/sha256.h").write_text(
+        mbedtls_sha256_stub(identity_tag_vectors), encoding="utf-8"
+    )
     (temp / "GoldenFrames.h").write_text(golden_frame_constants(golden_frames), encoding="utf-8")
+    (temp / "IdentityTagVectors.h").write_text(
+        identity_tag_vector_constants(identity_tag_vectors), encoding="utf-8"
+    )
     main_cpp = temp / "evaluator_tests.cpp"
     main_cpp.write_text(TEST_MAIN, encoding="utf-8")
     binary = temp / "evaluator_tests"
