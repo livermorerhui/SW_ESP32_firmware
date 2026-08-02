@@ -5,6 +5,7 @@
 #include "core/EventBus.h"
 #include "core/CommandBus.h"
 #include "core/FirmwareDeviceIdentityProvider.h"
+#include "core/FirmwareSecurityVersionProvider.h"
 #include "core/SystemStateMachine.h"
 #include "HubAckBuilder.h"
 #include "modules/wave/WaveModule.h"
@@ -107,6 +108,27 @@ public:
         outAck = HubAckBuilder::deviceIdentity(
             deviceId,
             FirmwareDeviceIdentityProvider::kIdentityVersion);
+        return true;
+      }
+
+      case CmdType::DEVICE_SECURITY_QUERY: {
+        FirmwareSecurityVersionFacts facts{};
+        if (!FirmwareSecurityVersionProvider::read(facts)) {
+          Serial.println("[DEVICE_SECURITY] result=unavailable");
+          outAck = "NACK:DEVICE_SECURITY_UNAVAILABLE";
+          return false;
+        }
+        Serial.printf(
+            "[DEVICE_SECURITY] result=ok app_sv=%lu efuse_sv=%lu floor_sv=%lu app_gate=%d\n",
+            static_cast<unsigned long>(facts.appSecurityVersion),
+            static_cast<unsigned long>(facts.efuseSecurityVersion),
+            static_cast<unsigned long>(facts.currentSecurityVersion),
+            facts.appAntiRollbackGate ? 1 : 0);
+        outAck = HubAckBuilder::deviceSecurity(
+            facts.appSecurityVersion,
+            facts.efuseSecurityVersion,
+            facts.currentSecurityVersion,
+            facts.appAntiRollbackGate);
         return true;
       }
 

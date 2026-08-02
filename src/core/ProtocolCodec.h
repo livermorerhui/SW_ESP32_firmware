@@ -160,6 +160,10 @@ public:
       out.type = CmdType::DEVICE_IDENTITY_QUERY;
       return true;
     }
+    if (s.equalsIgnoreCase("DEVICE:SECURITY?")) {
+      out.type = CmdType::DEVICE_SECURITY_QUERY;
+      return true;
+    }
     if (s.startsWith("DEVICE:SET_CONFIG")) {
       out.type = CmdType::DEVICE_SET_CONFIG;
 

@@ -349,3 +349,9 @@ Bootchain maintenance boundary:
 - A USB `usb_bootchain_baseline` package is a separate maintenance asset with
   its own manifest, fixed flash layout, hashes, and explicit write confirmation;
   it must never be uploaded as a backend OTA release or sent through BLE.
+
+## Security-version readback and anti-rollback boundary
+
+- `DEVICE:SECURITY?` is read-only. Supporting firmware replies `ACK:DEVICE_SECURITY v=1 app_sv=<N> efuse_sv=<N> floor_sv=<N> app_gate=<0|1>`; `floor_sv=max(app_sv,efuse_sv)`.
+- `app_gate=1` only describes the running app's gate. It never proves the bootloader/eFuse USB baseline.
+- A release build must bind `--security-version` to generated Kconfig, the compiled image descriptor and signed manifest. `esp_ota_set_boot_partition` remains final image/eFuse enforcement.

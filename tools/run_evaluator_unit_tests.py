@@ -240,6 +240,14 @@ ESP_OTA_OPS_STUB = r"""
 typedef int esp_ota_handle_t;
 
 #define ESP_ERR_OTA_ROLLBACK_FAILED (-5)
+#define ESP_ERR_OTA_SMALL_SEC_VER (-6)
+
+typedef struct {
+  uint32_t magic_word;
+  uint32_t secure_version;
+} esp_app_desc_t;
+
+static esp_app_desc_t app_desc_stub{0, 3};
 
 typedef enum {
   ESP_OTA_IMG_UNDEFINED = 0,
@@ -256,6 +264,7 @@ static esp_partition_t update_partition_stub{"app1", 17, 0x650000, 0x640000};
 static esp_partition_t boot_partition_stub{"app0", 16, 0x10000, 0x640000};
 
 inline const esp_partition_t* esp_ota_get_running_partition() { return &running_partition_stub; }
+inline const esp_app_desc_t* esp_ota_get_app_description() { return &app_desc_stub; }
 inline const esp_partition_t* esp_ota_get_next_update_partition(const void*) { return &update_partition_stub; }
 inline const esp_partition_t* esp_ota_get_boot_partition() { return &boot_partition_stub; }
 inline esp_err_t esp_ota_begin(const esp_partition_t*, size_t, esp_ota_handle_t* handle) {
@@ -334,6 +343,13 @@ inline esp_err_t esp_efuse_mac_get_default(uint8_t mac[6]) {
 """
 
 
+ESP_EFUSE_STUB = r"""
+#pragma once
+#include <cstdint>
+inline uint32_t esp_efuse_read_secure_version() { return 2; }
+"""
+
+
 TEST_MAIN = r"""
 #include <cassert>
 #include <cstdio>
@@ -345,6 +361,7 @@ TEST_MAIN = r"""
 #include "IdentityTagVectors.h"
 #include "HubAckBuilder.h"
 #include "core/FirmwareDeviceIdentityProvider.h"
+#include "core/FirmwareSecurityVersionProvider.h"
 #include "transport/ble/BleIdentityTag.h"
 #include "ota/FirmwareOtaManager.h"
 #include "modules/laser/BaselineEvidenceEvaluator.h"
@@ -1534,6 +1551,9 @@ void test_hub_ack_builder_core_contracts() {
 
   encoded = HubAckBuilder::deviceIdentity("sw1_b2de0cafc15d6c4e6c1bb70db34fafaf", 1);
   expect_reason(encoded.c_str(), GoldenFrames::ack_device_identity_v1);
+
+  encoded = HubAckBuilder::deviceSecurity(3, 2, 3, false);
+  expect_reason(encoded.c_str(), "ACK:DEVICE_SECURITY v=1 app_sv=3 efuse_sv=2 floor_sv=3 app_gate=0");
 }
 
 void test_firmware_device_identity_contract() {
@@ -1554,6 +1574,17 @@ void test_firmware_device_identity_contract() {
   assert(ProtocolCodec::parseCommand("DEVICE:IDENTITY?", command, error));
   assert(command.type == CmdType::DEVICE_IDENTITY_QUERY);
   assert(!ProtocolCodec::parseCommand("DEVICE:IDENTITY? extra=1", command, error));
+  assert(ProtocolCodec::parseCommand("DEVICE:SECURITY?", command, error));
+  assert(command.type == CmdType::DEVICE_SECURITY_QUERY);
+  assert(!ProtocolCodec::parseCommand("DEVICE:SECURITY? extra=1", command, error));
+
+  FirmwareSecurityVersionFacts securityFacts{};
+  assert(FirmwareSecurityVersionProvider::read(securityFacts));
+  assert(securityFacts.appSecurityVersion == 3);
+  assert(securityFacts.efuseSecurityVersion == 2);
+  assert(securityFacts.currentSecurityVersion == 3);
+  assert(!securityFacts.appAntiRollbackGate);
+  expect_reason(FirmwareOtaManager::errorCodeName(FirmwareOtaError::ANTI_ROLLBACK_BLOCKED), "ANTI_ROLLBACK_BLOCKED");
 }
 
 void test_ble_identity_tag_contract() {
@@ -1965,6 +1996,7 @@ def run() -> None:
     (temp / "esp_partition.h").write_text(ESP_PARTITION_STUB, encoding="utf-8")
     (temp / "esp_ota_ops.h").write_text(ESP_OTA_OPS_STUB, encoding="utf-8")
     (temp / "esp_mac.h").write_text(ESP_MAC_STUB, encoding="utf-8")
+    (temp / "esp_efuse.h").write_text(ESP_EFUSE_STUB, encoding="utf-8")
     (temp / "mbedtls").mkdir()
     (temp / "mbedtls/sha256.h").write_text(
         mbedtls_sha256_stub(identity_tag_vectors), encoding="utf-8"
@@ -1999,6 +2031,7 @@ def run() -> None:
       str(ROOT / "src/core/RuntimeProtectionPolicy.cpp"),
       str(ROOT / "src/core/SafetyActionContractEvaluator.cpp"),
       str(ROOT / "src/core/FirmwareDeviceIdentityProvider.cpp"),
+      str(ROOT / "src/core/FirmwareSecurityVersionProvider.cpp"),
       str(ROOT / "src/transport/ble/BleIdentityTag.cpp"),
       str(ROOT / "src/ota/FirmwareRollbackConfirmation.cpp"),
       str(ROOT / "src/ota/FirmwareOtaManager.cpp"),

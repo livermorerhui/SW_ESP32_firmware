@@ -88,6 +88,21 @@ inline String deviceIdentity(const String& deviceId, int version) {
   return out;
 }
 
+inline String deviceSecurity(
+    uint32_t appSecurityVersion,
+    uint32_t efuseSecurityVersion,
+    uint32_t currentSecurityVersion,
+    bool appAntiRollbackGate) {
+  String out;
+  out.reserve(96);
+  appendKeyValue(out, "ACK:DEVICE_SECURITY v=", "1");
+  appendKeyUnsignedLongValue(out, " app_sv=", static_cast<unsigned long>(appSecurityVersion));
+  appendKeyUnsignedLongValue(out, " efuse_sv=", static_cast<unsigned long>(efuseSecurityVersion));
+  appendKeyUnsignedLongValue(out, " floor_sv=", static_cast<unsigned long>(currentSecurityVersion));
+  appendKeyIntValue(out, " app_gate=", appAntiRollbackGate ? 1 : 0);
+  return out;
+}
+
 inline String deviceConfig(PlatformModel platformModel, bool laserInstalled) {
   String out;
   out.reserve(80);

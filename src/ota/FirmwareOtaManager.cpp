@@ -226,8 +226,11 @@ FirmwareOtaError FirmwareOtaManager::handleEnd(size_t expectedSize, const String
     Serial.printf("[OTA] event=boot_partition_set result=failure err=%d target=%s\n",
         static_cast<int>(bootErr),
         updatePartition->label);
-    fail(FirmwareOtaError::BOOT_SWITCH_FAILED, "esp_ota_set_boot_partition_failed");
-    return FirmwareOtaError::BOOT_SWITCH_FAILED;
+    const FirmwareOtaError error = bootErr == ESP_ERR_OTA_SMALL_SEC_VER
+        ? FirmwareOtaError::ANTI_ROLLBACK_BLOCKED
+        : FirmwareOtaError::BOOT_SWITCH_FAILED;
+    fail(error, "esp_ota_set_boot_partition_failed");
+    return error;
   }
   bootPartition = esp_ota_get_boot_partition();
   Serial.printf("[OTA] event=boot_partition_set result=success target=%s subtype=%u addr=0x%lx\n",
@@ -562,6 +565,7 @@ const char* FirmwareOtaManager::errorCodeName(FirmwareOtaError error) {
     case FirmwareOtaError::OFFSET_MISMATCH: return "OFFSET_MISMATCH";
     case FirmwareOtaError::WRITE_FAILED: return "WRITE_FAILED";
     case FirmwareOtaError::VERIFY_FAILED: return "VERIFY_FAILED";
+    case FirmwareOtaError::ANTI_ROLLBACK_BLOCKED: return "ANTI_ROLLBACK_BLOCKED";
     case FirmwareOtaError::BOOT_SWITCH_FAILED: return "BOOT_SWITCH_FAILED";
     case FirmwareOtaError::BLE_DISCONNECTED: return "BLE_DISCONNECTED";
     case FirmwareOtaError::USER_CANCEL: return "USER_CANCEL";

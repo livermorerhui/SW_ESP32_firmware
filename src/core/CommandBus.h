@@ -5,6 +5,7 @@
 enum class CmdType : uint8_t {
   CAP_QUERY,
   DEVICE_IDENTITY_QUERY,
+  DEVICE_SECURITY_QUERY,
   DEVICE_SET_CONFIG,
   DEGRADED_START_SET,
   WAVE_SET,      // set freq/intensity (not necessarily start)
