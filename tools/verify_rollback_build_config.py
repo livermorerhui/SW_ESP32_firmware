@@ -36,6 +36,23 @@ def main() -> None:
         "-DSW_OTA_ROLLBACK_TEST_INJECT_SELF_CHECK_FAILURE=1",
         PROJECT_ROOT / "platformio.ini",
     )
+    require(platformio, "[env:esp32s3_rollback_usb_baseline]", PROJECT_ROOT / "platformio.ini")
+    require(
+        platformio,
+        "pre:tools/test_bootchain_baseline_build_flags.py",
+        PROJECT_ROOT / "platformio.ini",
+    )
+
+    baseline_script = (PROJECT_ROOT / "tools" / "test_bootchain_baseline_build_flags.py").read_text(encoding="utf-8")
+    for expected in (
+        "SW_FIRMWARE_TEST_VERSION",
+        "SW_FIRMWARE_TEST_BUILD_ID",
+        "SW_FIRMWARE_RELEASE_SECURITY_VERSION",
+        "ARDUINO_USB_CDC_ON_BOOT",
+        "CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y",
+        "# CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK is not set",
+    ):
+        require(baseline_script, expected, PROJECT_ROOT / "tools" / "test_bootchain_baseline_build_flags.py")
 
     for expected in (
         "CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y",

@@ -36,7 +36,16 @@ def run(*args: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--build-dir", type=Path, default=PROJECT_ROOT / ".pio" / "build" / "esp32s3")
+    parser.add_argument(
+        "--build-dir",
+        type=Path,
+        default=PROJECT_ROOT / ".pio" / "build" / "esp32s3_rollback_usb_baseline",
+    )
+    parser.add_argument(
+        "--sdkconfig",
+        type=Path,
+        default=PROJECT_ROOT / ".pio" / "rollback-usb-sdkconfig" / "esp32s3_rollback_usb_baseline" / "rollback-usb.sdkconfig",
+    )
     parser.add_argument("--output", type=Path, help="Write the verified build closure as JSON.")
     args = parser.parse_args()
 
@@ -58,7 +67,7 @@ def main() -> None:
         ),
         "firmware": require_file(build_dir / "firmware.bin"),
     }
-    sdkconfig = require_file(PROJECT_ROOT / "sdkconfig.esp32s3").read_text(encoding="utf-8")
+    sdkconfig = require_file(args.sdkconfig.resolve()).read_text(encoding="utf-8")
     for expected in (
         "CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y",
         "# CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK is not set",
