@@ -1,5 +1,6 @@
 #include "FirmwareOtaManager.h"
 #include "ota/FirmwareRollbackConfirmation.h"
+#include "ota/OtaDiagnosticLog.h"
 #include <ctype.h>
 
 static String escapeJson(const String& value) {
@@ -116,7 +117,7 @@ FirmwareOtaError FirmwareOtaManager::handleBegin(const FirmwareOtaBeginRequest& 
     fail(FirmwareOtaError::IMAGE_TOO_LARGE, "image_exceeds_update_partition");
     return FirmwareOtaError::IMAGE_TOO_LARGE;
   }
-  Serial.printf("[OTA] event=partition_select running=%s running_subtype=%u running_addr=0x%lx boot=%s update=%s update_subtype=%u update_addr=0x%lx update_size=%u image_size=%u\n",
+  SW_OTA_LOGF("[OTA] event=partition_select running=%s running_subtype=%u running_addr=0x%lx boot=%s update=%s update_subtype=%u update_addr=0x%lx update_size=%u image_size=%u",
       runningPartition->label,
       static_cast<unsigned>(runningPartition->subtype),
       static_cast<unsigned long>(runningPartition->address),
@@ -129,7 +130,7 @@ FirmwareOtaError FirmwareOtaManager::handleBegin(const FirmwareOtaBeginRequest& 
 
   const esp_err_t beginErr = esp_ota_begin(updatePartition, targetSize, &otaHandle);
   if (beginErr != ESP_OK) {
-    Serial.printf("[OTA] event=ota_begin_failed err=%d\n", static_cast<int>(beginErr));
+    SW_OTA_LOGF("[OTA] event=ota_begin_failed err=%d", static_cast<int>(beginErr));
     fail(FirmwareOtaError::INTERNAL_ERROR, "esp_ota_begin_failed");
     return FirmwareOtaError::INTERNAL_ERROR;
   }
@@ -137,7 +138,7 @@ FirmwareOtaError FirmwareOtaManager::handleBegin(const FirmwareOtaBeginRequest& 
   resetSha256();
 
   otaState = FirmwareOtaState::PREPARED;
-  Serial.printf("[OTA] event=begin version=%s build=%s size=%u chunk_size=%u transfer_mode=%s window_size=%u max_inflight_chunks=%u ack_interval_chunks=%u ack_policy=%s busy_policy=%s\n",
+  SW_OTA_LOGF("[OTA] event=begin version=%s build=%s size=%u chunk_size=%u transfer_mode=%s window_size=%u max_inflight_chunks=%u ack_interval_chunks=%u ack_policy=%s busy_policy=%s",
       targetVersion.c_str(),
       targetBuildId.c_str(),
       static_cast<unsigned>(targetSize),
@@ -177,7 +178,7 @@ FirmwareOtaError FirmwareOtaManager::acceptDataFrame(const FirmwareOtaDataFrame&
   }
   const esp_err_t writeErr = esp_ota_write(otaHandle, frame.payload, frame.length);
   if (writeErr != ESP_OK) {
-    Serial.printf("[OTA] event=ota_write_failed err=%d seq=%u offset=%u len=%u\n",
+    SW_OTA_LOGF("[OTA] event=ota_write_failed err=%d seq=%u offset=%u len=%u",
         static_cast<int>(writeErr),
         static_cast<unsigned>(frame.seq),
         static_cast<unsigned>(frame.offset),
@@ -217,13 +218,13 @@ FirmwareOtaError FirmwareOtaManager::handleEnd(size_t expectedSize, const String
   otaHandleActive = false;
   otaHandle = 0;
   if (endErr != ESP_OK) {
-    Serial.printf("[OTA] event=ota_end_failed err=%d\n", static_cast<int>(endErr));
+    SW_OTA_LOGF("[OTA] event=ota_end_failed err=%d", static_cast<int>(endErr));
     fail(FirmwareOtaError::VERIFY_FAILED, "esp_ota_end_failed");
     return FirmwareOtaError::VERIFY_FAILED;
   }
   const esp_err_t bootErr = esp_ota_set_boot_partition(updatePartition);
   if (bootErr != ESP_OK) {
-    Serial.printf("[OTA] event=boot_partition_set result=failure err=%d target=%s\n",
+    SW_OTA_LOGF("[OTA] event=boot_partition_set result=failure err=%d target=%s",
         static_cast<int>(bootErr),
         updatePartition->label);
     const FirmwareOtaError error = bootErr == ESP_ERR_OTA_SMALL_SEC_VER
@@ -233,13 +234,13 @@ FirmwareOtaError FirmwareOtaManager::handleEnd(size_t expectedSize, const String
     return error;
   }
   bootPartition = esp_ota_get_boot_partition();
-  Serial.printf("[OTA] event=boot_partition_set result=success target=%s subtype=%u addr=0x%lx\n",
+  SW_OTA_LOGF("[OTA] event=boot_partition_set result=success target=%s subtype=%u addr=0x%lx",
       updatePartition->label,
       static_cast<unsigned>(updatePartition->subtype),
       static_cast<unsigned long>(updatePartition->address));
 
   otaState = FirmwareOtaState::READY_TO_REBOOT;
-  Serial.printf("[OTA] event=ready_to_reboot version=%s build=%s size=%u\n",
+  SW_OTA_LOGF("[OTA] event=ready_to_reboot version=%s build=%s size=%u",
       targetVersion.c_str(),
       targetBuildId.c_str(),
       static_cast<unsigned>(targetSize));
@@ -263,7 +264,7 @@ FirmwareOtaError FirmwareOtaManager::handleReboot() {
   }
   otaState = FirmwareOtaState::REBOOTING;
   emitStateStatus();
-  Serial.println("[OTA] event=reboot_requested");
+  SW_OTA_LOGF("[OTA] event=reboot_requested");
   delay(150);
   ESP.restart();
   return FirmwareOtaError::NONE;
@@ -311,7 +312,7 @@ void FirmwareOtaManager::fail(FirmwareOtaError error, const char* detail) {
   abortUpdateIfNeeded(previousState, detail);
   lastError = error;
   otaState = FirmwareOtaState::FAILED;
-  Serial.printf("[OTA] event=error code=%s detail=%s previous_state=%s received=%u size=%u\n",
+  SW_OTA_LOGF("[OTA] event=error code=%s detail=%s previous_state=%s received=%u size=%u",
       errorCodeName(error),
       detail ? detail : "unknown",
       stateName(previousState),
@@ -331,13 +332,13 @@ void FirmwareOtaManager::abortUpdateIfNeeded(FirmwareOtaState previousState, con
   }
   if (otaHandleActive) {
     const esp_err_t abortErr = esp_ota_abort(otaHandle);
-    Serial.printf("[OTA] event=esp_ota_abort result=%s err=%d\n",
+    SW_OTA_LOGF("[OTA] event=esp_ota_abort result=%s err=%d",
         abortErr == ESP_OK ? "success" : "failure",
         static_cast<int>(abortErr));
     otaHandleActive = false;
     otaHandle = 0;
   }
-  Serial.printf("[OTA] event=abort_update reason=%s previous_state=%s received=%u size=%u\n",
+  SW_OTA_LOGF("[OTA] event=abort_update reason=%s previous_state=%s received=%u size=%u",
       detail ? detail : "unknown",
       stateName(previousState),
       static_cast<unsigned>(receivedBytes),

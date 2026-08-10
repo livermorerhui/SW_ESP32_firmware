@@ -1,6 +1,9 @@
 #include <Arduino.h>
 #include <esp_heap_caps.h>
 #include <esp_system.h>
+#if defined(SW_ESP32_ROLLBACK_USB_DIAGNOSTICS)
+#include <esp_log.h>
+#endif
 #include "config/GlobalConfig.h"
 #include "core/EventBus.h"
 #include "core/CommandBus.h"
@@ -399,6 +402,24 @@ void setup() {
       0
 #endif
   );
+#if defined(SW_ESP32_ROLLBACK_USB_DIAGNOSTICS)
+  ESP_LOGI(
+      "BOOT_DIAG",
+      "[BOOT_DIAG] fw=%s proto=%d reset_reason=%s(%d) heap_free=%u heap_min_free=%u psram_free=%u board=sonicwave_esp32s3_n16r8 psram_enabled=%d",
+      FW_VER,
+      PROTO_VER,
+      resetReasonName(resetReason),
+      static_cast<int>(resetReason),
+      static_cast<unsigned>(ESP.getFreeHeap()),
+      static_cast<unsigned>(esp_get_minimum_free_heap_size()),
+      static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
+#ifdef BOARD_HAS_PSRAM
+      1
+#else
+      0
+#endif
+  );
+#endif
 
   // Rollback confirmation must precede sensor readiness; transient external
   // sensor state must not decide whether a new app is bootable.
@@ -422,6 +443,9 @@ void setup() {
   g_eventBus.setSink(&g_ble);
 
   Serial.println("Ready ✅");
+#if defined(SW_ESP32_ROLLBACK_USB_DIAGNOSTICS)
+  ESP_LOGI("BOOT_DIAG", "Ready");
+#endif
   Serial.println("Try: CAP?");
   Serial.println("Try: WAVE:SET f=40,i=80");
   Serial.println("Try: WAVE:START");

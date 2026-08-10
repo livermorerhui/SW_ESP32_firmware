@@ -880,14 +880,20 @@ void BleTransport::configureAdvertising(const char* deviceName, const char* adve
 
   BLEAdvertisementData advData;
   advData.setFlags(0x06);
-  advData.setCompleteServices(BLEUUID(SERVICE_UUID));
 
   BLEAdvertisementData scanRespData;
   if (identityTagAvailable) {
-    scanRespData.setServiceData(
+    // The tagged payload occupies the complete 31-byte legacy primary frame:
+    // flags (3) + 128-bit service data (28). Keeping it out of Scan Response
+    // makes candidate identity available before a central receives a response.
+    advData.setServiceData(
         BLEUUID(SERVICE_UUID),
         BleIdentityTag::serviceData(identityTagPayload));
+    scanRespData.setName(deviceName ? deviceName : BLE_DEVICE_NAME);
   } else {
+    // Old firmware has no stable advertised identity. Preserve its original
+    // service-list plus text Scan Response contract for session-local discovery.
+    advData.setCompleteServices(BLEUUID(SERVICE_UUID));
     scanRespData.setName(deviceName ? deviceName : BLE_DEVICE_NAME);
     String serviceData = String("proto=") + String(PROTO_VER) + ";fw=" + FW_VER;
     if (advertisedModel != nullptr && advertisedModel[0] != '\0') {
@@ -899,7 +905,6 @@ void BleTransport::configureAdvertising(const char* deviceName, const char* adve
 
   adv->setAdvertisementData(advData);
   adv->setScanResponseData(scanRespData);
-  adv->addServiceUUID(SERVICE_UUID);
   adv->setScanResponse(true);
   if (advertisingProfile == AdvertisingProfile::IDLE_LOW_POWER) {
     adv->setMinInterval(kAdvIdleIntervalMinUnits);

@@ -354,4 +354,6 @@ Bootchain maintenance boundary:
 
 - `DEVICE:SECURITY?` is read-only. Supporting firmware replies `ACK:DEVICE_SECURITY v=1 app_sv=<N> efuse_sv=<N> floor_sv=<N> app_gate=<0|1>`; `floor_sv=max(app_sv,efuse_sv)`.
 - `app_gate=1` only describes the running app's gate. It never proves the bootloader/eFuse USB baseline.
-- A release build must bind `--security-version` to generated Kconfig, the compiled image descriptor and signed manifest. `esp_ota_set_boot_partition` remains final image/eFuse enforcement.
+- The signed Manifest `security_version` is an APP release-policy field. It protects the signed release decision and must not be treated as an ESP32 image descriptor or eFuse fact.
+- A compatibility release keeps application rollback enabled and `CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK` disabled. Its image secure version remains `0`; no eFuse write or hardware floor is implied.
+- A future hardware anti-rollback release is a separate, explicitly approved profile. Only that profile may bind an attested image secure version, generated Kconfig, device eFuse readback and signed Manifest policy. `esp_ota_set_boot_partition` remains final image/eFuse enforcement for that profile.

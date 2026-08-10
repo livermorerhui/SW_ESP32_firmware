@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that a release image embeds the same security version as its Kconfig input."""
+"""Verify an ESP32 compatibility OTA image never carries anti-rollback state."""
 
 from __future__ import annotations
 
@@ -9,35 +9,35 @@ import subprocess
 import sys
 from pathlib import Path
 
+from release_build_contract import ReleaseBuildContractError, validate_compatibility_sdkconfig
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--firmware-bin", required=True)
     parser.add_argument("--sdkconfig", required=True)
-    parser.add_argument("--expected-security-version", required=True, type=int)
+    parser.add_argument("--expected-version", required=True)
+    parser.add_argument("--expected-build-id", required=True)
     parser.add_argument("--esptool", required=True)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    if not 0 <= args.expected_security_version <= 16:
-        raise SystemExit("expected security version must be in 0..16")
     firmware = Path(args.firmware_bin)
     sdkconfig = Path(args.sdkconfig)
     esptool = Path(args.esptool)
     if not firmware.is_file() or not sdkconfig.is_file() or not esptool.is_file():
-        raise SystemExit("firmware, generated sdkconfig, or esptool is missing")
+        raise SystemExit("firmware, sdkconfig, or esptool is missing")
+    try:
+        validate_compatibility_sdkconfig(sdkconfig.read_text(encoding="utf-8"))
+    except ReleaseBuildContractError as error:
+        raise SystemExit(str(error)) from error
 
-    config = sdkconfig.read_text(encoding="utf-8")
-    expected = str(args.expected_security_version)
-    required = {
-        "CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK=y",
-        f"CONFIG_BOOTLOADER_APP_SECURE_VERSION={expected}",
-    }
-    missing = sorted(item for item in required if item not in config)
-    if missing:
-        raise SystemExit(f"generated sdkconfig lacks release anti-rollback inputs: {', '.join(missing)}")
+    image = firmware.read_bytes()
+    for value, label in ((args.expected_version, "version"), (args.expected_build_id, "build id")):
+        if value.encode("utf-8") not in image:
+            raise SystemExit(f"compiled firmware does not contain expected {label}: {value}")
 
     result = subprocess.run(
         [sys.executable, str(esptool), "image_info", "--version", "2", str(firmware)],
@@ -51,10 +51,12 @@ def main() -> int:
     match = re.search(r"^Secure version:\s*(\d+)\s*$", result.stdout, re.MULTILINE)
     if not match:
         raise SystemExit(f"esptool image_info did not report image secure version:\n{result.stdout}")
-    actual = int(match.group(1))
-    if actual != args.expected_security_version:
-        raise SystemExit(f"image secure version mismatch: expected={args.expected_security_version} actual={actual}")
-    print(f"[verify-security-version-build] PASS: security_version={actual}")
+    if int(match.group(1)) != 0:
+        raise SystemExit(
+            "compatibility release image secure version must be 0; "
+            f"actual={match.group(1)}"
+        )
+    print("[verify-compatibility-release-build] PASS: rollback=enabled anti_rollback=disabled secure_version=0")
     return 0
 
 

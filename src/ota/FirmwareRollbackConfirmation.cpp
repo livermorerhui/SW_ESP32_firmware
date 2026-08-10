@@ -1,4 +1,5 @@
 #include "FirmwareRollbackConfirmation.h"
+#include "ota/OtaDiagnosticLog.h"
 #include <Arduino.h>
 #include <esp_heap_caps.h>
 #include <esp_ota_ops.h>
@@ -37,7 +38,7 @@ void setEvidence(const String& event, const String& result, const String& reason
 
 void requestRollbackOrRecovery(const esp_partition_t* running, const char* reason) {
   setEvidence("rollback", "requested", reason ? reason : "unknown", running);
-  Serial.printf(
+  SW_OTA_ROLLBACK_LOGF(
       "[OTA_ROLLBACK] event=rollback result=requested reason=%s partition=%s\n",
       reason ? reason : "unknown",
       running ? running->label : "unknown");
@@ -45,13 +46,13 @@ void requestRollbackOrRecovery(const esp_partition_t* running, const char* reaso
   const esp_err_t rollbackErr = esp_ota_mark_app_invalid_rollback_and_reboot();
   if (rollbackErr == ESP_ERR_OTA_ROLLBACK_FAILED) {
     setEvidence("recovery", "required", "no_valid_fallback", running);
-    Serial.println(
+    SW_OTA_ROLLBACK_LOGF(
         "[OTA_ROLLBACK] event=recovery result=required reason=no_valid_fallback code=USB_RECOVERY_REQUIRED");
     return;
   }
   if (rollbackErr != ESP_OK) {
     setEvidence("recovery", "required", "rollback_reboot_failed", running);
-    Serial.printf(
+    SW_OTA_ROLLBACK_LOGF(
         "[OTA_ROLLBACK] event=recovery result=required reason=rollback_reboot_failed err=%d code=USB_RECOVERY_REQUIRED\n",
         static_cast<int>(rollbackErr));
     return;
@@ -60,31 +61,31 @@ void requestRollbackOrRecovery(const esp_partition_t* running, const char* reaso
   // The ESP-IDF API normally reboots before returning. Keep a diagnostic if a
   // platform variant returns successfully so the evidence is still explicit.
   setEvidence("rollback", "reboot_requested", reason ? reason : "unknown", running);
-  Serial.println("[OTA_ROLLBACK] event=rollback result=reboot_requested");
+  SW_OTA_ROLLBACK_LOGF("[OTA_ROLLBACK] event=rollback result=reboot_requested");
 }
 
 bool startupSelfCheckPasses(const esp_partition_t* running) {
   if (!running) {
     setEvidence("self_check", "failure", "running_partition_unavailable", running);
-    Serial.println("[OTA_ROLLBACK] event=self_check result=failure reason=running_partition_unavailable");
+    SW_OTA_ROLLBACK_LOGF("[OTA_ROLLBACK] event=self_check result=failure reason=running_partition_unavailable");
     return false;
   }
 #if defined(SW_OTA_ROLLBACK_TEST_INJECT_SELF_CHECK_FAILURE)
   setEvidence("self_check", "failure", "test_injected", running);
-  Serial.println(
+  SW_OTA_ROLLBACK_LOGF(
       "[OTA_ROLLBACK] event=self_check result=failure reason=test_injected code=TEST_ONLY_ROLLBACK_FAILURE");
   return false;
 #endif
   const size_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   if (freeHeap < kMinimumStartupFreeHeapBytes) {
     setEvidence("self_check", "failure", "low_heap", running, static_cast<uint32_t>(freeHeap));
-    Serial.printf("[OTA_ROLLBACK] event=self_check result=failure reason=low_heap free_heap=%u partition=%s\n",
+    SW_OTA_ROLLBACK_LOGF("[OTA_ROLLBACK] event=self_check result=failure reason=low_heap free_heap=%u partition=%s",
         static_cast<unsigned>(freeHeap),
         running->label);
     return false;
   }
   setEvidence("self_check", "pass", "", running, static_cast<uint32_t>(freeHeap));
-  Serial.printf("[OTA_ROLLBACK] event=self_check result=pass partition=%s subtype=%u addr=0x%lx free_heap=%u\n",
+  SW_OTA_ROLLBACK_LOGF("[OTA_ROLLBACK] event=self_check result=pass partition=%s subtype=%u addr=0x%lx free_heap=%u",
       running->label,
       static_cast<unsigned>(running->subtype),
       static_cast<unsigned long>(running->address),
@@ -142,7 +143,7 @@ void FirmwareRollbackConfirmation::confirmIfPending() {
   const esp_partition_t* running = esp_ota_get_running_partition();
   if (!running) {
     setEvidence("skip", "failure", "running_partition_unavailable", running);
-    Serial.println("[OTA_ROLLBACK] event=skip reason=running_partition_unavailable");
+    SW_OTA_ROLLBACK_LOGF("[OTA_ROLLBACK] event=skip reason=running_partition_unavailable");
     return;
   }
 
@@ -150,19 +151,19 @@ void FirmwareRollbackConfirmation::confirmIfPending() {
   const esp_err_t stateErr = esp_ota_get_state_partition(running, &state);
   if (stateErr != ESP_OK) {
     setEvidence("skip", "failure", "get_state_failed", running);
-    Serial.printf("[OTA_ROLLBACK] event=skip reason=get_state_failed err=%d\n", static_cast<int>(stateErr));
+    SW_OTA_ROLLBACK_LOGF("[OTA_ROLLBACK] event=skip reason=get_state_failed err=%d", static_cast<int>(stateErr));
     return;
   }
 
   if (state != ESP_OTA_IMG_PENDING_VERIFY) {
     setEvidence("skip", "not_pending", "", running);
-    Serial.printf("[OTA_ROLLBACK] event=skip reason=not_pending state=%d\n", static_cast<int>(state));
+    SW_OTA_ROLLBACK_LOGF("[OTA_ROLLBACK] event=skip reason=not_pending state=%d", static_cast<int>(state));
     return;
   }
 
   if (!startupSelfCheckPasses(running)) {
     setEvidence("mark_valid", "skipped", "self_check_failed", running);
-    Serial.println(
+    SW_OTA_ROLLBACK_LOGF(
         "[OTA_ROLLBACK] event=mark_valid result=skipped reason=self_check_failed code=ROLLBACK_CONFIRM_FAILED");
     requestRollbackOrRecovery(running, "self_check_failed");
     return;
@@ -171,10 +172,10 @@ void FirmwareRollbackConfirmation::confirmIfPending() {
   const esp_err_t markErr = esp_ota_mark_app_valid_cancel_rollback();
   if (markErr == ESP_OK) {
     setEvidence("mark_valid", "success", "", running);
-    Serial.println("[OTA_ROLLBACK] event=mark_valid result=success");
+    SW_OTA_ROLLBACK_LOGF("[OTA_ROLLBACK] event=mark_valid result=success");
   } else {
     setEvidence("mark_valid", "failure", "mark_valid_failed", running);
-    Serial.printf("[OTA_ROLLBACK] event=mark_valid result=failure err=%d\n", static_cast<int>(markErr));
+    SW_OTA_ROLLBACK_LOGF("[OTA_ROLLBACK] event=mark_valid result=failure err=%d", static_cast<int>(markErr));
     requestRollbackOrRecovery(running, "mark_valid_failed");
   }
 }

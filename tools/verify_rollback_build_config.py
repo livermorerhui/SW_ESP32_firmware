@@ -19,6 +19,7 @@ def main() -> None:
     sdkconfig = (PROJECT_ROOT / "sdkconfig.defaults").read_text(encoding="utf-8")
     root_cmake = (PROJECT_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
     app_cmake = (PROJECT_ROOT / "src" / "CMakeLists.txt").read_text(encoding="utf-8")
+    main_cpp = (PROJECT_ROOT / "src" / "main.cpp").read_text(encoding="utf-8")
 
     for expected in (
         "platform = espressif32@6.13.0",
@@ -48,11 +49,20 @@ def main() -> None:
         "SW_FIRMWARE_TEST_VERSION",
         "SW_FIRMWARE_TEST_BUILD_ID",
         "SW_FIRMWARE_RELEASE_SECURITY_VERSION",
-        "ARDUINO_USB_CDC_ON_BOOT",
+        "SW_ESP32_ROLLBACK_USB_DIAGNOSTICS",
         "CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y",
         "# CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK is not set",
     ):
         require(baseline_script, expected, PROJECT_ROOT / "tools" / "test_bootchain_baseline_build_flags.py")
+
+    for expected in (
+        "SW_ESP32_ROLLBACK_USB_DIAGNOSTICS",
+        "ARDUINO_USB_MODE=1",
+        "ARDUINO_USB_CDC_ON_BOOT=1",
+    ):
+        require(app_cmake, expected, PROJECT_ROOT / "src" / "CMakeLists.txt")
+
+    require(main_cpp, "ESP_LOGI(\"BOOT_DIAG\"", PROJECT_ROOT / "src" / "main.cpp")
 
     for expected in (
         "CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y",

@@ -53,15 +53,19 @@ generated_sdkconfig = generated_dir / "rollback-usb.sdkconfig"
 generated_sdkconfig.write_text(source_content, encoding="utf-8")
 
 env.BoardConfig().update("build.esp-idf.sdkconfig_path", str(generated_sdkconfig))
+# PlatformIO's ESP-IDF builder configures CMake components before its normal
+# SCons CPPDEFINES are applied. Export this test-only switch so src/CMakeLists
+# can add the Arduino USB Serial-JTAG mapping to the actual application
+# compile command.
+env["ENV"]["SW_ESP32_ROLLBACK_USB_DIAGNOSTICS"] = "1"
 env.Append(
     CPPDEFINES=[
-        ("ARDUINO_USB_CDC_ON_BOOT", 1),
         ("FW_VER", f'\\"{VERSION}\\"'),
         ("FW_BUILD_ID", f'\\"{BUILD_ID}\\"'),
     ]
 )
 print(
     "[rollback-usb-baseline] "
-    f"FW_VER={VERSION} FW_BUILD_ID={BUILD_ID} usb_cdc_on_boot=1 "
+    f"FW_VER={VERSION} FW_BUILD_ID={BUILD_ID} usb_serial_jtag=1 "
     "rollback=enabled anti_rollback=disabled"
 )
