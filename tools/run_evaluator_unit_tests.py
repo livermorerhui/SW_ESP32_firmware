@@ -1602,7 +1602,8 @@ void test_ble_identity_tag_contract() {
   }
   assert(BleIdentityTag::modelCodeForName("plus") == 2);
   assert(BleIdentityTag::modelCodeForName("unknown") == 0);
-  assert(BleIdentityTag::kServiceDataAdBytes <= BleIdentityTag::kLegacyBlePayloadLimit);
+  assert(BleIdentityTag::kFlagsAdBytes + BleIdentityTag::kServiceDataAdBytes <=
+         BleIdentityTag::kLegacyBlePayloadLimit);
 }
 
 void test_hub_ack_builder_calibration_contracts() {

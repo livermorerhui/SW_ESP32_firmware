@@ -12,6 +12,7 @@ public:
   static constexpr size_t kPayloadBytes = 2 + kTagBytes;
   static constexpr size_t kUuidBytes = 16;
   static constexpr size_t kServiceDataAdBytes = 2 + kUuidBytes + kPayloadBytes;
+  static constexpr size_t kFlagsAdBytes = 3;
   static constexpr size_t kLegacyBlePayloadLimit = 31;
 
   // Wire payload: version(1), model_code(1), tag(8).
@@ -26,6 +27,8 @@ public:
   // Returns only the service-data value. BLEAdvertisementData adds the UUID.
   static std::string serviceData(const uint8_t payload[kPayloadBytes]);
 
-  static_assert(kServiceDataAdBytes <= kLegacyBlePayloadLimit,
-                "identity tag must fit in one legacy BLE scan response");
+  // Tagged devices use the primary advertisement so the scan owner can make
+  // one candidate without waiting for a Scan Response frame.
+  static_assert(kFlagsAdBytes + kServiceDataAdBytes <= kLegacyBlePayloadLimit,
+                "identity tag must fit in one legacy BLE primary advertisement");
 };
