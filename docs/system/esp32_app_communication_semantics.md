@@ -165,7 +165,7 @@
 
 ### 4.1 `USER_LEFT_PLATFORM`
 
-当前固件真实表现：
+当前正式行为：
 
 - owner：`LaserModule` 在位判定
 - final action owner：`SystemStateMachine`
@@ -219,7 +219,8 @@ ACK：
 
 - final action owner 仍是 `SystemStateMachine`
 - 默认 effect：`ABNORMAL_STOP`
-- danger baseline reason 会记录到 `EVT:STOP stop_reason=... stop_source=BASELINE_MAIN_LOGIC`
+- 正式 `EVT:STOP` 必须使用 `stop_reason=FALL_SUSPECTED stop_source=BASELINE_MAIN_LOGIC`
+- `RATIO_EXCEEDS_DANGER_BAND_HOLD`、`ABNORMAL_UNRECOVERED_HOLD_TIMEOUT` 等只属于 serial/debug 诊断 detail，不得写入正式 `stop_reason`
 - 同时还会发：
   - `EVT:STATE FAULT_STOP`
   - `EVT:FAULT 101`
@@ -228,7 +229,7 @@ ACK：
 重要说明：
 
 - `FALL_SUSPECTED` 作为产品 reason 在 `SAFETY` 里稳定可见
-- `STOP.stop_reason` 可能是更细粒度的内部 danger 触发文本
+- `STOP.stop_reason` 必须是正式产品原因 `FALL_SUSPECTED`；更细粒度的内部 danger 触发文本只保留在 serial/debug 诊断
 - 同时当前阶段也会桥接到 `EVT:FAULT 101 reason=FALL_SUSPECTED`
 
 ## 5. formal SW APP 当前正式依赖哪些语义

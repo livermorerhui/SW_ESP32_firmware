@@ -1620,7 +1620,6 @@ void LaserModule::handleFallStopCandidate(const RhythmStateUpdateResult& rhythmR
   if (!rhythmResult.shouldStopByDanger || !sm) return;
 
   FallStopActionDecision actionDecision = sm->decideFallSuspectedAction();
-  actionDecision.verificationStopReason = rhythmResult.stopReason;
   actionDecision.verificationStopSource = VerificationStopSource::BASELINE_MAIN_LOGIC;
   if (actionDecision.stopSuppressedBySwitch) {
     logFallStopSuppressed(rhythmResult, actionDecision);

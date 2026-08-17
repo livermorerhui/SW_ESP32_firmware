@@ -1447,6 +1447,18 @@ void test_protocol_golden_frame_fixture_core_cases() {
     const String encoded = ProtocolCodec::encodeSnapshot(snapshot);
     expect_reason(encoded.c_str(), GoldenFrames::snapshot_slim_fault_v1);
   }
+
+  {
+    Event stop{};
+    stop.type = EventType::STOP;
+    stop.fault = FaultCode::FALL_SUSPECTED;
+    stop.safety = SafetySignalKind::ABNORMAL_STOP;
+    stop.state = TopState::FAULT_STOP;
+    std::snprintf(stop.stopReasonText, sizeof(stop.stopReasonText), "%s", "FALL_SUSPECTED");
+    std::snprintf(stop.stopSourceText, sizeof(stop.stopSourceText), "%s", "BASELINE_MAIN_LOGIC");
+    const String encoded = ProtocolCodec::encodeEvent(stop);
+    expect_reason(encoded.c_str(), GoldenFrames::evt_stop_fall_suspected_v1);
+  }
 }
 
 void test_protocol_encode_stream_contract() {
@@ -1905,6 +1917,7 @@ def golden_frame_constants(cases: list[dict[str, object]]) -> str:
     "ack_device_identity_v1",
     "snapshot_slim_ready_v1",
     "snapshot_slim_fault_v1",
+    "evt_stop_fall_suspected_v1",
   ]
   missing = [case_id for case_id in required_ids if case_id not in by_id]
   if missing:

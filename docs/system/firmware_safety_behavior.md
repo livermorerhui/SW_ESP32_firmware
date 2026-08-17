@@ -79,6 +79,12 @@ Current owner split:
 - `ProtocolCodec` owns the existing BLE line encoding only.
 - `BleTransport` owns critical-event delivery classification only.
 
+For `FALL_SUSPECTED`, the formal STOP export is `stop_reason=FALL_SUSPECTED`
+with `stop_source=BASELINE_MAIN_LOGIC`. Detector-specific values such as
+`RATIO_EXCEEDS_DANGER_BAND_HOLD` and `ABNORMAL_UNRECOVERED_HOLD_TIMEOUT` are
+serial/debug diagnostic details only and must not overwrite the formal STOP
+reason.
+
 Frozen rule:
 
 - A detector or measurement owner must not directly stop the wave or publish final BLE safety semantics.
