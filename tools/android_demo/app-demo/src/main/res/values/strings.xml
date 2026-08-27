@@ -1,8 +1,8 @@
 <resources>
     <string name="app_name">SonicWave Demo Tool</string>
-    <string name="screen_title_main">SonicWave Demo Tool</string>
+    <string name="screen_title_main">SW Debug</string>
 
-    <string name="action_search_connect">Search &amp; Connect</string>
+    <string name="action_search_connect">Search</string>
     <string name="action_disconnect">Disconnect</string>
     <string name="action_request_permission">Request Permission</string>
     <string name="action_connect">Connect</string>
@@ -19,6 +19,8 @@
     <string name="action_stop_motion_sampling">STOP SAMPLING</string>
     <string name="action_enable_fall_stop_protection">ENABLE FALL STOP PROTECTION</string>
     <string name="action_disable_fall_stop_protection">DISABLE FALL STOP PROTECTION</string>
+    <string name="action_enable_leave_protection">ENABLE LEAVE PROTECTION</string>
+    <string name="action_disable_leave_protection">DISABLE LEAVE PROTECTION</string>
     <string name="action_enable_motion_sampling_mode">ENABLE SAMPLING MODE</string>
     <string name="action_disable_motion_sampling_mode">DISABLE SAMPLING MODE</string>
     <string name="action_clear_test_session">CLEAR SESSION</string>
@@ -27,6 +29,7 @@
     <string name="action_export_motion_sampling_session">EXPORT SESSION</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_confirm_clear">Discard Session</string>
+    <string name="action_got_it">Got it</string>
     <string name="action_show_engineering_tools">Show Engineering Tools</string>
     <string name="action_hide_engineering_tools">Hide Engineering Tools</string>
     <string name="action_get_model">GET MODEL</string>
@@ -35,6 +38,22 @@
     <string name="action_clear">Clear</string>
     <string name="action_expand">Expand</string>
     <string name="action_collapse">Collapse</string>
+    <string name="action_show_details">Show details</string>
+    <string name="action_hide_details">Hide details</string>
+    <string name="action_show_chart_settings">Chart settings</string>
+    <string name="action_hide_chart_settings">Hide settings</string>
+    <string name="action_show_session_details">Session details</string>
+    <string name="action_hide_session_details">Hide details</string>
+    <string name="action_show_export_details">Export details</string>
+    <string name="action_hide_export_details">Hide details</string>
+    <string name="action_show_sampling_settings">Sampling settings</string>
+    <string name="action_hide_sampling_settings">Hide settings</string>
+    <string name="action_write_to_device">Write to Device</string>
+    <string name="tab_run">Run</string>
+    <string name="tab_calibration">Calibration</string>
+    <string name="tab_sampling">Sampling</string>
+    <string name="tab_device">Model</string>
+    <string name="tab_logs">Logs</string>
 
     <string name="connection_status_title">Connection Status</string>
     <string name="connection_state_disconnected">Disconnected</string>
@@ -47,15 +66,20 @@
     <string name="status_notify_with_error">Notify: %1$s (%2$s)</string>
     <string name="status_protocol_mode">Protocol mode: %1$s</string>
     <string name="status_capability_info">Protocol capability: %1$s</string>
-    <string name="section_device_profile">Device Profile</string>
-    <string name="device_profile_hint">Write the device truth source here. Current delivery subset: BASE and PLUS degraded-start. BASE is the no-laser product. PLUS/PRO/ULTRA are laser-required profiles.</string>
+    <string name="section_device_profile">Set Model</string>
+    <string name="device_profile_hint">The model is written to the device config truth source. Base has no distance sensor. Plus has a distance sensor. Pro and Ultra are not open yet.</string>
     <string name="device_profile_current_truth">Device config truth: MODEL=%1$s | LASER=%2$s</string>
     <string name="device_profile_runtime_truth">Runtime health truth: laser_available=%1$s | protection_degraded=%2$s</string>
-    <string name="device_profile_select_model">Select platform_model</string>
+    <string name="device_profile_current_device">Current device: %1$s</string>
+    <string name="device_profile_current_device_value">%1$s (%2$s)</string>
+    <string name="device_profile_select_model">Select model</string>
     <string name="device_profile_select_laser">Select laser_installed</string>
-    <string name="device_profile_consistency_hint">Consistency rule: selecting BASE forces no-laser. Selecting PLUS/PRO/ULTRA forces laser-installed. Turning laser back on restores the last laser-capable model.</string>
-    <string name="device_profile_write">Write Device Profile</string>
-    <string name="device_profile_write_pending">Writing Device Profile…</string>
+    <string name="device_profile_sensor_status">Distance sensor: %1$s</string>
+    <string name="device_profile_sensor_without_distance">No distance sensor</string>
+    <string name="device_profile_sensor_with_distance">Distance sensor installed</string>
+    <string name="device_profile_consistency_hint">Consistency rule: Base writes platform_model=BASE and laser_installed=0. Plus writes platform_model=PLUS and laser_installed=1.</string>
+    <string name="device_profile_write">Confirm</string>
+    <string name="device_profile_write_pending">Confirming…</string>
     <string name="device_config_laser_installed">laser installed</string>
     <string name="device_config_laser_not_installed">no laser</string>
     <string name="device_config_status_pending">Writing platform_model=%1$s, %2$s…</string>
@@ -91,8 +115,13 @@
 
     <string name="section_system_status">System Status</string>
     <string name="section_fall_stop_protection">Fall Stop Protection</string>
+    <string name="section_protection_switches">Protection Switches</string>
+    <string name="label_fall_protection">Fall protection</string>
+    <string name="label_leave_protection">Rhythm leave</string>
     <string name="label_fall_stop_protection_hint">When disabled, fall abnormalities no longer auto-stop the wave, but risk hints, candidate logs, and session recording stay active.</string>
     <string name="label_fall_stop_protection_status">Effective state: %1$s</string>
+    <string name="label_leave_protection_hint">When disabled, leaving the platform keeps warnings and logs but does not auto-stop the wave.</string>
+    <string name="label_leave_protection_status">Rhythm leave state: %1$s</string>
     <string name="value_fall_stop_protection_enabled">enabled</string>
     <string name="value_fall_stop_protection_disabled">disabled</string>
     <string name="value_fall_stop_protection_syncing">syncing</string>
@@ -101,6 +130,15 @@
     <string name="value_fall_stop_protection_ack_enabled_unverified">device confirmed enabled, capability re-check pending</string>
     <string name="value_fall_stop_protection_ack_disabled_unverified">device confirmed disabled, capability re-check pending</string>
     <string name="value_fall_stop_protection_unknown">waiting for device sync</string>
+    <string name="value_leave_protection_enabled">enabled</string>
+    <string name="value_leave_protection_disabled">disabled</string>
+    <string name="value_leave_protection_syncing">syncing</string>
+    <string name="value_leave_protection_ack_enabled_verifying">device confirmed enabled, verifying capability</string>
+    <string name="value_leave_protection_ack_disabled_verifying">device confirmed disabled, verifying capability</string>
+    <string name="value_leave_protection_ack_enabled_unverified">device confirmed enabled, capability re-check pending</string>
+    <string name="value_leave_protection_ack_disabled_unverified">device confirmed disabled, capability re-check pending</string>
+    <string name="value_leave_protection_unknown">waiting for device sync</string>
+    <string name="value_leave_protection_unsupported">unsupported by current firmware</string>
     <string name="label_state">STATE</string>
     <string name="label_fault">FAULT</string>
     <string name="label_system_status_hint">Treat STATE, SAFETY REASON, and EFFECT as the main interpretation layer. Runtime and wave stay visible below as lower-confidence engineering reference.</string>
@@ -190,12 +228,15 @@
     <string name="label_motion_sampling_state_active">Sampling state: active</string>
     <string name="label_motion_sampling_state_inactive">Sampling state: idle</string>
     <string name="label_motion_sampling_live_summary">Current live summary</string>
+    <string name="label_motion_sampling_live_compact">Live: distance %1$s mm | weight %2$s kg | stable %3$s kg</string>
     <string name="label_motion_sampling_measurement_validity">Measurement validity: %1$s</string>
     <string name="value_motion_sampling_measurement_valid">valid stream sample</string>
     <string name="value_motion_sampling_measurement_invalid">warning / unavailable</string>
     <string name="label_motion_sampling_runtime_context">Runtime/Wave/Safety: %1$s / %2$s / %3$s</string>
     <string name="label_motion_sampling_session_summary">Session review</string>
     <string name="label_motion_sampling_no_session">No motion-safety session yet. Start sampling to create an in-memory reviewable session.</string>
+    <string name="label_motion_sampling_no_session_compact">No sampling session</string>
+    <string name="label_motion_sampling_session_compact">Session: %1$d rows | %2$s Hz / intensity %3$s</string>
     <string name="label_motion_sampling_session_id">Session ID: %1$s</string>
     <string name="label_motion_sampling_started_at">Started: %1$s</string>
     <string name="label_motion_sampling_ended_at">Ended: %1$s</string>
@@ -293,7 +334,35 @@
     <string name="label_calibration_step_stop_recording">Step 5: Stop Recording and End Sampling</string>
     <string name="label_calibration_step_select_model">Step 6: Select Model</string>
     <string name="label_calibration_step_apply">Step 7: Write Model</string>
+    <string name="label_calibration_flow_start">Start</string>
+    <string name="label_calibration_flow_record">Record</string>
+    <string name="label_calibration_flow_data">Captured Data</string>
+    <string name="label_calibration_flow_chart">Points and Fitted Curves</string>
+    <string name="label_calibration_flow_confirm">Confirm Model</string>
+    <string name="action_start_calibration">Start Calibration</string>
+    <string name="action_calibration_active">Calibrating</string>
+    <string name="action_finish_calibration">Finish Calibration</string>
+    <string name="action_device_zero">Device Zero</string>
+    <string name="action_clear_calibration_points">Clear Points</string>
+    <string name="action_device_zero_info">When should I use Device Zero?</string>
+    <string name="action_info_icon">ⓘ</string>
+    <string name="label_calibration_state_active_short">Calibrating. You can record calibration points.</string>
+    <string name="label_calibration_state_inactive_short">Not started. Record is disabled.</string>
+    <string name="calibration_info_start_title">Start Calibration</string>
+    <string name="calibration_info_start_message">Start Calibration only enters the local calibration state and enables point recording. It does not write zero to the ESP32. Use Device Zero only when the unloaded baseline is clearly wrong, after moving the platform, changing the base, or sensor drift; it writes only after confirmation.</string>
+    <string name="calibration_info_device_zero_title">Device Zero</string>
+    <string name="calibration_info_device_zero_message">Use this with the platform unloaded. Device Zero writes a new device baseline to the ESP32 after the confirmation dialog. Use it after moving the platform, changing the base, sensor drift, or clearly wrong unloaded distance. Re-capturing points or fitting a model usually does not require zeroing.</string>
+    <string name="calibration_info_record_title">Record</string>
+    <string name="calibration_info_record_message">Record saves the current reference-weight input and live distance snapshot as a local calibration point. Stable weight is only a quality hint, not a hard gate.</string>
+    <string name="calibration_info_prediction_title">Current Prediction</string>
+    <string name="calibration_info_prediction_message">Current prediction in the table is the prediction from the app/device model at capture time, not the prediction from the newly fitted model.</string>
+    <string name="calibration_info_write_title">Write Device</string>
+    <string name="calibration_info_write_message">Only Write Model deploys the selected linear or quadratic model to the ESP32 through CAL:SET_MODEL. Recorded points and fitted curves remain local until then.</string>
     <string name="label_zero_explanation">Zero the platform first in its unloaded baseline state before recording points or judging models.</string>
+    <string name="confirm_scale_zero_title">Write zero to device?</string>
+    <string name="confirm_scale_zero_message">ZERO sends SCALE:ZERO to the ESP32 immediately and refreshes the device-side baseline. Cancel does not send anything. There is no automatic undo after writing.</string>
+    <string name="confirm_cal_zero_title">Write engineering zero?</string>
+    <string name="confirm_cal_zero_message">CAL:ZERO is also a device-side zero command. It writes to the ESP32 immediately for bench work. Cancel does not send anything. There is no automatic undo after writing.</string>
     <string name="label_recording_state_active">Recording state: active, calibration-point capture is enabled.</string>
     <string name="label_recording_state_inactive">Recording state: inactive, calibration-point capture is disabled.</string>
     <string name="label_stop_recording_recommended_hint">Once sampling is complete, stop recording before moving into model selection and deployment.</string>
@@ -302,6 +371,7 @@
     <string name="label_capture_hint_active">Recording is active. Confirm the required conditions below, then record the current local live snapshot.</string>
     <string name="label_capture_hint_requires_recording">Start recording first. Calibration-point capture is only available while recording is active.</string>
     <string name="label_capture_live_distance">Live distance: %1$s</string>
+    <string name="label_live_distance_short">Live distance</string>
     <string name="label_capture_semantics_explanation">Capture Calibration Point: the app immediately records the current reference-weight input plus the current live distance snapshot into the local point set. Stable weight remains visible only as quality context.</string>
     <string name="label_capture_preconditions_title">Capture Preconditions</string>
     <string name="label_capture_preconditions_hint">Required items determine whether the local point can be recorded now. Advisory items help judge quality, but they do not block capture.</string>
@@ -331,12 +401,12 @@
     <string name="label_last_calibration_point">Last Calibration Point</string>
     <string name="label_recording_destination">Recording file: %1$s</string>
     <string name="label_recorded_point_count">Recorded calibration points: %1$d</string>
-    <string name="label_latest_point_summary">Latest: pt%1$s dist=%2$s mm ref=%3$s kg predicted=%4$s kg stable/valid=%5$s/%6$s</string>
+    <string name="label_latest_point_summary">Latest: pt%1$s dist=%2$s mm ref=%3$s kg current=%4$s kg stable/valid=%5$s/%6$s</string>
     <string name="label_no_calibration_points">No calibration points recorded yet.</string>
     <string name="label_point_index">Pt</string>
     <string name="label_point_distance_mm">Dist(mm)</string>
     <string name="label_point_reference_weight">Ref(kg)</string>
-    <string name="label_point_predicted_weight">Pred(kg)</string>
+    <string name="label_point_predicted_weight">Current(kg)</string>
     <string name="label_point_flags">S/V</string>
     <string name="field_model_reference">Model Reference</string>
     <string name="field_model_c0">Model c0</string>
@@ -386,11 +456,19 @@
     <string name="label_model_option_not_ready">Need more points before this fit can be prepared</string>
     <string name="label_model_option_selected">Selected</string>
     <string name="label_model_option_prepared">Prepared for write</string>
+    <string name="label_model_option_ready_short">Ready</string>
+    <string name="label_model_option_not_ready_short">Need points</string>
+    <string name="label_model_option_selected_short">Selected</string>
+    <string name="label_model_option_prepared_short">Prepared</string>
+    <string name="label_fit_status_pass">Fit passed</string>
+    <string name="label_fit_status_fail">Fit failed</string>
+    <string name="label_fit_status_insufficient">Need points</string>
     <string name="label_prepared_model_title">Prepared Model for Write</string>
     <string name="label_prepared_model_unavailable">The selected model does not have a deploy-ready fit yet. Record more points or use the advanced override.</string>
     <string name="label_prepared_model_source_auto">Auto-prepared from selected fit</string>
     <string name="label_prepared_model_source_manual">Advanced manual override</string>
     <string name="label_prepared_model_summary">Prepared type: %1$s | Source: %2$s</string>
+    <string name="label_prepared_model_compact">Prepared: %1$s  ref=%2$s  c0=%3$s  c1=%4$s  c2=%5$s</string>
     <string name="label_apply_step_hint">Write Model is now the primary final action. Recording points and comparing curves do not commit changes by themselves.</string>
     <string name="label_apply_boundary_hint">Boundary: point capture and model comparison stay local until Write Model is pressed. Legacy Z/K calibration has been moved to Advanced Engineering.</string>
     <string name="label_write_model_result_title">Latest Write Result</string>
@@ -460,6 +538,7 @@
     <string name="message_wave_stop_fallback_success">WAVE:STOP unsupported, fallback sent: E:0</string>
     <string name="message_send_failed">Send failed (%1$s): %2$s</string>
     <string name="fall_stop_capability_sync_soft_failure">fall stop capability sync unavailable</string>
+    <string name="leave_protection_capability_sync_soft_failure">leave protection capability sync unavailable</string>
     <string name="warning_no_stream_data">No formal measurement plane samples received (check notify/firmware TX)</string>
     <string name="recording_started">Recording to %1$s</string>
     <string name="recording_failed">Recording failed: %1$s</string>

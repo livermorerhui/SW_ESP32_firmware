@@ -30,7 +30,7 @@ import com.sonicwave.demo.R
 @Composable
 fun RawConsoleSection(
     rawLogLines: List<String>,
-    onClear: () -> Unit,
+    actions: RawConsoleActions,
     modifier: Modifier = Modifier,
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -67,7 +67,7 @@ fun RawConsoleSection(
                     ) {
                         Text(stringResource(R.string.action_copy))
                     }
-                    Button(onClick = onClear) {
+                    Button(onClick = actions.onClear) {
                         Text(stringResource(R.string.action_clear))
                     }
                 }

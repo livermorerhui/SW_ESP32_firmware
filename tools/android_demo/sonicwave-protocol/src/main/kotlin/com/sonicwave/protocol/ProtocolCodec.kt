@@ -22,6 +22,7 @@ object ProtocolCodec {
                 "c0=${command.c0},c1=${command.c1},c2=${command.c2}"
         }
         is Command.FallStopProtectionSet -> "DEBUG:FALL_STOP enabled=${if (command.enabled) 1 else 0}"
+        is Command.LeaveProtectionSet -> "SAFETY:LEAVE_PROTECTION enabled=${if (command.enabled) 1 else 0}"
         is Command.MotionSamplingModeSet -> "DEBUG:MOTION_SAMPLING enabled=${if (command.enabled) 1 else 0}"
         is Command.StreamSet -> "STREAM:SET enabled=${if (command.enabled) 1 else 0},rate_hz=${command.rateHz}"
         Command.LegacyZero -> "ZERO"
@@ -37,6 +38,7 @@ object ProtocolCodec {
         parseCapabilities(raw)?.let { return it }
         parseDeviceConfig(raw)?.let { return it }
         parseFallStopProtection(raw)?.let { return it }
+        parseLeaveProtection(raw)?.let { return it }
         parseDegradedStart(raw)?.let { return it }
         parseStreamSubscription(raw)?.let { return it }
         parseCalibrationModel(raw)?.let { return it }
@@ -106,6 +108,19 @@ object ProtocolCodec {
         return Event.FallStopProtection(
             enabled = enabled,
             mode = kv["MODE"],
+            raw = raw,
+        )
+    }
+
+    private fun parseLeaveProtection(raw: String): Event.LeaveProtection? {
+        if (!raw.startsWith("ACK:LEAVE_PROTECTION", ignoreCase = true)) return null
+        val payload = raw.substringAfter("ACK:LEAVE_PROTECTION", "").trim()
+        val kv = parseKeyValuePayload(payload)
+        val enabled = parseBooleanFlag(kv["ENABLED"]) ?: return null
+        return Event.LeaveProtection(
+            enabled = enabled,
+            supported = parseBooleanFlag(kv["SUPPORTED"]) ?: true,
+            effect = kv["EFFECT"],
             raw = raw,
         )
     }
@@ -215,6 +230,7 @@ object ProtocolCodec {
             protectionDegraded = parseBooleanFlag(kv["PROTECTION_DEGRADED"]),
             degradedStartAvailable = parseBooleanFlag(kv["DEGRADED_START_AVAILABLE"]),
             degradedStartEnabled = parseBooleanFlag(kv["DEGRADED_START_ENABLED"]),
+            leaveStopEnabled = parseBooleanFlag(kv["LEAVE_STOP_ENABLED"]),
             raw = raw,
         )
     }

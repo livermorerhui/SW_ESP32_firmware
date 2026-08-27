@@ -44,6 +44,10 @@ class ProtocolCodecTest {
             ProtocolCodec.encode(Command.FallStopProtectionSet(enabled = false)),
         )
         assertEquals(
+            "SAFETY:LEAVE_PROTECTION enabled=1",
+            ProtocolCodec.encode(Command.LeaveProtectionSet(enabled = true)),
+        )
+        assertEquals(
             "DEBUG:MOTION_SAMPLING enabled=1",
             ProtocolCodec.encode(Command.MotionSamplingModeSet(enabled = true)),
         )
@@ -108,6 +112,16 @@ class ProtocolCodecTest {
     }
 
     @Test
+    fun decodeLeaveProtectionAckAsDedicatedEvent() {
+        val event = ProtocolCodec.decode("ACK:LEAVE_PROTECTION enabled=0 supported=1 effect=WARNING_ONLY")
+        val ack = assertIs<Event.LeaveProtection>(event)
+        assertEquals(false, ack.enabled)
+        assertEquals(true, ack.supported)
+        assertEquals("WARNING_ONLY", ack.effect)
+        assertEquals("ACK:LEAVE_PROTECTION enabled=0 supported=1 effect=WARNING_ONLY", ack.raw)
+    }
+
+    @Test
     fun decodeDegradedStartAckAsDedicatedEvent() {
         val event = ProtocolCodec.decode("ACK:DEGRADED_START enabled=1 available=1")
         val ack = assertIs<Event.DegradedStart>(event)
@@ -129,7 +143,7 @@ class ProtocolCodecTest {
     @Test
     fun decodeSnapshotTruth() {
         val event = ProtocolCodec.decode(
-            "SNAPSHOT: top_state=ARMED user_present=0 runtime_ready=1 start_ready=1 baseline_ready=0 wave_output_active=0 current_reason_code=NONE current_safety_effect=NONE stable_weight=0.00 current_frequency=20.00 current_intensity=80 platform_model=BASE laser_installed=0 laser_available=0 protection_degraded=1 degraded_start_available=0 degraded_start_enabled=0",
+            "SNAPSHOT: top_state=ARMED user_present=0 runtime_ready=1 start_ready=1 baseline_ready=0 wave_output_active=0 current_reason_code=NONE current_safety_effect=NONE stable_weight=0.00 current_frequency=20.00 current_intensity=80 platform_model=BASE laser_installed=0 laser_available=0 protection_degraded=1 degraded_start_available=0 degraded_start_enabled=0 leave_stop_enabled=1",
         )
         val snapshot = assertIs<Event.Snapshot>(event)
         assertEquals(DeviceState.ARMED, snapshot.topState)
@@ -149,6 +163,7 @@ class ProtocolCodecTest {
         assertEquals(true, snapshot.protectionDegraded)
         assertEquals(false, snapshot.degradedStartAvailable)
         assertEquals(false, snapshot.degradedStartEnabled)
+        assertEquals(true, snapshot.leaveStopEnabled)
     }
 
     @Test

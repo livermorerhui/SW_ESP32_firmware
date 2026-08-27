@@ -10,7 +10,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
@@ -25,8 +30,10 @@ import com.sonicwave.demo.displayName
 fun SystemStatusSection(
     uiState: UiState,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
 ) {
     val notAvailable = stringResource(R.string.common_not_available)
+    var showEngineeringDetails by rememberSaveable { mutableStateOf(!compact) }
     val faultColor = when (uiState.faultStatus.severity) {
         FaultSeverityUi.WARNING -> Color(0xFFD97706)
         FaultSeverityUi.BLOCKING -> Color(0xFFB91C1C)
@@ -39,32 +46,45 @@ fun SystemStatusSection(
         FaultSeverityUi.INFO -> Color(0xFF0F766E)
         FaultSeverityUi.NONE -> Color(0xFF166534)
     }
+    val cardPadding = if (compact) 10.dp else 12.dp
+    val contentSpacing = if (compact) 8.dp else 10.dp
+    val statusBoxSpacing = if (compact) 8.dp else 12.dp
 
     Card(modifier = modifier.fillMaxWidth()) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(cardPadding),
+            verticalArrangement = Arrangement.spacedBy(contentSpacing),
         ) {
-            Text(stringResource(R.string.section_system_status), style = MaterialTheme.typography.titleMedium)
             Text(
-                text = stringResource(R.string.label_system_status_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                stringResource(R.string.section_system_status),
+                style = if (compact) {
+                    MaterialTheme.typography.titleSmall
+                } else {
+                    MaterialTheme.typography.titleMedium
+                },
             )
-            Text(
-                text = stringResource(R.string.label_system_status_primary_group),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (!compact) {
+                Text(
+                    text = stringResource(R.string.label_system_status_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = stringResource(R.string.label_system_status_primary_group),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             PrimaryStatusBox(
                 label = stringResource(R.string.label_state),
                 value = uiState.deviceState.displayName(),
                 secondary = uiState.deviceState.name,
+                compact = compact,
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(statusBoxSpacing),
             ) {
                 StatusBox(
                     label = stringResource(R.string.label_safety_reason),
@@ -72,6 +92,7 @@ fun SystemStatusSection(
                     secondary = uiState.safetyStatus.reasonCode,
                     background = safetyColor.copy(alpha = 0.14f),
                     textColor = safetyColor,
+                    compact = compact,
                     modifier = Modifier.weight(1f),
                 )
                 StatusBox(
@@ -80,70 +101,90 @@ fun SystemStatusSection(
                     secondary = uiState.safetyStatus.effectCode,
                     background = safetyColor.copy(alpha = 0.14f),
                     textColor = safetyColor,
+                    compact = compact,
                     modifier = Modifier.weight(1f),
                 )
             }
-            Text(
-                text = stringResource(R.string.label_system_status_secondary_group),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                ReferenceStatusBox(
-                    label = stringResource(R.string.label_safety_state),
-                    value = uiState.safetyStatus.runtimeState,
-                    secondary = uiState.safetyStatus.runtimeCode,
-                    modifier = Modifier.weight(1f),
-                )
-                ReferenceStatusBox(
-                    label = stringResource(R.string.label_wave_state),
-                    value = uiState.safetyStatus.waveState,
-                    secondary = uiState.safetyStatus.waveCode,
-                    modifier = Modifier.weight(1f),
+            if (uiState.faultStatus.severity != FaultSeverityUi.NONE) {
+                Text(
+                    text = stringResource(
+                        R.string.label_fault_reference,
+                        uiState.faultStatus.label,
+                        uiState.faultStatus.codeName,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = faultColor,
                 )
             }
-            Text(
-                text = stringResource(
-                    R.string.label_fault_reference,
-                    uiState.faultStatus.label,
-                    uiState.faultStatus.codeName,
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = faultColor,
-            )
-            Text(
-                text = stringResource(R.string.label_fault_code, uiState.faultStatus.code),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = stringResource(
-                    R.string.label_safety_meaning,
-                    uiState.safetyStatus.meaning.ifBlank { stringResource(R.string.safety_meaning_none) },
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = stringResource(
-                    R.string.label_safety_source,
-                    uiState.safetyStatus.source.ifBlank { stringResource(R.string.safety_source_none) },
-                    uiState.safetyStatus.sourceCode.ifBlank { stringResource(R.string.common_not_available) },
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = stringResource(
-                    R.string.label_safety_code,
-                    uiState.safetyStatus.code?.toString() ?: notAvailable,
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (compact) {
+                TextButton(onClick = { showEngineeringDetails = !showEngineeringDetails }) {
+                    Text(
+                        stringResource(
+                            if (showEngineeringDetails) {
+                                R.string.action_hide_details
+                            } else {
+                                R.string.action_show_details
+                            },
+                        ),
+                    )
+                }
+            }
+            if (showEngineeringDetails) {
+                Text(
+                    text = stringResource(R.string.label_system_status_secondary_group),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(statusBoxSpacing),
+                ) {
+                    ReferenceStatusBox(
+                        label = stringResource(R.string.label_safety_state),
+                        value = uiState.safetyStatus.runtimeState,
+                        secondary = uiState.safetyStatus.runtimeCode,
+                        compact = compact,
+                        modifier = Modifier.weight(1f),
+                    )
+                    ReferenceStatusBox(
+                        label = stringResource(R.string.label_wave_state),
+                        value = uiState.safetyStatus.waveState,
+                        secondary = uiState.safetyStatus.waveCode,
+                        compact = compact,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Text(
+                    text = stringResource(R.string.label_fault_code, uiState.faultStatus.code),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = stringResource(
+                        R.string.label_safety_meaning,
+                        uiState.safetyStatus.meaning.ifBlank { stringResource(R.string.safety_meaning_none) },
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = stringResource(
+                        R.string.label_safety_source,
+                        uiState.safetyStatus.source.ifBlank { stringResource(R.string.safety_source_none) },
+                        uiState.safetyStatus.sourceCode.ifBlank { stringResource(R.string.common_not_available) },
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = stringResource(
+                        R.string.label_safety_code,
+                        uiState.safetyStatus.code?.toString() ?: notAvailable,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -153,22 +194,35 @@ private fun PrimaryStatusBox(
     label: String,
     value: String,
     secondary: String? = null,
+    compact: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
+    val shape = RoundedCornerShape(if (compact) 12.dp else 18.dp)
+    val horizontalPadding = if (compact) 12.dp else 14.dp
+    val verticalPadding = if (compact) 10.dp else 14.dp
+    val spacing = if (compact) 3.dp else 6.dp
     Column(
         modifier = modifier
-            .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(18.dp))
-            .padding(horizontal = 14.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+            .background(MaterialTheme.colorScheme.primaryContainer, shape)
+            .padding(horizontal = horizontalPadding, vertical = verticalPadding),
+        verticalArrangement = Arrangement.spacedBy(spacing),
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.labelLarge,
+            style = if (compact) {
+                MaterialTheme.typography.labelMedium
+            } else {
+                MaterialTheme.typography.labelLarge
+            },
             color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
         )
         Text(
             text = value,
-            style = MaterialTheme.typography.headlineSmall,
+            style = if (compact) {
+                MaterialTheme.typography.titleMedium
+            } else {
+                MaterialTheme.typography.headlineSmall
+            },
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onPrimaryContainer,
         )
@@ -177,7 +231,11 @@ private fun PrimaryStatusBox(
             ?.let {
                 Text(
                     text = it,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = if (compact) {
+                        MaterialTheme.typography.labelSmall
+                    } else {
+                        MaterialTheme.typography.bodySmall
+                    },
                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
                 )
             }
@@ -192,17 +250,33 @@ private fun StatusBox(
     modifier: Modifier = Modifier,
     background: Color = MaterialTheme.colorScheme.secondaryContainer,
     textColor: Color = MaterialTheme.colorScheme.onSecondaryContainer,
+    compact: Boolean = false,
 ) {
+    val shape = RoundedCornerShape(if (compact) 12.dp else 16.dp)
+    val boxPadding = if (compact) 9.dp else 12.dp
+    val spacing = if (compact) 3.dp else 6.dp
     Column(
         modifier = modifier
-            .background(background, RoundedCornerShape(16.dp))
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+            .background(background, shape)
+            .padding(boxPadding),
+        verticalArrangement = Arrangement.spacedBy(spacing),
     ) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = textColor.copy(alpha = 0.8f))
+        Text(
+            label,
+            style = if (compact) {
+                MaterialTheme.typography.labelSmall
+            } else {
+                MaterialTheme.typography.labelMedium
+            },
+            color = textColor.copy(alpha = 0.8f),
+        )
         Text(
             text = value,
-            style = MaterialTheme.typography.titleMedium,
+            style = if (compact) {
+                MaterialTheme.typography.titleSmall
+            } else {
+                MaterialTheme.typography.titleMedium
+            },
             fontWeight = FontWeight.Bold,
             color = textColor,
         )
@@ -211,7 +285,11 @@ private fun StatusBox(
             ?.let {
                 Text(
                     text = it,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = if (compact) {
+                        MaterialTheme.typography.labelSmall
+                    } else {
+                        MaterialTheme.typography.bodySmall
+                    },
                     color = textColor.copy(alpha = 0.85f),
                 )
             }
@@ -223,13 +301,18 @@ private fun ReferenceStatusBox(
     label: String,
     value: String,
     secondary: String? = null,
+    compact: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
+    val shape = RoundedCornerShape(if (compact) 12.dp else 16.dp)
+    val horizontalPadding = if (compact) 10.dp else 12.dp
+    val verticalPadding = if (compact) 8.dp else 10.dp
+    val spacing = if (compact) 3.dp else 4.dp
     Column(
         modifier = modifier
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f), RoundedCornerShape(16.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f), shape)
+            .padding(horizontal = horizontalPadding, vertical = verticalPadding),
+        verticalArrangement = Arrangement.spacedBy(spacing),
     ) {
         Text(
             text = label,

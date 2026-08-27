@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -68,6 +69,7 @@ fun TelemetryChartSection(
     var showMa3 by rememberSaveable { mutableStateOf(true) }
     var showMa5 by rememberSaveable { mutableStateOf(true) }
     var showMa7 by rememberSaveable { mutableStateOf(true) }
+    var showChartSettings by rememberSaveable { mutableStateOf(false) }
 
     val stableWeightSeries = TelemetrySeriesDefinition(
         labelRes = R.string.legend_stable_weight,
@@ -182,78 +184,74 @@ fun TelemetryChartSection(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(stringResource(R.string.section_telemetry_chart), style = MaterialTheme.typography.titleMedium)
-            Text(
-                text = stringResource(R.string.label_chart_window),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = stringResource(R.string.label_chart_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = stringResource(R.string.label_chart_ma_source),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             summaryRows.forEach { summaries ->
                 SummaryRow(
                     summaries = summaries,
                     telemetryPoints = telemetryPoints,
                 )
             }
-            Text(
-                text = stringResource(R.string.label_chart_overlay_controls),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            // Keep all six toggles visible during live testing instead of relying
-            // on a horizontally scrollable selector row.
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OverlayChipRow(
-                    chips = listOf(
-                        OverlayChipUi(
-                            label = stringResource(stableWeightSeries.labelRes),
-                            selected = showStableWeight,
-                            onClick = { showStableWeight = !showStableWeight },
-                        ),
-                        OverlayChipUi(
-                            label = stringResource(rhythmDistanceSeries.labelRes),
-                            selected = showRhythmDistance,
-                            onClick = { showRhythmDistance = !showRhythmDistance },
-                        ),
-                        OverlayChipUi(
-                            label = stringResource(rhythmWeightSeries.labelRes),
-                            selected = showRhythmWeight,
-                            onClick = { showRhythmWeight = !showRhythmWeight },
-                        ),
+            OutlinedButton(onClick = { showChartSettings = !showChartSettings }) {
+                Text(
+                    stringResource(
+                        if (showChartSettings) {
+                            R.string.action_hide_chart_settings
+                        } else {
+                            R.string.action_show_chart_settings
+                        },
                     ),
                 )
-                OverlayChipRow(
-                    chips = listOf(
-                        OverlayChipUi(
-                            label = stringResource(ma12Series.labelRes),
-                            selected = showMa12,
-                            onClick = { showMa12 = !showMa12 },
-                        ),
-                        OverlayChipUi(
-                            label = stringResource(ma3Series.labelRes),
-                            selected = showMa3,
-                            onClick = { showMa3 = !showMa3 },
-                        ),
-                        OverlayChipUi(
-                            label = stringResource(ma5Series.labelRes),
-                            selected = showMa5,
-                            onClick = { showMa5 = !showMa5 },
-                        ),
-                        OverlayChipUi(
-                            label = stringResource(ma7Series.labelRes),
-                            selected = showMa7,
-                            onClick = { showMa7 = !showMa7 },
-                        ),
-                    ),
+            }
+            if (showChartSettings) {
+                Text(
+                    text = stringResource(R.string.label_chart_overlay_controls),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OverlayChipRow(
+                        chips = listOf(
+                            OverlayChipUi(
+                                label = stringResource(stableWeightSeries.labelRes),
+                                selected = showStableWeight,
+                                onClick = { showStableWeight = !showStableWeight },
+                            ),
+                            OverlayChipUi(
+                                label = stringResource(rhythmDistanceSeries.labelRes),
+                                selected = showRhythmDistance,
+                                onClick = { showRhythmDistance = !showRhythmDistance },
+                            ),
+                            OverlayChipUi(
+                                label = stringResource(rhythmWeightSeries.labelRes),
+                                selected = showRhythmWeight,
+                                onClick = { showRhythmWeight = !showRhythmWeight },
+                            ),
+                        ),
+                    )
+                    OverlayChipRow(
+                        chips = listOf(
+                            OverlayChipUi(
+                                label = stringResource(ma12Series.labelRes),
+                                selected = showMa12,
+                                onClick = { showMa12 = !showMa12 },
+                            ),
+                            OverlayChipUi(
+                                label = stringResource(ma3Series.labelRes),
+                                selected = showMa3,
+                                onClick = { showMa3 = !showMa3 },
+                            ),
+                            OverlayChipUi(
+                                label = stringResource(ma5Series.labelRes),
+                                selected = showMa5,
+                                onClick = { showMa5 = !showMa5 },
+                            ),
+                            OverlayChipUi(
+                                label = stringResource(ma7Series.labelRes),
+                                selected = showMa7,
+                                onClick = { showMa7 = !showMa7 },
+                            ),
+                        ),
+                    )
+                }
             }
             Box(
                 modifier = Modifier

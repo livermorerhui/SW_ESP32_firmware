@@ -60,14 +60,7 @@ private val CompactInputHeight = 44.dp
 @Composable
 fun WaveControlBottomBar(
     uiState: UiState,
-    onFreqInputChange: (String) -> Unit,
-    onIntensityInputChange: (String) -> Unit,
-    onFreqInputCommit: () -> Unit,
-    onIntensityInputCommit: () -> Unit,
-    onFreqPresetSelected: (Int) -> Unit,
-    onIntensityPresetSelected: (Int) -> Unit,
-    onStart: () -> Unit,
-    onStop: () -> Unit,
+    actions: WaveControlActions,
     modifier: Modifier = Modifier,
 ) {
     val presetColors = FilterChipDefaults.filterChipColors(
@@ -151,9 +144,9 @@ fun WaveControlBottomBar(
                 compactLabel = stringResource(R.string.wave_bar_compact_frequency),
                 presets = listOf(20, 30, 40),
                 selectedValue = uiState.freqInput.toIntOrNull(),
-                onValueChange = onFreqInputChange,
-                onValueCommit = onFreqInputCommit,
-                onPresetSelected = onFreqPresetSelected,
+                onValueChange = actions.onFreqInputChange,
+                onValueCommit = actions.onFreqInputCommit,
+                onPresetSelected = actions.onFreqPresetSelected,
                 actionLabel = stringResource(R.string.action_start),
                 actionEnabled = startEnabled,
                 presetColors = presetColors,
@@ -163,7 +156,7 @@ fun WaveControlBottomBar(
                     disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                     disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 ),
-                onAction = onStart,
+                onAction = actions.onStart,
             )
 
             WaveControlRow(
@@ -171,9 +164,9 @@ fun WaveControlBottomBar(
                 compactLabel = stringResource(R.string.wave_bar_compact_intensity),
                 presets = listOf(60, 80, 100),
                 selectedValue = uiState.intensityInput.toIntOrNull(),
-                onValueChange = onIntensityInputChange,
-                onValueCommit = onIntensityInputCommit,
-                onPresetSelected = onIntensityPresetSelected,
+                onValueChange = actions.onIntensityInputChange,
+                onValueCommit = actions.onIntensityInputCommit,
+                onPresetSelected = actions.onIntensityPresetSelected,
                 actionLabel = stringResource(R.string.action_stop),
                 actionEnabled = stopEnabled,
                 presetColors = presetColors,
@@ -183,7 +176,7 @@ fun WaveControlBottomBar(
                     disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                     disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 ),
-                onAction = onStop,
+                onAction = actions.onStop,
             )
         }
     }

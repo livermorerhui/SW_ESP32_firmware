@@ -54,7 +54,11 @@ class SonicWaveClient(
             transport.incomingLines.collect { line ->
                 val event = ProtocolCodec.decode(line)
                 if (event != null) {
-                    if (event is Event.Capabilities || event is Event.FallStopProtection) {
+                    if (
+                        event is Event.Capabilities ||
+                        event is Event.FallStopProtection ||
+                        event is Event.LeaveProtection
+                    ) {
                         _mode.value = ProtocolMode.PRIMARY
                     }
                     _events.emit(event)
@@ -201,6 +205,49 @@ class SonicWaveClient(
 
                 else -> {
                     throw IllegalStateException("FALL_STOP 在 ${timeoutMs}ms 内未收到设备确认")
+                }
+            }
+        } finally {
+            collector.cancel()
+        }
+    }
+
+    suspend fun setLeaveProtectionAndAwaitAck(
+        enabled: Boolean,
+        timeoutMs: Long = 1_500,
+    ): Event.LeaveProtection = coroutineScope {
+        val semanticResult = CompletableDeferred<Event?>()
+        val collector = launch {
+            transport.incomingLines.collect { line ->
+                val event = ProtocolCodec.decode(line) ?: return@collect
+                if (!semanticResult.isCompleted &&
+                    (event is Event.LeaveProtection ||
+                        event is Event.Nack ||
+                        event is Event.Error)
+                ) {
+                    semanticResult.complete(event)
+                }
+            }
+        }
+
+        try {
+            send(Command.LeaveProtectionSet(enabled))
+            when (val event = withTimeoutOrNull(timeoutMs) { semanticResult.await() }) {
+                is Event.LeaveProtection -> {
+                    _mode.value = ProtocolMode.PRIMARY
+                    event
+                }
+
+                is Event.Nack -> {
+                    throw IllegalStateException("LEAVE_PROTECTION 收到 NACK:${event.reason}")
+                }
+
+                is Event.Error -> {
+                    throw IllegalStateException("LEAVE_PROTECTION 收到 ERR:${event.reason}")
+                }
+
+                else -> {
+                    throw IllegalStateException("LEAVE_PROTECTION 在 ${timeoutMs}ms 内未收到设备确认")
                 }
             }
         } finally {

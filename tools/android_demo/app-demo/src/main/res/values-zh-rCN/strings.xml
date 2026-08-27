@@ -1,9 +1,9 @@
 <resources>
     <string name="app_name">SonicWave 调试工具</string>
-    <string name="screen_title_main">SonicWave 调试工具</string>
+    <string name="screen_title_main">SW调试</string>
 
-    <string name="action_search_connect">搜索并连接设备</string>
-    <string name="action_disconnect">断开连接</string>
+    <string name="action_search_connect">搜索</string>
+    <string name="action_disconnect">断开</string>
     <string name="action_request_permission">请求权限</string>
     <string name="action_connect">连接</string>
     <string name="action_zero">归零</string>
@@ -19,6 +19,8 @@
     <string name="action_stop_motion_sampling">停止采样</string>
     <string name="action_enable_fall_stop_protection">开启摔倒停波保护</string>
     <string name="action_disable_fall_stop_protection">关闭摔倒停波保护</string>
+    <string name="action_enable_leave_protection">开启律动离开</string>
+    <string name="action_disable_leave_protection">关闭律动离开</string>
     <string name="action_enable_motion_sampling_mode">开启采样模式</string>
     <string name="action_disable_motion_sampling_mode">关闭采样模式</string>
     <string name="action_clear_test_session">清空会话</string>
@@ -27,6 +29,7 @@
     <string name="action_export_motion_sampling_session">导出会话</string>
     <string name="action_cancel">取消</string>
     <string name="action_confirm_clear">确认丢弃</string>
+    <string name="action_got_it">知道了</string>
     <string name="action_show_engineering_tools">显示工程工具</string>
     <string name="action_hide_engineering_tools">隐藏工程工具</string>
     <string name="action_get_model">获取模型</string>
@@ -35,6 +38,22 @@
     <string name="action_clear">清空</string>
     <string name="action_expand">展开</string>
     <string name="action_collapse">收起</string>
+    <string name="action_show_details">查看详情</string>
+    <string name="action_hide_details">收起详情</string>
+    <string name="action_show_chart_settings">曲线设置</string>
+    <string name="action_hide_chart_settings">收起设置</string>
+    <string name="action_show_session_details">会话详情</string>
+    <string name="action_hide_session_details">收起详情</string>
+    <string name="action_show_export_details">导出详情</string>
+    <string name="action_hide_export_details">收起详情</string>
+    <string name="action_show_sampling_settings">采样设置</string>
+    <string name="action_hide_sampling_settings">收起设置</string>
+    <string name="action_write_to_device">写入设备</string>
+    <string name="tab_run">运行</string>
+    <string name="tab_calibration">校准</string>
+    <string name="tab_sampling">采样</string>
+    <string name="tab_device">型号</string>
+    <string name="tab_logs">日志</string>
 
     <string name="connection_status_title">连接状态</string>
     <string name="connection_state_disconnected">未连接</string>
@@ -47,15 +66,20 @@
     <string name="status_notify_with_error">Notify：%1$s（%2$s）</string>
     <string name="status_protocol_mode">协议模式：%1$s</string>
     <string name="status_capability_info">协议能力：%1$s</string>
-    <string name="section_device_profile">设备画像配置</string>
-    <string name="device_profile_hint">这里负责写入设备 truth source。当前交付子集只收口 BASE 和 PLUS 降级启动。BASE 是无激光产品；PLUS/PRO/ULTRA 都要求安装激光。</string>
+    <string name="section_device_profile">设置型号</string>
+    <string name="device_profile_hint">型号会写入设备配置真相源。Base 对应无距离传感器，Plus 对应有距离传感器。Pro、Ultra 暂未开放。</string>
     <string name="device_profile_current_truth">设备配置真值：MODEL=%1$s | LASER=%2$s</string>
     <string name="device_profile_runtime_truth">运行时健康真值：laser_available=%1$s | protection_degraded=%2$s</string>
-    <string name="device_profile_select_model">选择 platform_model</string>
+    <string name="device_profile_current_device">当前设备：%1$s</string>
+    <string name="device_profile_current_device_value">%1$s（%2$s）</string>
+    <string name="device_profile_select_model">选择型号</string>
     <string name="device_profile_select_laser">选择 laser_installed</string>
-    <string name="device_profile_consistency_hint">一致性规则：选 BASE 会强制无激光；选 PLUS/PRO/ULTRA 会强制带激光。从无激光重新切回带激光时，会恢复上一次带激光型号。</string>
-    <string name="device_profile_write">写入设备画像</string>
-    <string name="device_profile_write_pending">正在写入设备画像…</string>
+    <string name="device_profile_sensor_status">距离传感器：%1$s</string>
+    <string name="device_profile_sensor_without_distance">无距离传感器</string>
+    <string name="device_profile_sensor_with_distance">有距离传感器</string>
+    <string name="device_profile_consistency_hint">一致性规则：选 Base 会写入 platform_model=BASE 且 laser_installed=0；选 Plus 会写入 platform_model=PLUS 且 laser_installed=1。</string>
+    <string name="device_profile_write">确认</string>
+    <string name="device_profile_write_pending">确认中…</string>
     <string name="device_config_laser_installed">已安装激光</string>
     <string name="device_config_laser_not_installed">无激光</string>
     <string name="device_config_status_pending">正在写入 platform_model=%1$s，%2$s…</string>
@@ -91,8 +115,13 @@
 
     <string name="section_system_status">系统状态</string>
     <string name="section_fall_stop_protection">摔倒停波保护</string>
+    <string name="section_protection_switches">保护开关</string>
+    <string name="label_fall_protection">摔倒保护</string>
+    <string name="label_leave_protection">律动离开</string>
     <string name="label_fall_stop_protection_hint">关闭后，不会因摔倒异常自动停波，但仍会继续保留风险提示、候选判定日志和会话记录。</string>
     <string name="label_fall_stop_protection_status">当前生效状态：%1$s</string>
+    <string name="label_leave_protection_hint">关闭后，离开平台只保留告警和日志，不执行离开平台自动停波。</string>
+    <string name="label_leave_protection_status">律动离开状态：%1$s</string>
     <string name="value_fall_stop_protection_enabled">已开启</string>
     <string name="value_fall_stop_protection_disabled">已关闭</string>
     <string name="value_fall_stop_protection_syncing">同步中</string>
@@ -101,6 +130,15 @@
     <string name="value_fall_stop_protection_ack_enabled_unverified">设备已确认开启，但能力回读仍待复核</string>
     <string name="value_fall_stop_protection_ack_disabled_unverified">设备已确认关闭，但能力回读仍待复核</string>
     <string name="value_fall_stop_protection_unknown">等待设备同步</string>
+    <string name="value_leave_protection_enabled">已开启</string>
+    <string name="value_leave_protection_disabled">已关闭</string>
+    <string name="value_leave_protection_syncing">同步中</string>
+    <string name="value_leave_protection_ack_enabled_verifying">设备已确认开启，正在校验能力回读</string>
+    <string name="value_leave_protection_ack_disabled_verifying">设备已确认关闭，正在校验能力回读</string>
+    <string name="value_leave_protection_ack_enabled_unverified">设备已确认开启，但能力回读仍待复核</string>
+    <string name="value_leave_protection_ack_disabled_unverified">设备已确认关闭，但能力回读仍待复核</string>
+    <string name="value_leave_protection_unknown">等待设备同步</string>
+    <string name="value_leave_protection_unsupported">当前固件暂不支持</string>
     <string name="label_state">状态</string>
     <string name="label_fault">故障</string>
     <string name="label_system_status_hint">请优先把“状态 / 安全原因 / 影响”当作主解释层；运行态和波形态保留在下方，作为低优先级工程参考。</string>
@@ -190,12 +228,15 @@
     <string name="label_motion_sampling_state_active">采样状态：进行中</string>
     <string name="label_motion_sampling_state_inactive">采样状态：未开始</string>
     <string name="label_motion_sampling_live_summary">当前实时摘要</string>
+    <string name="label_motion_sampling_live_compact">实时：距离 %1$s mm | 体重 %2$s kg | 稳定 %3$s kg</string>
     <string name="label_motion_sampling_measurement_validity">测量有效性：%1$s</string>
     <string name="value_motion_sampling_measurement_valid">有效实时样本</string>
     <string name="value_motion_sampling_measurement_invalid">告警 / 不可用</string>
     <string name="label_motion_sampling_runtime_context">运行态/波形态/安全原因：%1$s / %2$s / %3$s</string>
     <string name="label_motion_sampling_session_summary">会话回看</string>
     <string name="label_motion_sampling_no_session">还没有运动安全采样会话。开始采样后会创建一个可在应用内回看的内存会话。</string>
+    <string name="label_motion_sampling_no_session_compact">暂无采样会话</string>
+    <string name="label_motion_sampling_session_compact">会话：%1$d 行 | %2$s Hz / 强度 %3$s</string>
     <string name="label_motion_sampling_session_id">会话 ID：%1$s</string>
     <string name="label_motion_sampling_started_at">开始时间：%1$s</string>
     <string name="label_motion_sampling_ended_at">结束时间：%1$s</string>
@@ -293,7 +334,35 @@
     <string name="label_calibration_step_stop_recording">步骤 5：停止录制并结束采样</string>
     <string name="label_calibration_step_select_model">步骤 6：选择模型</string>
     <string name="label_calibration_step_apply">步骤 7：写入模型</string>
+    <string name="label_calibration_flow_start">开始</string>
+    <string name="label_calibration_flow_record">记录</string>
+    <string name="label_calibration_flow_data">采集数据</string>
+    <string name="label_calibration_flow_chart">点与拟合曲线</string>
+    <string name="label_calibration_flow_confirm">确认模型</string>
+    <string name="action_start_calibration">开始校准</string>
+    <string name="action_calibration_active">校准中</string>
+    <string name="action_finish_calibration">结束校准</string>
+    <string name="action_device_zero">设备归零</string>
+    <string name="action_clear_calibration_points">清空校准点</string>
+    <string name="action_device_zero_info">何时使用设备归零？</string>
+    <string name="action_info_icon">ⓘ</string>
+    <string name="label_calibration_state_active_short">校准中，可记录校准点。</string>
+    <string name="label_calibration_state_inactive_short">未开始，记录按钮不可用。</string>
+    <string name="calibration_info_start_title">开始校准</string>
+    <string name="calibration_info_start_message">开始校准只进入本地校准状态并允许记录校准点，不会向 ESP32 写入归零。设备归零只在空载基准明显不对、换位置、换底座或传感器漂移时使用，确认后才会写入 ESP32。</string>
+    <string name="calibration_info_device_zero_title">设备归零</string>
+    <string name="calibration_info_device_zero_message">空载时使用。设备归零会通过确认弹窗向 ESP32 写入新的设备基准；换位置、换底座、传感器漂移或空载距离明显不对时再用。补采点或重新拟合模型通常不需要归零。</string>
+    <string name="calibration_info_record_title">记录</string>
+    <string name="calibration_info_record_message">记录会把当前参考重量输入和实时距离快照保存成本地校准点。稳定体重只作为质量提示，不是录点硬门槛。</string>
+    <string name="calibration_info_prediction_title">当前预测</string>
+    <string name="calibration_info_prediction_message">表格里的当前预测是录点当时 APP / 设备已有模型的预测值，不是新拟合模型的预测值。</string>
+    <string name="calibration_info_write_title">写入设备</string>
+    <string name="calibration_info_write_message">只有点击写入模型，当前选中的线性或二次模型才会通过 CAL:SET_MODEL 部署到 ESP32。记录点和拟合曲线都先停留在 APP 本地。</string>
     <string name="label_zero_explanation">先在空载基线状态下执行“归零”，再开始后续样本记录与模型判断。</string>
+    <string name="confirm_scale_zero_title">确认写入归零？</string>
+    <string name="confirm_scale_zero_message">“归零”会立即向 ESP32 发送 SCALE:ZERO，并刷新设备侧基准。取消不会发送。写入后当前版本不会自动撤回。</string>
+    <string name="confirm_cal_zero_title">确认写入工程归零？</string>
+    <string name="confirm_cal_zero_message">CAL:ZERO 同样是设备侧归零命令，会立即写入 ESP32，主要用于工程联调。取消不会发送。写入后当前版本不会自动撤回。</string>
     <string name="label_recording_state_active">录制状态：已开始，可记录校准点。</string>
     <string name="label_recording_state_inactive">录制状态：未开始，“记录校准点”已禁用。</string>
     <string name="label_stop_recording_recommended_hint">建议完成采样后先停止录制，再进入模型选择和写入阶段。</string>
@@ -302,6 +371,7 @@
     <string name="label_capture_hint_active">录制已开始。请先确认下面的必需条件，再把当前本地快照直接记为校准点。</string>
     <string name="label_capture_hint_requires_recording">需要先点击“开始录制”，录制状态开启后才能记录校准点。</string>
     <string name="label_capture_live_distance">实时距离：%1$s</string>
+    <string name="label_live_distance_short">实时距离</string>
     <string name="label_capture_semantics_explanation">记录校准点：APP 会立即把当前输入的参考重量和当前实时距离快照记录到本地点集。稳定体重会继续显示，但只作为质量参考，不再是录点硬门槛。</string>
     <string name="label_capture_preconditions_title">录点条件</string>
     <string name="label_capture_preconditions_hint">“必需条件”决定当前能否把本地快照记成点；“质量提示”只帮助判断样本是否更稳，不会阻止录点。</string>
@@ -331,12 +401,12 @@
     <string name="label_last_calibration_point">最近校准点</string>
     <string name="label_recording_destination">录制文件：%1$s</string>
     <string name="label_recorded_point_count">已记录校准点：%1$d</string>
-    <string name="label_latest_point_summary">最近一次：点%1$s 距离=%2$s mm 参考=%3$s kg 设备预测=%4$s kg 稳定/有效=%5$s/%6$s</string>
+    <string name="label_latest_point_summary">最近一次：点%1$s 距离=%2$s mm 参考=%3$s kg 当前预测=%4$s kg 稳定/有效=%5$s/%6$s</string>
     <string name="label_no_calibration_points">还没有记录到校准点。</string>
     <string name="label_point_index">点号</string>
     <string name="label_point_distance_mm">距离(mm)</string>
     <string name="label_point_reference_weight">参考(kg)</string>
-    <string name="label_point_predicted_weight">预测(kg)</string>
+    <string name="label_point_predicted_weight">当前预测(kg)</string>
     <string name="label_point_flags">稳/有效</string>
     <string name="field_model_reference">模型参考值</string>
     <string name="field_model_c0">模型 c0</string>
@@ -386,11 +456,19 @@
     <string name="label_model_option_not_ready">当前点数不足，还不能准备该模型</string>
     <string name="label_model_option_selected">当前选中</string>
     <string name="label_model_option_prepared">已准备写入</string>
+    <string name="label_model_option_ready_short">可选</string>
+    <string name="label_model_option_not_ready_short">点数不足</string>
+    <string name="label_model_option_selected_short">已选</string>
+    <string name="label_model_option_prepared_short">待写入</string>
+    <string name="label_fit_status_pass">拟合通过</string>
+    <string name="label_fit_status_fail">拟合未通过</string>
+    <string name="label_fit_status_insufficient">点数不足</string>
     <string name="label_prepared_model_title">当前待写入模型</string>
     <string name="label_prepared_model_unavailable">当前选中的模型还没有可部署拟合结果。请继续记录点，或改用高级手动覆盖。</string>
     <string name="label_prepared_model_source_auto">来自当前选中模型的自动准备</string>
     <string name="label_prepared_model_source_manual">来自高级手动覆盖</string>
     <string name="label_prepared_model_summary">待写入类型：%1$s | 来源：%2$s</string>
+    <string name="label_prepared_model_compact">待写入：%1$s  ref=%2$s  c0=%3$s  c1=%4$s  c2=%5$s</string>
     <string name="label_apply_step_hint">“写入模型”现在是主流程里的主要最终动作；前面的记录点和模型比较都只是本地分析，不会自动提交。</string>
     <string name="label_apply_boundary_hint">边界说明：记录点和模型比较都会先停留在 APP 本地；只有点击“写入模型”才会部署。旧 Z/K 校准已被移到高级工程区。</string>
     <string name="label_write_model_result_title">最近一次写入结果</string>
@@ -460,6 +538,7 @@
     <string name="message_wave_stop_fallback_success">WAVE:STOP 不支持，已回退发送 E:0</string>
     <string name="message_send_failed">发送失败（%1$s）：%2$s</string>
     <string name="fall_stop_capability_sync_soft_failure">摔倒停波保护能力回读暂不可用</string>
+    <string name="leave_protection_capability_sync_soft_failure">律动离开能力回读暂不可用</string>
     <string name="warning_no_stream_data">未收到正式 measurement plane 样本（请确认已开启通知且固件在发送）</string>
     <string name="recording_started">正在录制到 %1$s</string>
     <string name="recording_failed">录制失败：%1$s</string>
