@@ -262,6 +262,35 @@ public:
     }
     if (s.equalsIgnoreCase("WAVE:START")) { out.type = CmdType::WAVE_START; return true; }
     if (s.equalsIgnoreCase("WAVE:STOP"))  { out.type = CmdType::WAVE_STOP;  return true; }
+    if (s.startsWith("AUDIO:CUE ") || s.equalsIgnoreCase("AUDIO:CUE")) {
+      out.type = CmdType::AUDIO_CUE;
+
+      // Keep this command deliberately strict. CUE is optional and one-shot;
+      // accepting a partially parsed or unknown id could produce an audible
+      // event for a stale/typoed command.
+      String rest = s.substring(String("AUDIO:CUE").length());
+      rest.trim();
+      if (!rest.startsWith("id=")) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+      String id = rest.substring(3);
+      id.trim();
+      if (id.length() == 0 || id.indexOf(' ') >= 0 || id.indexOf(',') >= 0) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+      if (id.equalsIgnoreCase("CONNECT")) {
+        out.audioCue.id = AudioCueId::CONNECT;
+        return true;
+      }
+      if (id.equalsIgnoreCase("DISCONNECT")) {
+        out.audioCue.id = AudioCueId::DISCONNECT;
+        return true;
+      }
+      err = "INVALID_PARAM";
+      return false;
+    }
     if (s.equalsIgnoreCase("SCALE:ZERO")) { out.type = CmdType::SCALE_ZERO; return true; }
     if (s.equalsIgnoreCase("CAL:ZERO"))   { out.type = CmdType::CAL_ZERO; return true; }
     if (s.startsWith("SCALE:CAL")) {

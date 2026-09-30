@@ -1263,6 +1263,16 @@ void test_protocol_parse_core_commands() {
   assert(ProtocolCodec::parseCommand("WAVE:STOP", command, error));
   assert(command.type == CmdType::WAVE_STOP);
 
+  assert(ProtocolCodec::parseCommand("AUDIO:CUE id=CONNECT", command, error));
+  assert(command.type == CmdType::AUDIO_CUE);
+  assert(command.audioCue.id == AudioCueId::CONNECT);
+  assert(ProtocolCodec::parseCommand("AUDIO:CUE id=DISCONNECT", command, error));
+  assert(command.audioCue.id == AudioCueId::DISCONNECT);
+  assert(!ProtocolCodec::parseCommand("AUDIO:CUE id=UNKNOWN", command, error));
+  expect_reason(error.c_str(), "INVALID_PARAM");
+  assert(!ProtocolCodec::parseCommand("AUDIO:CUE", command, error));
+  expect_reason(error.c_str(), "INVALID_PARAM");
+
   assert(ProtocolCodec::parseCommand("STREAM:SET enabled=1,rate_hz=10", command, error));
   assert(command.type == CmdType::STREAM_SET);
   assert(command.streamSubscription.enabled);
@@ -1528,10 +1538,10 @@ void test_protocol_encode_stop_and_safety_contract() {
 
 void test_hub_ack_builder_core_contracts() {
   String encoded = HubAckBuilder::cap("1.2.3", "build-1", "sonicwave_esp32s3_n16r8", 1, PlatformModel::PLUS, true);
-  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 build=build-1 board=sonicwave_esp32s3_n16r8 proto=1 platform_model=PLUS laser_installed=1 leave_stop_supported=1 stream_control_supported=1");
+  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 build=build-1 board=sonicwave_esp32s3_n16r8 proto=1 platform_model=PLUS laser_installed=1 leave_stop_supported=1 stream_control_supported=1 cue_supported=1");
 
   encoded = HubAckBuilder::cap("1.2.3", "build-1", "sonicwave_esp32s3_n16r8", 1, PlatformModel::BASE, false);
-  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 build=build-1 board=sonicwave_esp32s3_n16r8 proto=1 platform_model=BASE laser_installed=0 leave_stop_supported=1 stream_control_supported=1");
+  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 build=build-1 board=sonicwave_esp32s3_n16r8 proto=1 platform_model=BASE laser_installed=0 leave_stop_supported=1 stream_control_supported=1 cue_supported=1");
   expect_not_contains(encoded, "measurement_health=");
   expect_not_contains(encoded, "degraded_start_available=");
   expect_not_contains(encoded, "degraded_start_enabled=");

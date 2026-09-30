@@ -25,6 +25,8 @@ Allowed fields:
 - static protocol capabilities, when they are short and explicitly reviewed,
   for example `stream_control_supported`
 
+- `cue_supported`：静态提示音能力；值为 `1` 时 APP 可以在当前协议 ready 边沿发送一次 `AUDIO:CUE id=CONNECT`。
+
 If compatibility requires temporary retention of additional fields, they must remain few, short, and explicitly reviewed.
 
 ### `SNAPSHOT`

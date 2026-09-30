@@ -20,7 +20,7 @@
 #### 2.1 能力探测
 - 请求: `CAP?`
 - 预期回包:
-  - `ACK:CAP fw=SW-HUB-1.0.0 proto=2 platform_model=<BASE|PLUS|PRO|ULTRA> laser_installed=<0|1> ...`
+  - `ACK:CAP fw=SW-HUB-1.0.0 proto=2 platform_model=<BASE|PLUS|PRO|ULTRA> laser_installed=<0|1> ... cue_supported=<0|1>`
 
 #### 2.2 设备配置
 - 写入设备画像:
@@ -51,6 +51,11 @@
   - 兼容输入键：`freq` 和 `amp`
 - 启动: `WAVE:START`
 - 停止: `WAVE:STOP`
+
+#### 2.5 连接提示音
+- APP 在当前连接完成 CAP/SNAPSHOT 协议确认且 `cue_supported=1` 时发送一次 `AUDIO:CUE id=CONNECT`。
+- 断开提示音由 ESP32 在真实 BLE 断开后本地播放；APP 不发送 `DISCONNECT` 命令。
+- 提示音失败不影响连接、WAVE、停止和 Plus 运行状态判断。
 
 #### 2.5 测重与校准
 - 归零: `SCALE:ZERO`

@@ -239,7 +239,7 @@ class MyServerCallbacks : public BLEServerCallbacks {
           reasonCode,
           rawReason,
           millis());
-      if (!g_self->enqueueDisconnectEvent()) {
+      if (!g_self->enqueueDisconnectEvent(g_self->sessionId, connId, param != nullptr)) {
         g_self->noteLifecycleControlEnqueueFailure("BLE_DISCONNECTED");
       }
     }
@@ -308,6 +308,10 @@ void BleTransport::begin(CommandBus* cb, const char* deviceName, const char* adv
   bus = cb;
   g_self = this;
   sessionId = 0;
+  lastHandledConnectSessionId = 0;
+  lastHandledDisconnectSessionId = 0;
+  lastHandledDisconnectConnId = 0;
+  lastHandledDisconnectConnIdKnown = false;
   clearRecoveryState();
   rxActivityObserved = false;
   lastRxActivityAtMs = 0;
@@ -1074,6 +1078,9 @@ bool BleTransport::enqueueCommand(const std::string& raw) {
 
   ControlMsg msg{};
   msg.type = ControlMsg::Type::RX_COMMAND;
+  msg.sessionId = sessionId;
+  msg.connId = currentConnId;
+  msg.connIdKnown = currentConnIdValid;
   memcpy(msg.line, raw.data() + beg, len);
   msg.line[len] = '\0';
   return xQueueSend(controlQueue, &msg, 0) == pdTRUE;
@@ -1106,14 +1113,22 @@ bool BleTransport::enqueueConnectEvent() {
 
   ControlMsg msg{};
   msg.type = ControlMsg::Type::BLE_CONNECTED;
+  msg.sessionId = sessionId;
+  msg.connId = currentConnId;
+  msg.connIdKnown = currentConnIdValid;
   return xQueueSend(controlQueue, &msg, 0) == pdTRUE;
 }
 
-bool BleTransport::enqueueDisconnectEvent() {
+bool BleTransport::enqueueDisconnectEvent(uint32_t sessionIdValue,
+                                          uint16_t connIdValue,
+                                          bool connIdKnown) {
   if (!controlQueue) return false;
 
   ControlMsg msg{};
   msg.type = ControlMsg::Type::BLE_DISCONNECTED;
+  msg.sessionId = sessionIdValue;
+  msg.connId = connIdValue;
+  msg.connIdKnown = connIdKnown;
   return xQueueSend(controlQueue, &msg, 0) == pdTRUE;
 }
 
@@ -1525,6 +1540,7 @@ bool BleTransport::businessCommandBlockedByOta(const String& s) const {
       s.startsWith("SAFETY:") ||
       s.startsWith("DEVICE:SET_CONFIG") ||
       s.startsWith("CAL:") ||
+      s.startsWith("AUDIO:CUE") ||
       s.equalsIgnoreCase("ZERO") ||
       s.startsWith("SET_PS:");
 }
@@ -1544,6 +1560,25 @@ void BleTransport::controlTaskLoop() {
     }
 
     if (msg.type == ControlMsg::Type::BLE_CONNECTED) {
+      const bool stale = !deviceConnected || msg.sessionId != sessionId ||
+          (msg.connIdKnown && (!currentConnIdValid || msg.connId != currentConnId));
+      if (stale) {
+        SW_VERBOSE_SERIAL_PRINTF(
+            "[BLE CTRL] event=stale_lifecycle type=connected msg_session=%lu current_session=%lu msg_conn=%u current_conn=%u connected=%d\n",
+            static_cast<unsigned long>(msg.sessionId),
+            static_cast<unsigned long>(sessionId),
+            static_cast<unsigned>(msg.connId),
+            static_cast<unsigned>(currentConnId),
+            deviceConnected ? 1 : 0);
+        continue;
+      }
+      if (lastHandledConnectSessionId == msg.sessionId) {
+        SW_VERBOSE_SERIAL_PRINTF(
+            "[BLE CTRL] event=duplicate_lifecycle type=connected session_id=%lu\n",
+            static_cast<unsigned long>(msg.sessionId));
+        continue;
+      }
+      lastHandledConnectSessionId = msg.sessionId;
       if (disconnectSink) {
         disconnectSink->onBleConnected();
       }
@@ -1554,11 +1589,46 @@ void BleTransport::controlTaskLoop() {
     }
 
     if (msg.type == ControlMsg::Type::BLE_DISCONNECTED) {
+      const bool stale = deviceConnected || msg.sessionId != sessionId;
+      if (stale) {
+        SW_VERBOSE_SERIAL_PRINTF(
+            "[BLE CTRL] event=stale_lifecycle type=disconnected msg_session=%lu current_session=%lu msg_conn=%u connected=%d\n",
+            static_cast<unsigned long>(msg.sessionId),
+            static_cast<unsigned long>(sessionId),
+            static_cast<unsigned>(msg.connId),
+            deviceConnected ? 1 : 0);
+        continue;
+      }
+      if (lastHandledDisconnectSessionId == msg.sessionId &&
+          (!msg.connIdKnown || !lastHandledDisconnectConnIdKnown ||
+           lastHandledDisconnectConnId == msg.connId)) {
+        SW_VERBOSE_SERIAL_PRINTF(
+            "[BLE CTRL] event=duplicate_lifecycle type=disconnected session_id=%lu conn_id=%u\n",
+            static_cast<unsigned long>(msg.sessionId),
+            static_cast<unsigned>(msg.connId));
+        continue;
+      }
+      lastHandledDisconnectSessionId = msg.sessionId;
+      lastHandledDisconnectConnId = msg.connId;
+      lastHandledDisconnectConnIdKnown = msg.connIdKnown;
       setAdvertisingProfile(AdvertisingProfile::FAST_DISCOVERY, false);
       startAdvertisingSafe("disconnect_event");
       if (disconnectSink) {
-        disconnectSink->onBleDisconnect();
+        disconnectSink->onBleDisconnect(msg.sessionId, msg.connId, msg.connIdKnown);
       }
+      continue;
+    }
+
+    const bool staleCommand = !deviceConnected || msg.sessionId != sessionId ||
+        (msg.connIdKnown && (!currentConnIdValid || msg.connId != currentConnId));
+    if (staleCommand) {
+      SW_VERBOSE_SERIAL_PRINTF(
+          "[BLE CTRL] event=stale_command session_id=%lu current_session=%lu conn_id=%u current_conn=%u connected=%d\n",
+          static_cast<unsigned long>(msg.sessionId),
+          static_cast<unsigned long>(sessionId),
+          static_cast<unsigned>(msg.connId),
+          static_cast<unsigned>(currentConnId),
+          deviceConnected ? 1 : 0);
       continue;
     }
 
@@ -1582,6 +1652,10 @@ void BleTransport::controlTaskLoop() {
       }
       continue;
     }
+
+    cmd.transportSessionId = msg.sessionId;
+    cmd.connectionId = msg.connId;
+    cmd.connectionIdKnown = msg.connIdKnown;
 
     String ack;
     if (!bus) {

@@ -16,6 +16,98 @@ namespace {
 constexpr double kPhaseAccumulatorScale = 4294967296.0;
 constexpr float kAmplitudeEpsilon = 0.0005f;
 constexpr uint32_t kWaveWriteSlowWarnMs = 25UL;
+constexpr uint32_t kCueEnvelopeMs = 8UL;
+constexpr uint32_t kCueGapMs = 20UL;
+
+struct CueTone {
+  float frequencyHz;
+  uint32_t durationMs;
+};
+
+struct CueDefinition {
+  CueTone first;
+  CueTone second;
+};
+
+CueDefinition cueDefinition(AudioCueId id) {
+  if (id == AudioCueId::DISCONNECT) {
+    return {{440.0f, 100UL}, {330.0f, 160UL}};
+  }
+  return {{660.0f, 90UL}, {880.0f, 140UL}};
+}
+
+const char* cueDisplayName(AudioCueId id) {
+  return id == AudioCueId::DISCONNECT ? "断开连接提示音" : "连接成功提示音";
+}
+
+uint32_t cueDurationSamples(const CueDefinition& cue) {
+  return ((cue.first.durationMs + kCueGapMs + cue.second.durationMs) * SAMPLE_RATE) / 1000UL;
+}
+
+uint32_t cueToneLengthSamples(const CueTone& tone) {
+  return (tone.durationMs * SAMPLE_RATE) / 1000UL;
+}
+
+float cueEnvelope(uint32_t sampleInTone, uint32_t toneSamples) {
+  const uint32_t envelopeSamples = (kCueEnvelopeMs * SAMPLE_RATE) / 1000UL;
+  if (toneSamples == 0 || envelopeSamples == 0) return 1.0f;
+
+  float envelope = 1.0f;
+  if (sampleInTone < envelopeSamples) {
+    envelope = static_cast<float>(sampleInTone) /
+               static_cast<float>(envelopeSamples);
+  }
+  const uint32_t remaining = toneSamples - sampleInTone;
+  if (remaining < envelopeSamples) {
+    const float release = static_cast<float>(remaining) /
+                          static_cast<float>(envelopeSamples);
+    if (release < envelope) envelope = release;
+  }
+  if (envelope < 0.0f) return 0.0f;
+  if (envelope > 1.0f) return 1.0f;
+  return envelope;
+}
+
+uint32_t cuePhaseIncrementFromHz(float hz) {
+  return static_cast<uint32_t>((hz * kPhaseAccumulatorScale) / SAMPLE_RATE);
+}
+
+bool cueSample(const CueDefinition& cue,
+               uint32_t sampleIndex,
+               uint32_t& phaseAccumulator,
+               const int16_t* sineLut,
+               int16_t& outSample) {
+  const uint32_t firstSamples = cueToneLengthSamples(cue.first);
+  const uint32_t gapSamples = (kCueGapMs * SAMPLE_RATE) / 1000UL;
+  const uint32_t secondStart = firstSamples + gapSamples;
+  const uint32_t totalSamples = secondStart + cueToneLengthSamples(cue.second);
+
+  if (sampleIndex >= totalSamples) {
+    outSample = 0;
+    return false;
+  }
+
+  CueTone tone{};
+  uint32_t sampleInTone = 0;
+  if (sampleIndex < firstSamples) {
+    tone = cue.first;
+    sampleInTone = sampleIndex;
+  } else if (sampleIndex < secondStart) {
+    outSample = 0;
+    return true;
+  } else {
+    tone = cue.second;
+    sampleInTone = sampleIndex - secondStart;
+  }
+
+  phaseAccumulator += cuePhaseIncrementFromHz(tone.frequencyHz);
+  const uint8_t lutIndex = static_cast<uint8_t>(phaseAccumulator >> 24);
+  const float envelope = cueEnvelope(sampleInTone, cueToneLengthSamples(tone));
+  const int32_t scaled = static_cast<int32_t>(lroundf(
+      static_cast<float>(sineLut[lutIndex]) * envelope));
+  outSample = static_cast<int16_t>(scaled);
+  return true;
+}
 
 const char* waveCommFormatName() {
   return "I2S";
@@ -124,6 +216,17 @@ float WaveModule::clampUnit(float value) {
   return value;
 }
 
+const char* WaveModule::cueRequestResultName(CueRequestResult result) {
+  switch (result) {
+    case CueRequestResult::ACCEPTED: return "ACCEPTED";
+    case CueRequestResult::DUPLICATE: return "DUPLICATE";
+    case CueRequestResult::BUSY_WAVE: return "BUSY_WAVE";
+    case CueRequestResult::BUSY_CUE: return "BUSY_CUE";
+    case CueRequestResult::INVALID: return "INVALID";
+  }
+  return "INVALID";
+}
+
 void WaveModule::begin(EventBus* eventBus) {
   event_bus = eventBus;
   initLut();
@@ -142,12 +245,156 @@ void WaveModule::begin(EventBus* eventBus) {
   run_requested = false;
   run_state = false;
   display_freq = 0.0f;
+  cue_pending = false;
+  cue_pending_id = AudioCueId::CONNECT;
+  cue_pending_session_id = 0;
+  cue_pending_conn_id = 0;
+  cue_pending_conn_id_known = false;
+  cue_playing = false;
+  cue_playing_id = AudioCueId::CONNECT;
+  cue_playing_session_id = 0;
+  cue_preempt_requested = false;
   portEXIT_CRITICAL(&mux);
 
+  last_connect_cue_session_id = 0;
+  last_disconnect_cue_session_id = 0;
   i2s_stop(I2S_PORT);
   xTaskCreatePinnedToCore(taskThunk, "I2S_Audio", 4096, this, 4, NULL, 1);
   SW_VERBOSE_SERIAL_PRINTLN("[OK] WaveModule started");
   HumanReadableLog::measurement("波形输出模块已准备");
+}
+
+WaveModule::CueRequestResult WaveModule::requestCue(AudioCueId id,
+                                                    uint32_t transportSessionId,
+                                                    uint16_t connectionId,
+                                                    bool connectionIdKnown) {
+  if (id != AudioCueId::CONNECT && id != AudioCueId::DISCONNECT) {
+    return CueRequestResult::INVALID;
+  }
+
+  portENTER_CRITICAL(&mux);
+  const bool duplicate = id == AudioCueId::CONNECT
+      ? (transportSessionId != 0 && transportSessionId == last_connect_cue_session_id)
+      : (transportSessionId != 0 && transportSessionId == last_disconnect_cue_session_id);
+  if (duplicate) {
+    portEXIT_CRITICAL(&mux);
+    SW_VERBOSE_SERIAL_PRINTF("[CUE] request id=%s result=%s session_id=%lu\n",
+                             audioCueIdName(id),
+                             cueRequestResultName(CueRequestResult::DUPLICATE),
+                             static_cast<unsigned long>(transportSessionId));
+    HumanReadableLog::cueRequested(cueDisplayName(id), "已忽略（本次连接已播放）");
+    return CueRequestResult::DUPLICATE;
+  }
+
+  const bool waveBusy = run_requested || run_state;
+  if (id == AudioCueId::CONNECT && waveBusy) {
+    portEXIT_CRITICAL(&mux);
+    SW_VERBOSE_SERIAL_PRINTF("[CUE] request id=%s result=%s session_id=%lu\n",
+                             audioCueIdName(id),
+                             cueRequestResultName(CueRequestResult::BUSY_WAVE),
+                             static_cast<unsigned long>(transportSessionId));
+    HumanReadableLog::cueRequested(cueDisplayName(id), "暂不播放（律动正在输出）");
+    return CueRequestResult::BUSY_WAVE;
+  }
+
+  if (cue_pending || cue_playing) {
+    const bool oldDisconnectCue =
+        (cue_playing && cue_playing_id == AudioCueId::DISCONNECT &&
+         (transportSessionId == 0 || cue_playing_session_id != transportSessionId)) ||
+        (cue_pending && cue_pending_id == AudioCueId::DISCONNECT &&
+         (transportSessionId == 0 || cue_pending_session_id != transportSessionId));
+    if (id == AudioCueId::CONNECT && oldDisconnectCue) {
+      // A new BLE session owns the next CONNECT cue. If the previous session's
+      // DISCONNECT cue is still draining, preempt it at the next buffer
+      // boundary instead of losing the new-session CONNECT cue to BUSY_CUE.
+      cue_pending = true;
+      cue_pending_id = id;
+      cue_pending_session_id = transportSessionId;
+      cue_pending_conn_id = connectionId;
+      cue_pending_conn_id_known = connectionIdKnown;
+      cue_preempt_requested = cue_playing && cue_playing_id == AudioCueId::DISCONNECT;
+      last_connect_cue_session_id = transportSessionId;
+      portEXIT_CRITICAL(&mux);
+      SW_VERBOSE_SERIAL_PRINTF("[CUE] request id=%s result=%s session_id=%lu priority=new_session\n",
+                               audioCueIdName(id),
+                               cueRequestResultName(CueRequestResult::ACCEPTED),
+                               static_cast<unsigned long>(transportSessionId));
+      HumanReadableLog::cueRequested(cueDisplayName(id), "已接受（新连接优先）");
+      return CueRequestResult::ACCEPTED;
+    }
+    if (id == AudioCueId::DISCONNECT &&
+        ((cue_playing && cue_playing_id == AudioCueId::CONNECT) ||
+         (cue_pending && cue_pending_id == AudioCueId::CONNECT))) {
+      // A disconnect has priority over a still-playing connect cue. The
+      // audio task will stop at the next buffer boundary and play the
+      // disconnect cue after WAVE has become silent.
+      cue_pending = true;
+      cue_pending_id = id;
+      cue_pending_session_id = transportSessionId;
+      cue_pending_conn_id = connectionId;
+      cue_pending_conn_id_known = connectionIdKnown;
+      cue_preempt_requested = cue_playing && cue_playing_id == AudioCueId::CONNECT;
+      last_disconnect_cue_session_id = transportSessionId;
+      portEXIT_CRITICAL(&mux);
+      SW_VERBOSE_SERIAL_PRINTF("[CUE] request id=%s result=%s session_id=%lu priority=1\n",
+                               audioCueIdName(id),
+                               cueRequestResultName(CueRequestResult::ACCEPTED),
+                               static_cast<unsigned long>(transportSessionId));
+      HumanReadableLog::cueRequested(cueDisplayName(id), "已接受");
+      return CueRequestResult::ACCEPTED;
+    }
+    portEXIT_CRITICAL(&mux);
+    SW_VERBOSE_SERIAL_PRINTF("[CUE] request id=%s result=%s session_id=%lu\n",
+                             audioCueIdName(id),
+                             cueRequestResultName(CueRequestResult::BUSY_CUE),
+                             static_cast<unsigned long>(transportSessionId));
+    HumanReadableLog::cueRequested(cueDisplayName(id), "暂不播放（已有提示音）");
+    return CueRequestResult::BUSY_CUE;
+  }
+
+  cue_pending = true;
+  cue_pending_id = id;
+  cue_pending_session_id = transportSessionId;
+  cue_pending_conn_id = connectionId;
+  cue_pending_conn_id_known = connectionIdKnown;
+  if (id == AudioCueId::CONNECT) {
+    last_connect_cue_session_id = transportSessionId;
+  } else {
+    last_disconnect_cue_session_id = transportSessionId;
+  }
+  portEXIT_CRITICAL(&mux);
+
+  SW_VERBOSE_SERIAL_PRINTF("[CUE] request id=%s result=%s session_id=%lu\n",
+                           audioCueIdName(id),
+                           cueRequestResultName(CueRequestResult::ACCEPTED),
+                           static_cast<unsigned long>(transportSessionId));
+  HumanReadableLog::cueRequested(cueDisplayName(id), "已接受");
+  return CueRequestResult::ACCEPTED;
+}
+
+void WaveModule::resetCuesForNewSession(uint32_t transportSessionId) {
+  bool cancelledPending = false;
+  bool preemptedActive = false;
+
+  portENTER_CRITICAL(&mux);
+  cancelledPending = cue_pending;
+  cue_pending = false;
+  cue_pending_session_id = 0;
+  cue_pending_conn_id = 0;
+  cue_pending_conn_id_known = false;
+  if (cue_playing) {
+    cue_preempt_requested = true;
+    preemptedActive = true;
+  }
+  portEXIT_CRITICAL(&mux);
+
+  if (cancelledPending || preemptedActive) {
+    SW_VERBOSE_SERIAL_PRINTF(
+        "[CUE] event=session_reset new_session=%lu pending_cancelled=%d active_preempt=%d\n",
+        static_cast<unsigned long>(transportSessionId),
+        cancelledPending ? 1 : 0,
+        preemptedActive ? 1 : 0);
+  }
 }
 
 void WaveModule::setParams(float hz, int inten) {
@@ -320,6 +567,11 @@ void WaveModule::audioTask() {
   uint32_t write_error_count = 0;
   uint32_t short_write_count = 0;
   uint32_t slow_write_count = 0;
+  bool cue_active_local = false;
+  AudioCueId cue_active_id = AudioCueId::CONNECT;
+  uint32_t cue_sample_index = 0;
+  uint32_t cue_phase_acc = 0;
+  uint32_t cue_total_samples = 0;
 
   auto setRunState = [&](bool running) {
     if (running == last_run_state) return;
@@ -348,6 +600,109 @@ void WaveModule::audioTask() {
     start_sequence = output_start_sequence;
     start_requested_at_ms = output_start_requested_at_ms;
     portEXIT_CRITICAL(&mux);
+
+    // CUE shares this task and I2S writer with WAVE. While a cue is active,
+    // the normal WAVE path is paused for this iteration; a WAVE start request
+    // remains latched and is picked up after the cue has finished.
+    if (cue_active_local) {
+      bool preemptRequested = false;
+      portENTER_CRITICAL(&mux);
+      preemptRequested = cue_preempt_requested;
+      portEXIT_CRITICAL(&mux);
+
+      const CueDefinition cue = cueDefinition(cue_active_id);
+      if (!i2s_active) {
+        const esp_err_t zeroErr = i2s_zero_dma_buffer(I2S_PORT);
+        const esp_err_t startErr = i2s_start(I2S_PORT);
+        SW_VERBOSE_SERIAL_PRINTF(
+            "[CUE] event=start id=%s zero_dma=%d start=%d samples=%lu\n",
+            audioCueIdName(cue_active_id),
+            static_cast<int>(zeroErr),
+            static_cast<int>(startErr),
+            static_cast<unsigned long>(cue_total_samples));
+        HumanReadableLog::cueStarted(cueDisplayName(cue_active_id));
+        i2s_active = true;
+      }
+
+      for (int i = 0; i < BUFFER_LEN; ++i) {
+        int16_t sample = 0;
+        cueSample(cue, cue_sample_index, cue_phase_acc, sine_lut, sample);
+        audio_buffer[i * 2] = sample;
+        audio_buffer[i * 2 + 1] = sample;
+        cue_sample_index += 1;
+      }
+
+      size_t bytes_written = 0;
+      const esp_err_t writeErr = i2s_write(
+          I2S_PORT, audio_buffer, sizeof(audio_buffer), &bytes_written, portMAX_DELAY);
+      if (writeErr != ESP_OK || bytes_written != sizeof(audio_buffer)) {
+        SW_VERBOSE_SERIAL_PRINTF(
+            "[CUE] event=write_error id=%s err=%d bytes=%lu expected=%lu\n",
+            audioCueIdName(cue_active_id),
+            static_cast<int>(writeErr),
+            static_cast<unsigned long>(bytes_written),
+            static_cast<unsigned long>(sizeof(audio_buffer)));
+      }
+
+      const bool complete = cue_sample_index >= cue_total_samples;
+      if (complete || preemptRequested) {
+        const esp_err_t zeroErr = i2s_zero_dma_buffer(I2S_PORT);
+        const esp_err_t stopErr = i2s_stop(I2S_PORT);
+        i2s_active = false;
+        const AudioCueId completedId = cue_active_id;
+        cue_active_local = false;
+        cue_sample_index = 0;
+        cue_phase_acc = 0;
+        cue_total_samples = 0;
+        portENTER_CRITICAL(&mux);
+        cue_playing = false;
+        cue_playing_id = AudioCueId::CONNECT;
+        cue_playing_session_id = 0;
+        cue_preempt_requested = false;
+        portEXIT_CRITICAL(&mux);
+        SW_VERBOSE_SERIAL_PRINTF(
+            "[CUE] event=%s id=%s zero_dma=%d stop=%d\n",
+            complete ? "complete" : "preempted",
+            audioCueIdName(completedId),
+            static_cast<int>(zeroErr),
+            static_cast<int>(stopErr));
+        if (complete) {
+          HumanReadableLog::cueCompleted(cueDisplayName(completedId));
+        }
+      }
+      continue;
+    }
+
+    bool pendingCue = false;
+    AudioCueId pendingCueId = AudioCueId::CONNECT;
+    portENTER_CRITICAL(&mux);
+    pendingCue = cue_pending;
+    pendingCueId = cue_pending_id;
+    // A CONNECT cue accepted while the device was idle must not be lost if a
+    // WAVE:START command is processed before this audio task gets its next
+    // turn.  The cue keeps priority while the output is silent; a pending
+    // DISCONNECT cue still requires the normal stop request to be cleared.
+    const bool cueMayStart = pendingCueId == AudioCueId::CONNECT || !req_run;
+    if (pendingCue && cueMayStart && !i2s_active && current_amplitude <= kAmplitudeEpsilon) {
+      cue_pending = false;
+      cue_active_local = true;
+      cue_active_id = pendingCueId;
+      cue_sample_index = 0;
+      cue_phase_acc = 0;
+      cue_total_samples = cueDurationSamples(cueDefinition(cue_active_id));
+      cue_playing = true;
+      cue_playing_id = cue_active_id;
+      cue_playing_session_id = cue_pending_session_id;
+      cue_preempt_requested = false;
+      pendingCue = false;
+    }
+    portEXIT_CRITICAL(&mux);
+    if (cue_active_local) {
+      SW_VERBOSE_SERIAL_PRINTF("[CUE] event=accepted id=%s samples=%lu\n",
+                               audioCueIdName(cue_active_id),
+                               static_cast<unsigned long>(cue_total_samples));
+      continue;
+    }
 
     if (req_run && start_sequence != observed_start_sequence) {
       observed_start_sequence = start_sequence;
@@ -567,6 +922,14 @@ void WaveModule::audioTask() {
         i2s_active = false;
         current_amplitude = 0.0f;
         setRunState(false);
+        uint32_t stopSequence = 0;
+        portENTER_CRITICAL(&mux);
+        wave_stop_sequence += 1;
+        stopSequence = wave_stop_sequence;
+        portEXIT_CRITICAL(&mux);
+        SW_VERBOSE_SERIAL_PRINTF(
+            "[WAVE_OUTPUT_STOP_COMPLETE] sequence=%lu reason=run_request_cleared\n",
+            static_cast<unsigned long>(stopSequence));
         ramp_state = RampState::IDLE;
         vTaskDelay(pdMS_TO_TICKS(RAMP_UPDATE_INTERVAL_MS == 0 ? 1 : RAMP_UPDATE_INTERVAL_MS));
         continue;

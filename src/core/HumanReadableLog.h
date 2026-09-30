@@ -47,6 +47,20 @@ inline void waveStopped(const char* reason) {
   Serial.printf("[波形输出] 已停止：原因=%s\n", reason ? reason : "未知");
 }
 
+inline void cueRequested(const char* cue, const char* result) {
+  Serial.printf("[提示音] 请求%s：%s\n",
+                cue ? cue : "未知音效",
+                result ? result : "未知结果");
+}
+
+inline void cueStarted(const char* cue) {
+  Serial.printf("[提示音] 已开始播放：%s\n", cue ? cue : "未知音效");
+}
+
+inline void cueCompleted(const char* cue) {
+  Serial.printf("[提示音] 已播放完成：%s\n", cue ? cue : "未知音效");
+}
+
 inline void stateChanged(const char* previous, const char* current) {
   Serial.printf("[设备状态] 状态变化：%s → %s\n",
                 previous ? previous : "未知",

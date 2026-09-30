@@ -1,11 +1,11 @@
 # ESP32 连接提示音施工前测试与审计清单
 
-状态：施工前准备
+状态：施工后自动验证清单（真机/示波器项目待执行）
 适用功能：连接「滴——叮」、断开「叮——咚」
 前置文档：[ESP32 连接与断开提示音施工蓝图](esp32连接提示音施工蓝图.md)
 原则：先证明状态和协议，再证明声音；先做自动检查，再做真机和示波器验收。
 
-## 1. 施工前门禁
+## 1. 施工前门禁（已完成）
 
 代码施工开始前必须全部满足：
 
@@ -156,7 +156,7 @@ iOS 当前没有名为 `protocolReady` 的单一字段。CoreBluetooth 已 conne
 
 ## 10. 基线和交付记录
 
-施工前已验证：
+施工前基线已验证：
 
 - `python3 tools/run_evaluator_unit_tests.py`：通过。
 - `python3 tools/test_release_build_contract.py`：通过，4 个测试通过。
@@ -164,11 +164,17 @@ iOS 当前没有名为 `protocolReady` 的单一字段。CoreBluetooth 已 conne
 - `python3 tools/test_bootchain_baseline_build_flags.py`：当前环境缺少 `SCons`，未运行成功。
 - `git diff --check`：通过。
 
-施工后必须新增：
+本次施工后已完成：
 
-- 固件 focused test 结果。
-- Android/iOS command/ready-edge test 结果。
-- PlatformIO 编译结果。
+- `python3 tools/run_evaluator_unit_tests.py`：通过，包含 `AUDIO:CUE` 解析、非法参数和 CAP 能力字段。
+- `python3 tools/test_release_build_contract.py`：通过，4 个测试通过。
+- `python3 -m platformio run -e esp32s3`：通过。
+- Android `:sonicwave-protocol:test`、`:core-device-sonicwave:test`：通过。
+- iOS `DeviceContractsTests` 与连接提示音 repository focused test：通过；完整 CoreDeviceSonicWaveTests 仍有 6 个既有基线失败，未归因于本次 CUE 改动。
+- `git diff --check`：通过。
+
+仍待执行：
+
 - 真机 APP + ESP32 时序日志。
 - PCM5102A 示波器记录。
 - 330 Hz 听感结论。

@@ -1,6 +1,6 @@
 # ESP32 连接与断开提示音施工蓝图
 
-状态：当前施工蓝图（尚未进入代码施工）
+状态：施工已完成（逻辑与编译验证通过，待真机/示波器验收）
 文档类型：D3 全面详细 / 高风险冻结
 适用范围：`SW_ESP3_Firmware`、Android/iOS 设备连接触发链、PCM5102A 音频输出链
 日期：2026-09-30
@@ -9,7 +9,14 @@
 
 这项功能可以放在 ESP32 现有的 `WaveModule → I2S → PCM5102A` 输出链中实现，但必须新增一个独立的 **CUE（提示音）模式**。CUE 只复用 I2S 硬件和唯一音频写入任务，不复用 WAVE 的频率、强度、运行状态或停止语义。
 
-本轮只形成施工蓝图，**不修改 APP、不修改固件、不改 BLE 协议、不烧录**。当前允许继续做的是合同、参数表、测试用例和实现前检查；连接/断开两种提示音参数已经确定，业务代码施工要等 CUE 协议、生命周期消息身份和断连停波门禁冻结后再开始。
+本文件先记录施工前冻结的合同，后半部分补充实际施工结果。连接/断开两种提示音已经按本蓝图接入固件、Android 和 iOS；当前还没有烧录真机，也没有示波器读数，因此硬件电压和实际听感仍属于待验收项。
+
+施工结果摘要：
+
+- 固件已增加独立 `AUDIO:CUE` 解析、能力字段 `cue_supported=1`、单一 `I2S_Audio` 任务内的 CONNECT/DISCONNECT CUE 和 session/connId 过期消息丢弃。
+- Android/iOS 只在当前连接协议事实成立且设备声明支持 CUE 时发送一次 CONNECT；断开音由 ESP32 的真实 BLE 断开事件触发。
+- WAVE 的 `0..50 Hz`、强度 `0..120`、`isOutputActive()` 和现有安全停波 owner 保持不变。
+- 固件、Android/iOS 的自动验证已完成；真机时序、喇叭听感和 PCM5102A `0.8 Vpk` 仍需单独验收。
 
 当前架构判断：
 
@@ -40,7 +47,7 @@ APP transport connected
         ↓
 APP 完成 CAP/SNAPSHOT 等协议确认，当前连接 epoch 的 protocolReady=true
         ↓
-APP 由当前连接 owner 发送一次 AUDIO:CUE id=CONNECT（命令字段仍待协议冻结）
+APP 由当前连接 owner 发送一次 AUDIO:CUE id=CONNECT（仅在当前连接协议事实成立且 CAP 声明支持时）
         ↓
 ESP32 ProtocolCodec → CommandBus → HubHandler
         ↓
@@ -60,7 +67,7 @@ BleTransport 控制任务通知 HubHandler / SystemStateMachine
         ↓
 保留现有安全停波路径
         ↓
-WaveModule.isOutputActive() 变为 false，且 audioTask 发布对应 stop sequence 完成事件
+WaveModule 的同一个 audioTask 将 WAVE 软停到静音并停止 I2S
         ↓
 WaveModule 请求 DISCONNECT CUE
         ↓
@@ -128,7 +135,7 @@ AUDIO:CUE id=CONNECT
 ACK:AUDIO_CUE id=CONNECT result=ACCEPTED
 ```
 
-命令名和 ACK 的字段在代码施工前作为协议合同复核项。旧 APP 不发送这条命令时，WAVE、连接、停止和保护功能必须完全不受影响；旧固件不认识这条命令时，APP 应把它当成可选能力，而不能把未播放提示音判成连接失败。
+命令名、ACK 字段和 `cue_supported=1` 能力字段已经冻结并写入固件/APP 测试。旧 APP 不发送这条命令时，WAVE、连接、停止和保护功能不受影响；旧固件没有该能力字段时，APP 跳过提示音，不把未播放提示音判成连接失败。
 
 断开提示音不依赖 APP 发送 `DISCONNECT` 命令，使用 ESP32 真实断开事件触发，避免链路已经断开后命令丢失。
 
@@ -143,16 +150,15 @@ ACK:AUDIO_CUE id=CONNECT result=ACCEPTED
 
 当前 `BleTransport` 的 `sessionId` 在新连接时递增、断开时不递增，施工时应把它作为 ESP32 侧断开去重身份。APP 侧使用 Android `transportEpoch` 或 iOS `connectionGeneration`，不能用页面生命周期或本地时间戳代替。
 
-施工前还必须补齐 BLE 控制消息的身份：当前 `ControlMsg` 只有类型和文本，没有 `sessionId/connId`。连接、断开和 RX 命令进入队列后，如果旧消息晚于新连接才被处理，可能把旧断开误用于新连接，或在断开后仍处理排队的 CONNECT CUE。后续控制消息必须携带捕获时的 transport session/connId，控制任务先校验当前 session 和 `deviceConnected`，过期消息直接丢弃。
+BLE 控制消息的身份已经补齐：`ControlMsg` 携带捕获时的 `sessionId/connId`，控制任务先校验当前 session、连接状态和 connId；旧断开、旧 RX 命令和重复生命周期事件会被丢弃，不会影响新连接。
 
 如果断开事件到达时 CONNECT CUE 还在等待队列中，应丢弃 CONNECT 请求，优先完成停波并播放一次 DISCONNECT CUE。重复断开事件只返回 `duplicate`，不得再次发声。
 
 ### 5.4 断连停波合同
 
-产品要求是“律动中断开，必须先停 WAVE，再播放断开音”。因此 CUE 功能不能接受 `WARNING_ONLY` 这种断连后仍让 WAVE 继续运行的配置组合。施工前必须二选一并写入正式配置合同：
+产品要求是“律动中断开，必须先停 WAVE，再播放断开音”。因此 CUE 功能不能接受 `WARNING_ONLY` 这种断连后仍让 WAVE 继续运行的配置组合。当前固件已用编译期 `static_assert` 拒绝该组合，正式产品策略继续使用 `RECOVERABLE_PAUSE`：
 
-- 正式产品构建固定使用当前 `RECOVERABLE_PAUSE` 或 `BLOCKING_FAULT` 停波策略；
-- 或由 `SystemStateMachine` 增加独立的“断连提示音前置停波”请求，仍由 FSM 调用唯一的 WAVE stop owner。
+- 正式产品构建固定使用当前 `RECOVERABLE_PAUSE`；`SystemStateMachine` 仍是唯一 WAVE stop owner。
 
 CUE 层不能直接调用 `WaveModule::stopSoft()` 越过 FSM，也不能在 WAVE 仍输出时播放断开音。
 
@@ -191,7 +197,7 @@ CUE 播放期间不改变 `SystemStateMachine` 的 WAVE 状态。提示音结束
 
 如果 CONNECT CUE 播放期间收到 `WAVE:START`，不能让 WAVE 与 CUE 同时写 DMA。建议按“断连停波 > 已接受的 CUE > WAVE 开始”的顺序排队：先记住合法的 WAVE start 请求，等 CUE 完成后再进入原有 WAVE ramp；如果产品决定拒绝，则返回明确的 `NACK:BUSY_CUE`，不能静默丢弃。
 
-断开停波必须是非阻塞交接：`SystemStateMachine` 继续调用现有 `stopSoft()`，由 `audioTask` 在软停完成、写入静音帧并停止 I2S 后发布 stop sequence/完成事件；控制任务看到完成事件后再发起 DISCONNECT CUE。BLE 回调和控制任务都不能忙等 500 ms，也不能直接写 I2S。
+断开停波采用非阻塞交接：`SystemStateMachine` 继续调用现有 `stopSoft()`，同一个 `audioTask` 在检测到 `run_requested=false`、幅度归零且 I2S 已停止后，才把待处理的 DISCONNECT CUE 切入播放。BLE 回调和控制任务不等待 500 ms，也不直接写 I2S。
 
 ### 6.4 幅度和参数
 
@@ -218,13 +224,13 @@ CUE 的峰值目标使用 `MAX_AMPLITUDE=8826`，所以名义峰值与 WAVE 强�
 
 ## 7. 施工分包和文件 owner
 
-### 包 0：合同和测试夹具（本轮）
+### 包 0：合同和测试夹具（已完成）
 
 - 固化连接真相、断开真相、停波后播放顺序、事件去重和幅度口径。
 - 形成 CUE 参数表、协议草案、状态转移表和回滚点。
 - 不改业务代码。
 
-### 包 1：WaveModule CUE 调度器（固件）
+### 包 1：WaveModule CUE 调度器（已完成）
 
 涉及：`src/modules/wave/WaveModule.h/.cpp`、必要的纯策略文件和 focused tests。
 
@@ -233,7 +239,7 @@ CUE 的峰值目标使用 `MAX_AMPLITUDE=8826`，所以名义峰值与 WAVE 强�
 - 不改变现有 WAVE 参数、WAVE ramp、`isOutputActive()` 和对外事件。
 - CUE 请求必须非阻塞；队列满、正在播放或状态不允许时返回明确结果。
 
-### 包 2：协议入口和 APP 连接触发
+### 包 2：协议入口和 APP 连接触发（已完成）
 
 涉及：`src/core/ProtocolCodec.h/.cpp`、`HubHandler`、Android/iOS 设备 gateway。
 
@@ -244,24 +250,24 @@ CUE 的峰值目标使用 `MAX_AMPLITUDE=8826`，所以名义峰值与 WAVE 强�
 - Android 现有 `SoundPool` 只用于 Home 页点击声且默认关闭，iOS 现有 `MediaPlayer` 只用于功能音乐；两者都不是连接提示音 owner，不能把它们接入本功能。
 - 不在页面 `onResume`、按钮点击、连接 UI 重绘或任意重试回调中直接发声。
 
-### 包 3：断开停波后提示音
+### 包 3：断开停波后提示音（已完成，待真机时序验收）
 
 涉及：`BleTransport`、`SystemStateMachine`、`HubHandler` 与 WaveModule 的窄接口。
 
 - BLE 回调只投递断开事件。
 - 复用现有安全停波路径。
-- 等 `isOutputActive()` 变为 false，并收到由 `audioTask` 发布的 stop sequence 完成交接事件后再接受 DISCONNECT CUE；控制任务只事件驱动等待，不忙等。
+- 由 `audioTask` 在 `isOutputActive()` 已变为 false、幅度归零且 I2S 已停止后切入 DISCONNECT CUE；控制任务不忙等。
 - 断开事件按 transport session 去重，连接音未播放完成时按优先级丢弃连接音。
 - 如果生命周期事件入队失败或队列已满，不能猜测连接状态，也不能播放错误提示音；必须保留安全停波降级和中文异常日志。
 - 明确 OTA 期间 `AUDIO:CUE` 是拒绝、静默忽略还是允许；不得绕过现有 OTA business block。
 
-### 包 4：验证、中文日志和长期文档
+### 包 4：验证、中文日志和长期文档（逻辑验证已完成）
 
 - 添加 parser/状态机/去重/顺序 focused tests。
 - 更新 `docs/protocol.md`、`docs/architecture_runtime.md` 和幅度设计文档；只有代码和实测通过后才写入正式合同。
 - 形成 `reports/` 真机记录，记录 APP 日志、ESP32 日志、示波器读数和失败情况。
 
-### 包 5：真机和硬件验收
+### 包 5：真机和硬件验收（待执行）
 
 - 使用现有 PlatformIO 入口编译、烧录和串口监视。
 - 在 PCM5102A `OUTL/OUTR` 对 `AGND` 测量连接音、断开音和 WAVE 强度 120 的 `Vpk/Vrms/Vpp`。
@@ -378,4 +384,4 @@ CUE 的峰值目标使用 `MAX_AMPLITUDE=8826`，所以名义峰值与 WAVE 强�
 - 如何防止重复连接、重复断开和链路抖动造成重复发声；
 - 如果提示音失败，如何保证律动和安全主链仍然可用。
 
-在这份蓝图评审通过、`AUDIO:CUE` 协议字段冻结并完成实现前代码复核前，不进入代码施工。
+代码施工已经完成并通过当前自动验证；下一步只剩真机连接/断开时序、听感和 PCM5102A 示波器验收。若验收发现问题，按本蓝图的回滚边界单独修复 CUE，不改 WAVE 主链。

@@ -55,6 +55,22 @@ inline String simpleNack(const String& reason) {
   return out;
 }
 
+inline String audioCue(AudioCueId id, const char* result) {
+  String out = "ACK:AUDIO_CUE id=";
+  out += audioCueIdName(id);
+  out += " result=";
+  out += result ? result : "UNKNOWN";
+  return out;
+}
+
+inline String audioCueNack(AudioCueId id, const char* reason) {
+  String out = "NACK:AUDIO_CUE id=";
+  out += audioCueIdName(id);
+  out += " reason=";
+  out += reason ? reason : "UNKNOWN";
+  return out;
+}
+
 inline String startRejected(FaultCode reason) {
   return (reason == FaultCode::FAULT_LOCKED) ? "NACK:FAULT_LOCKED" : "NACK:NOT_ARMED";
 }
@@ -65,7 +81,8 @@ inline String cap(
     const char* boardId,
     int protocolVersion,
     PlatformModel platformModel,
-    bool laserInstalled) {
+    bool laserInstalled,
+    bool cueSupported = true) {
   String out;
   out.reserve(128);
   appendKeyValue(out, "ACK:CAP fw=", firmwareVersion);
@@ -76,6 +93,7 @@ inline String cap(
   appendKeyIntValue(out, " laser_installed=", laserInstalled ? 1 : 0);
   appendKeyIntValue(out, " leave_stop_supported=", 1);
   appendKeyIntValue(out, " stream_control_supported=", 1);
+  appendKeyIntValue(out, " cue_supported=", cueSupported ? 1 : 0);
   ProtocolCodec::logTruthPayloadBudgetWarningIfNeeded(
       "bootstrap_truth",
       out.length() + 1,

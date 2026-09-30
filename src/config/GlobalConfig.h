@@ -208,6 +208,12 @@ enum class BleDisconnectWavePolicy : uint8_t {
 };
 static constexpr BleDisconnectWavePolicy SAFETY_POLICY_BLE_DISCONNECT_WAVE_POLICY =
     BleDisconnectWavePolicy::RECOVERABLE_PAUSE;
+// The disconnect cue contract requires WAVE to be silent before the cue is
+// emitted. A WARNING_ONLY BLE disconnect policy would leave WAVE running and
+// violate that ordering, so reject that combination at compile time.
+static_assert(
+    SAFETY_POLICY_BLE_DISCONNECT_WAVE_POLICY != BleDisconnectWavePolicy::WARNING_ONLY,
+    "WARNING_ONLY BLE disconnect policy is incompatible with disconnect cue sequencing");
 // 测量不可用默认仅告警，不强制停波；产品策略可按需改为 true。
 static constexpr bool SAFETY_POLICY_MEASUREMENT_UNAVAILABLE_STOPS_WAVE = false;
 

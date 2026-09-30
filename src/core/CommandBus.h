@@ -11,6 +11,7 @@ enum class CmdType : uint8_t {
   WAVE_SET,      // set freq/intensity (not necessarily start)
   WAVE_START,
   WAVE_STOP,
+  AUDIO_CUE,
   SCALE_ZERO,
   // Formal calibration reset; distinct from the legacy SCALE:ZERO ACK.
   CAL_ZERO,
@@ -23,6 +24,26 @@ enum class CmdType : uint8_t {
   MOTION_SAMPLING_MODE_SET,
   STREAM_SET,
   LEGACY_FIE     // 兼容 F/I/E 组合命令
+};
+
+// One-shot audio cues are separate from the low-frequency WAVE control path.
+// Keep the identifier in the command contract so the parser, HubHandler and
+// WaveModule cannot silently invent different spellings or meanings.
+enum class AudioCueId : uint8_t {
+  CONNECT = 0,
+  DISCONNECT = 1,
+};
+
+inline const char* audioCueIdName(AudioCueId id) {
+  switch (id) {
+    case AudioCueId::CONNECT: return "CONNECT";
+    case AudioCueId::DISCONNECT: return "DISCONNECT";
+  }
+  return "UNKNOWN";
+}
+
+struct AudioCueCommand {
+  AudioCueId id = AudioCueId::CONNECT;
 };
 
 struct CalibrationCaptureRequest {
@@ -64,6 +85,7 @@ struct StreamSubscriptionCommand {
 struct Command {
   CmdType type = CmdType::CAP_QUERY;
   WaveParams wave{};
+  AudioCueCommand audioCue{};
   float p1 = 0; // zero
   float p2 = 0; // factor
   CalibrationCaptureRequest capture{};
@@ -74,6 +96,13 @@ struct Command {
   DeviceConfigCommand deviceConfig{};
   DegradedStartCommand degradedStart{};
   StreamSubscriptionCommand streamSubscription{};
+
+  // Captured by BleTransport when the command enters the control queue.
+  // They are not wire fields; they fence delayed work from an older BLE
+  // connection before it reaches a business owner.
+  uint32_t transportSessionId = 0;
+  uint16_t connectionId = 0;
+  bool connectionIdKnown = false;
 };
 
 class CommandHandler {

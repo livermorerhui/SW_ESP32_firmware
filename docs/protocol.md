@@ -32,6 +32,7 @@
 - 示例：
   - 请求：`CAP?`
   - 响应：`ACK:CAP fw=SW-HUB-1.0.0 proto=1`
+- 当前固件还会在能力字段中返回 `cue_supported=1`，表示支持 ESP32 侧连接/断开提示音；旧固件没有该字段时，APP 跳过提示音但继续正常连接和控制。
 - 错误情况：一般无参数错误；若链路异常可能无响应。
 
 ### 2.2 `WAVE:SET`
@@ -64,7 +65,14 @@
   - 请求：`WAVE:STOP`
   - 响应：`ACK:OK`
 
-### 2.5 `STREAM:SET`
+### 2.5 `AUDIO:CUE`
+- 格式：`AUDIO:CUE id=CONNECT`
+- 作用：请求当前 BLE session 播放一次连接成功提示音。APP 只在协议 ready 且 `cue_supported=1` 时发送；断开提示音由 ESP32 的真实 BLE 断开事件本地触发，不由 APP 发送。
+- 响应：`ACK:AUDIO_CUE id=CONNECT result=ACCEPTED|DUPLICATE`
+- 拒绝：`NACK:AUDIO_CUE id=CONNECT reason=BUSY_WAVE|BUSY_CUE|INVALID`；`DISCONNECT` 仅由固件 BLE 生命周期内部触发，APP 发送时返回 `reason=LOCAL_ONLY`。
+- CUE 与 `WAVE:SET` 的 0~50 Hz、0~120 强度范围无关，也不改变 WAVE 状态。
+
+### 2.6 `STREAM:SET`
 - 格式：`STREAM:SET enabled=<0|1>,rate_hz=<1..20>`
 - 参数：
   - `enabled`: 是否通过 BLE 上行实时 `EVT:STREAM`。
@@ -80,14 +88,14 @@
 - 错误情况：
   - 缺失参数、布尔值无效或 `rate_hz` 越界：`NACK:INVALID_PARAM`
 
-### 2.6 `SCALE:ZERO`
+### 2.7 `SCALE:ZERO`
 - 格式：`SCALE:ZERO`
 - 作用：触发零点校准。
 - 示例：
   - 请求：`SCALE:ZERO`
   - 响应：`ACK:OK`
 
-### 2.7 `SCALE:CAL`
+### 2.8 `SCALE:CAL`
 - 格式：`SCALE:CAL z=<float> k=<float>`
 - 参数：
   - `z`: zeroDistance
@@ -99,7 +107,7 @@
 - 错误情况：
   - 缺失 `z` 或 `k`：`NACK:INVALID_PARAM`
 
-### 2.8 激光校准模型命令
+### 2.9 激光校准模型命令
 
 - `CAL:ZERO`
   - 作用：清空 ESP32 已保存的正式体重模型、空载引用和运行时状态。
@@ -140,7 +148,9 @@
   - 命令执行成功。
 - `ACK:CAP fw=<ver> proto=<ver>`
   - 能力查询成功返回。
-  - 当前包含 `stream_control_supported=1`，表示设备支持 `STREAM:SET` 显式实时流订阅。
+- 当前包含 `stream_control_supported=1`，表示设备支持 `STREAM:SET` 显式实时流订阅；支持提示音的固件还包含 `cue_supported=1`。
+- `ACK:AUDIO_CUE id=CONNECT result=ACCEPTED|DUPLICATE`
+  - 连接提示音请求已接受或已在当前 BLE session 播放过。
 - `ACK:STREAM enabled=<0|1> supported=1 rate_hz=<rate>`
   - 实时测量流订阅设置成功。
 - 线上传输示例（含帧结尾）：
@@ -150,6 +160,8 @@
 ### 4.2 NACK
 - `NACK:INVALID_PARAM`
   - 参数缺失、格式错误或越界。
+- `NACK:AUDIO_CUE id=CONNECT reason=BUSY_WAVE|BUSY_CUE|INVALID`（APP 的 `DISCONNECT` 还会返回 `reason=LOCAL_ONLY`）
+  - 提示音请求被拒绝；不影响连接、WAVE 或安全停波主链。
 - `NACK:FAULT_LOCKED`
   - 当前处于故障锁定窗口。
 - 常见补充：

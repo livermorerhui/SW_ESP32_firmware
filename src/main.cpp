@@ -99,7 +99,8 @@ public:
             FW_BOARD_ID,
             PROTO_VER,
             l->platformModel(),
-            l->laserInstalled());
+            l->laserInstalled(),
+            true);
         return true;
       }
 
@@ -251,6 +252,39 @@ public:
         outAck = HubAckBuilder::ok();
         return true;
 
+      case CmdType::AUDIO_CUE: {
+        if (c.audioCue.id != AudioCueId::CONNECT) {
+          // DISCONNECT is an internal BLE lifecycle cue. Keeping it out of
+          // the APP command surface prevents an arbitrary RX write from
+          // fabricating a disconnect sound while the link is still alive.
+          outAck = HubAckBuilder::audioCueNack(c.audioCue.id, "LOCAL_ONLY");
+          return false;
+        }
+        const WaveModule::CueRequestResult result = w->requestCue(
+            c.audioCue.id,
+            c.transportSessionId,
+            c.connectionId,
+            c.connectionIdKnown);
+        switch (result) {
+          case WaveModule::CueRequestResult::ACCEPTED:
+            outAck = HubAckBuilder::audioCue(c.audioCue.id, "ACCEPTED");
+            return true;
+          case WaveModule::CueRequestResult::DUPLICATE:
+            outAck = HubAckBuilder::audioCue(c.audioCue.id, "DUPLICATE");
+            return true;
+          case WaveModule::CueRequestResult::BUSY_WAVE:
+            outAck = HubAckBuilder::audioCueNack(c.audioCue.id, "BUSY_WAVE");
+            return false;
+          case WaveModule::CueRequestResult::BUSY_CUE:
+            outAck = HubAckBuilder::audioCueNack(c.audioCue.id, "BUSY_CUE");
+            return false;
+          case WaveModule::CueRequestResult::INVALID:
+          default:
+            outAck = HubAckBuilder::audioCueNack(c.audioCue.id, "INVALID");
+            return false;
+        }
+      }
+
       case CmdType::SCALE_ZERO:
         l->triggerZero();
         outAck = HubAckBuilder::ok();
@@ -363,13 +397,26 @@ public:
     return false;
   }
 
-  void onBleDisconnect() override {
+  void onBleDisconnect(uint32_t sessionId, uint16_t connId, bool connIdKnown) override {
     if (l) l->resetStreamSubscription("ble_disconnect");
     if (sm) sm->onBleDisconnected();
+    if (w) {
+      const WaveModule::CueRequestResult result = w->requestCue(
+          AudioCueId::DISCONNECT,
+          sessionId,
+          connId,
+          connIdKnown);
+      SW_VERBOSE_SERIAL_PRINTF(
+          "[CUE] source=ble_disconnect id=DISCONNECT result=%d session_id=%lu conn_id=%u\n",
+          static_cast<int>(result),
+          static_cast<unsigned long>(sessionId),
+          static_cast<unsigned>(connId));
+    }
   }
 
   void onBleConnected() override {
     if (l) l->resetStreamSubscription("ble_connected");
+    if (w) w->resetCuesForNewSession(g_ble.currentSessionId());
     if (sm) sm->onBleConnected();
   }
 

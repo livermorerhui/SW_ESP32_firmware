@@ -18,7 +18,7 @@
 class BleDisconnectSink {
 public:
   virtual void onBleConnected() {}
-  virtual void onBleDisconnect() = 0;
+  virtual void onBleDisconnect(uint32_t sessionId, uint16_t connId, bool connIdKnown) = 0;
   virtual ~BleDisconnectSink() = default;
 };
 
@@ -27,6 +27,7 @@ public:
   void begin(CommandBus* cb, const char* deviceName = nullptr, const char* advertisedModel = nullptr);
   void updateAdvertisingIdentity(const char* deviceName, const char* advertisedModel = nullptr);
   bool isConnected() const { return deviceConnected; }
+  uint32_t currentSessionId() const { return sessionId; }
   void setDisconnectSink(BleDisconnectSink* s) { disconnectSink = s; }
   void setPlatformSnapshotOwner(const PlatformSnapshotOwner* owner) { platformSnapshotOwner = owner; }
 
@@ -40,6 +41,9 @@ private:
   struct ControlMsg {
     enum class Type : uint8_t { RX_COMMAND, BLE_CONNECTED, BLE_DISCONNECTED };
     Type type = Type::RX_COMMAND;
+    uint32_t sessionId = 0;
+    uint16_t connId = 0;
+    bool connIdKnown = false;
     char line[128]{};
   };
 
@@ -183,7 +187,9 @@ private:
   bool enqueueCommand(const std::string& raw);
   bool enqueueOtaWrite(OtaMsg::Type type, const std::string& raw);
   bool enqueueConnectEvent();
-  bool enqueueDisconnectEvent();
+  bool enqueueDisconnectEvent(uint32_t sessionIdValue,
+                              uint16_t connIdValue,
+                              bool connIdKnown);
   bool enqueueTxLine(const String& s);
   bool enqueueTxLineRaw(const char* s);
   bool enqueueStreamTxLine(const String& s);
@@ -266,6 +272,10 @@ private:
   uint32_t txCriticalEventDropCount = 0;
   uint32_t txClassifiedDropCount = 0;
   uint32_t lifecycleControlDropCount = 0;
+  uint32_t lastHandledConnectSessionId = 0;
+  uint32_t lastHandledDisconnectSessionId = 0;
+  uint16_t lastHandledDisconnectConnId = 0;
+  bool lastHandledDisconnectConnIdKnown = false;
   uint32_t txSendSkipCount = 0;
   bool reconnectSnapshotDirty = false;
   uint32_t reconnectSnapshotDirtySinceMs = 0;
