@@ -1,14 +1,14 @@
 #include <Arduino.h>
 #include <esp_heap_caps.h>
 #include <esp_system.h>
-#if defined(SW_ESP32_ROLLBACK_USB_DIAGNOSTICS)
 #include <esp_log.h>
-#endif
 #include "config/GlobalConfig.h"
 #include "core/EventBus.h"
 #include "core/CommandBus.h"
 #include "core/FirmwareDeviceIdentityProvider.h"
 #include "core/FirmwareSecurityVersionProvider.h"
+#include "core/HumanReadableLog.h"
+#include "core/VerboseSerial.h"
 #include "core/SystemStateMachine.h"
 #include "HubAckBuilder.h"
 #include "modules/wave/WaveModule.h"
@@ -26,6 +26,13 @@ static BleTransport g_ble;
 static String g_bleDeviceName;
 static String buildBleDeviceName(PlatformModel model);
 
+static void configureHumanSerialLog() {
+  // 保留警告和错误，隐藏 ESP-IDF 正常初始化时的英文信息。
+  esp_log_level_set("BLE_INIT", ESP_LOG_WARN);
+  esp_log_level_set("system_api", ESP_LOG_WARN);
+  esp_log_level_set("phy_init", ESP_LOG_WARN);
+}
+
 static MeasurementHealthState waitForMeasurementStartupResolved() {
   const uint32_t startedAt = millis();
   MeasurementHealthState health = g_laser.measurementHealth();
@@ -34,7 +41,7 @@ static MeasurementHealthState waitForMeasurementStartupResolved() {
     delay(BLE_STARTUP_MEASUREMENT_READY_POLL_MS);
     health = g_laser.measurementHealth();
   }
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "[BLE_STARTUP_GATE] result=%s health=%s wait_ms=%lu timeout_ms=%lu\n",
       g_laser.measurementStartupResolved() ? "resolved" : "timeout",
       measurementHealthStateName(health),
@@ -74,7 +81,7 @@ public:
     switch (c.type) {
       case CmdType::CAP_QUERY: {
         const PlatformSnapshot snapshot = sm->snapshot();
-        Serial.printf(
+        SW_VERBOSE_SERIAL_PRINTF(
             "[LAYER:CONFIG_TRUTH] source=CAP_QUERY platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d degraded_start_available=%d degraded_start_enabled=%d runtime_ready=%d start_ready=%d baseline_ready=%d top_state=%s\n",
             platformModelName(snapshot.platformModel),
             snapshot.laserInstalled ? 1 : 0,
@@ -100,11 +107,11 @@ public:
         String deviceId;
         if (!FirmwareDeviceIdentityProvider::readFromEfuse(deviceId) ||
             !FirmwareDeviceIdentityProvider::isValid(deviceId)) {
-          Serial.println("[DEVICE_IDENTITY] result=unavailable");
+          SW_VERBOSE_SERIAL_PRINTLN("[DEVICE_IDENTITY] result=unavailable");
           outAck = "NACK:DEVICE_ID_UNAVAILABLE";
           return false;
         }
-        Serial.printf(
+        SW_VERBOSE_SERIAL_PRINTF(
             "[DEVICE_IDENTITY] result=ok version=%d id_suffix=%s\n",
             FirmwareDeviceIdentityProvider::kIdentityVersion,
             FirmwareDeviceIdentityProvider::logSuffix(deviceId).c_str());
@@ -117,11 +124,11 @@ public:
       case CmdType::DEVICE_SECURITY_QUERY: {
         FirmwareSecurityVersionFacts facts{};
         if (!FirmwareSecurityVersionProvider::read(facts)) {
-          Serial.println("[DEVICE_SECURITY] result=unavailable");
+          SW_VERBOSE_SERIAL_PRINTLN("[DEVICE_SECURITY] result=unavailable");
           outAck = "NACK:DEVICE_SECURITY_UNAVAILABLE";
           return false;
         }
-        Serial.printf(
+        SW_VERBOSE_SERIAL_PRINTF(
             "[DEVICE_SECURITY] result=ok app_sv=%lu efuse_sv=%lu floor_sv=%lu app_gate=%d\n",
             static_cast<unsigned long>(facts.appSecurityVersion),
             static_cast<unsigned long>(facts.efuseSecurityVersion),
@@ -136,7 +143,7 @@ public:
       }
 
       case CmdType::DEVICE_SET_CONFIG: {
-        Serial.printf(
+        SW_VERBOSE_SERIAL_PRINTF(
             "[LAYER:COMMAND_DISPATCH] cmd=DEVICE_SET_CONFIG platform_model=%s laser_installed=%d owner=LaserModule::setDeviceConfig\n",
             platformModelName(c.deviceConfig.platformModel),
             c.deviceConfig.laserInstalled ? 1 : 0);
@@ -155,7 +162,7 @@ public:
             g_bleDeviceName.c_str(),
             platformModelName(l->platformModel()));
         const PlatformSnapshot snapshot = sm->snapshot();
-        Serial.printf(
+        SW_VERBOSE_SERIAL_PRINTF(
             "[LAYER:CONFIG_TRUTH] source=DEVICE_SET_CONFIG platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d degraded_start_available=%d degraded_start_enabled=%d runtime_ready=%d start_ready=%d baseline_ready=%d top_state=%s\n",
             platformModelName(snapshot.platformModel),
             snapshot.laserInstalled ? 1 : 0,
@@ -193,14 +200,15 @@ public:
       }
 
       case CmdType::WAVE_SET: {
-        Serial.printf(
+        HumanReadableLog::command("设置波形参数");
+        SW_VERBOSE_SERIAL_PRINTF(
             "[LAYER:COMMAND_DISPATCH] cmd=WAVE:SET freq_hz=%.2f intensity=%d owner=WaveModule::setParams\n",
             c.wave.freqHz,
             c.wave.intensity);
         w->setParams(c.wave.freqHz, c.wave.intensity);
         WaveModule::DebugState debug{};
         w->getDebugState(debug);
-        Serial.printf(
+        SW_VERBOSE_SERIAL_PRINTF(
             "[LAYER:COMMAND_DISPATCH] cmd=WAVE:SET applied display_freq_hz=%.2f target_phase_inc=%lu target_intensity=%d run_requested=%d run_state=%d\n",
             debug.displayFreqHz,
             static_cast<unsigned long>(debug.targetPhaseInc),
@@ -212,8 +220,9 @@ public:
       }
 
       case CmdType::WAVE_START: {
+        HumanReadableLog::command("开始波形输出");
         const PlatformSnapshot snapshot = sm->snapshot();
-        Serial.printf(
+        SW_VERBOSE_SERIAL_PRINTF(
             "[LAYER:COMMAND_DISPATCH] cmd=WAVE:START owner=SystemStateMachine::requestStart top_state=%s runtime_ready=%d start_ready=%d baseline_ready=%d platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d degraded_start_available=%d degraded_start_enabled=%d\n",
             topStateName(snapshot.topState),
             snapshot.runtimeReady ? 1 : 0,
@@ -235,8 +244,9 @@ public:
       }
 
       case CmdType::WAVE_STOP:
-        Serial.println("[CMD] WAVE_STOP received");
-        Serial.println("[LAYER:COMMAND_DISPATCH] cmd=WAVE:STOP owner=SystemStateMachine::requestStop");
+        HumanReadableLog::command("停止波形输出");
+        SW_VERBOSE_SERIAL_PRINTLN("[CMD] WAVE_STOP received");
+        SW_VERBOSE_SERIAL_PRINTLN("[LAYER:COMMAND_DISPATCH] cmd=WAVE:STOP owner=SystemStateMachine::requestStop");
         sm->requestStop();
         outAck = HubAckBuilder::ok();
         return true;
@@ -286,14 +296,14 @@ public:
 
         String reason;
         if (!l->setCalibrationModel(model, reason)) {
-          Serial.printf("[CAL] SET_MODEL result=failure type=%s reason=%s\n",
+          SW_VERBOSE_SERIAL_PRINTF("[CAL] SET_MODEL result=failure type=%s reason=%s\n",
               HubAckBuilder::calibrationModelTypeName(model.type),
               reason.c_str());
           outAck = HubAckBuilder::calibrationSetModelRejected(model.type, reason);
           return false;
         }
 
-        Serial.printf("[CAL] SET_MODEL result=success type=%s ref=%.4f c0=%.6f c1=%.6f c2=%.6f\n",
+        SW_VERBOSE_SERIAL_PRINTF("[CAL] SET_MODEL result=success type=%s ref=%.4f c0=%.6f c1=%.6f c2=%.6f\n",
             HubAckBuilder::calibrationModelTypeName(model.type),
             model.referenceDistance,
             model.coefficients[0],
@@ -335,7 +345,7 @@ public:
               return false;
             }
           } else {
-            Serial.println("[CMD] WAVE_STOP received");
+          SW_VERBOSE_SERIAL_PRINTLN("[CMD] WAVE_STOP received");
             sm->requestStop();
           }
         }
@@ -383,11 +393,12 @@ static String buildBleDeviceName(PlatformModel model) {
 void setup() {
   clearBoardRgbLed();
   Serial.begin(115200);
+  configureHumanSerialLog();
   delay(1500);
   clearBoardRgbLed();
-  Serial.println("\n=== SonicWave Hub FW (Integrated) ===");
+  SW_VERBOSE_SERIAL_PRINTLN("\n=== SonicWave Hub FW (Integrated) ===");
   const esp_reset_reason_t resetReason = esp_reset_reason();
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "[BOOT_DIAG] fw=%s proto=%d reset_reason=%s(%d) heap_free=%u heap_min_free=%u psram_free=%u board=sonicwave_esp32s3_n16r8 psram_enabled=%d\n",
       FW_VER,
       PROTO_VER,
@@ -402,6 +413,7 @@ void setup() {
       0
 #endif
   );
+  HumanReadableLog::boot(FW_VER, PROTO_VER, resetReasonName(resetReason));
 #if defined(SW_ESP32_ROLLBACK_USB_DIAGNOSTICS)
   ESP_LOGI(
       "BOOT_DIAG",
@@ -442,14 +454,10 @@ void setup() {
       platformModelName(g_laser.platformModel()));
   g_eventBus.setSink(&g_ble);
 
-  Serial.println("Ready ✅");
+  HumanReadableLog::ready();
 #if defined(SW_ESP32_ROLLBACK_USB_DIAGNOSTICS)
   ESP_LOGI("BOOT_DIAG", "Ready");
 #endif
-  Serial.println("Try: CAP?");
-  Serial.println("Try: WAVE:SET f=40,i=80");
-  Serial.println("Try: WAVE:START");
-  Serial.println("Try: WAVE:STOP");
 }
 
 void loop() {

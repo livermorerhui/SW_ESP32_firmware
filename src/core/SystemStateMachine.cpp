@@ -1,5 +1,7 @@
 #include "SystemStateMachine.h"
+#include "core/HumanReadableLog.h"
 #include "core/LogMarkers.h"
+#include "core/VerboseSerial.h"
 #include "modules/laser/LaserModule.h"
 #include "modules/wave/WaveModule.h"
 #include <math.h>
@@ -199,7 +201,7 @@ void SystemStateMachine::setLeaveStopEnabled(bool enabled) {
 
   leave_stop_enabled = enabled;
   last_suppressed_leave_notice_ms = 0;
-  Serial.printf("%s [LEAVE_STOP] enabled=%d mode=%s\n",
+  SW_VERBOSE_SERIAL_PRINTF("%s [LEAVE_STOP] enabled=%d mode=%s\n",
                 LogMarker::kSafety,
                 enabled ? 1 : 0,
                 leaveStopModeName());
@@ -393,7 +395,7 @@ void SystemStateMachine::setState(TopState s) {
   // SystemStateMachine is the only gate allowed to start/stop output.
   if (wave) {
     if (st == TopState::RUNNING) {
-      Serial.printf(
+      SW_VERBOSE_SERIAL_PRINTF(
           "[LAYER:STATE_OWNER] transition=%s->%s action=wave.start blocking_fault=%s pause_reason=%s\n",
           topStateName(prev),
           topStateName(st),
@@ -401,7 +403,7 @@ void SystemStateMachine::setState(TopState s) {
           faultCodeName(pause_reason_code));
       wave->start();
     } else {
-      Serial.printf(
+      SW_VERBOSE_SERIAL_PRINTF(
           "[LAYER:STATE_OWNER] transition=%s->%s action=wave.stopSoft blocking_fault=%s pause_reason=%s\n",
           topStateName(prev),
           topStateName(st),
@@ -412,7 +414,8 @@ void SystemStateMachine::setState(TopState s) {
   }
 
   syncSnapshotDecisionContext();
-  Serial.printf("%s [FSM] STATE %s -> %s\n", LogMarker::kFsm, topStateName(prev), topStateName(st));
+  SW_VERBOSE_SERIAL_PRINTF("%s [FSM] STATE %s -> %s\n", LogMarker::kFsm, topStateName(prev), topStateName(st));
+  HumanReadableLog::stateChanged(topStateName(prev), topStateName(st));
   emitState();
 }
 
@@ -420,17 +423,18 @@ void SystemStateMachine::setWarningFault(FaultCode code, const char* detail) {
   if (warning_fault_code == code) return;
 
   warning_fault_code = code;
-  Serial.printf("%s [FSM] SAFETY reason=%s effect=%s detail=%s\n",
+  SW_VERBOSE_SERIAL_PRINTF("%s [FSM] SAFETY reason=%s effect=%s detail=%s\n",
                 LogMarker::kSafety,
                 faultCodeName(code),
                 safetySignalName(SafetySignalKind::WARNING_ONLY),
                 detail ? detail : "n/a");
-  Serial.printf("%s [FAULT] WARN name=%s origin=%s severity=%s detail=%s\n",
+  SW_VERBOSE_SERIAL_PRINTF("%s [FAULT] WARN name=%s origin=%s severity=%s detail=%s\n",
                 LogMarker::kSafety,
                 faultCodeName(code),
                 originName(faultOrigin(code)),
                 severityName(FaultSeverity::WARNING_ONLY),
                 detail ? detail : "n/a");
+  HumanReadableLog::safety(faultCodeName(code), "仅提醒，不停止输出");
 
   if (blocking_fault_code == FaultCode::NONE && pause_reason_code == FaultCode::NONE) {
     emitVisibleSignals();
@@ -442,7 +446,7 @@ void SystemStateMachine::clearWarningFault(FaultCode code, const char* detail) {
   if (warning_fault_code != code) return;
 
   warning_fault_code = FaultCode::NONE;
-  Serial.printf("%s [FAULT] CLEAR severity=%s name=%s detail=%s\n",
+  SW_VERBOSE_SERIAL_PRINTF("%s [FAULT] CLEAR severity=%s name=%s detail=%s\n",
                 LogMarker::kClear,
                 severityName(FaultSeverity::WARNING_ONLY),
                 faultCodeName(code),
@@ -466,21 +470,22 @@ void SystemStateMachine::enterBlockingFault(FaultCode code, const char* detail) 
   pause_reason_code = FaultCode::NONE;
 
   if (isNewFault) {
-    Serial.printf("%s [FSM] SAFETY reason=%s effect=%s detail=%s\n",
+    SW_VERBOSE_SERIAL_PRINTF("%s [FSM] SAFETY reason=%s effect=%s detail=%s\n",
                   LogMarker::kSafety,
                   faultCodeName(code),
                   safetySignalName(SafetySignalKind::ABNORMAL_STOP),
                   detail ? detail : "n/a");
-    Serial.printf("%s [FAULT] BLOCK name=%s origin=%s severity=%s detail=%s\n",
+    SW_VERBOSE_SERIAL_PRINTF("%s [FAULT] BLOCK name=%s origin=%s severity=%s detail=%s\n",
                   LogMarker::kFaultBlock,
                   faultCodeName(code),
                   originName(faultOrigin(code)),
                   severityName(FaultSeverity::BLOCKING_FAULT),
                   detail ? detail : "n/a");
-    Serial.printf("%s [FSM] FAULT ENTER reason=%s detail=%s\n",
+    SW_VERBOSE_SERIAL_PRINTF("%s [FSM] FAULT ENTER reason=%s detail=%s\n",
                   LogMarker::kFaultBlock,
                   faultCodeName(code),
                   detail ? detail : "n/a");
+    HumanReadableLog::safety(faultCodeName(code), "停止输出并进入保护状态");
   }
 
   if (wasRunning) {
@@ -505,18 +510,19 @@ void SystemStateMachine::enterRecoverablePause(FaultCode code, const char* detai
   clear_window_active = false;
   clear_candidate_ms = 0;
 
-  Serial.printf("%s [FSM] SAFETY reason=%s effect=%s detail=%s\n",
+  SW_VERBOSE_SERIAL_PRINTF("%s [FSM] SAFETY reason=%s effect=%s detail=%s\n",
                 LogMarker::kSafety,
                 faultCodeName(code),
                 safetySignalName(SafetySignalKind::RECOVERABLE_PAUSE),
                 detail ? detail : "n/a");
+  HumanReadableLog::safety(faultCodeName(code), "暂停输出，等待条件恢复");
 
   if (code == FaultCode::USER_LEFT_PLATFORM) {
-    Serial.printf("%s [LEAVE] confirmed action=RECOVERABLE_PAUSE\n", LogMarker::kSafety);
+    SW_VERBOSE_SERIAL_PRINTF("%s [LEAVE] confirmed action=RECOVERABLE_PAUSE\n", LogMarker::kSafety);
   }
 
   if (st == TopState::RUNNING) {
-    Serial.printf("%s [FSM] RECOVERABLE_PAUSE closing running path source=%s\n",
+    SW_VERBOSE_SERIAL_PRINTF("%s [FSM] RECOVERABLE_PAUSE closing running path source=%s\n",
                   LogMarker::kSafety,
                   faultCodeName(code));
     requestStop();
@@ -563,15 +569,16 @@ void SystemStateMachine::clearBlockingFault(const char* detail) {
   clear_window_active = false;
   clear_candidate_ms = 0;
 
-  Serial.printf("%s [FAULT] CLEAR severity=%s name=%s detail=%s\n",
+  SW_VERBOSE_SERIAL_PRINTF("%s [FAULT] CLEAR severity=%s name=%s detail=%s\n",
                 LogMarker::kClear,
                 severityName(FaultSeverity::BLOCKING_FAULT),
                 faultCodeName(cleared),
                 detail ? detail : "n/a");
-  Serial.printf("%s [FSM] FAULT CLEAR reason=%s detail=%s\n",
+  SW_VERBOSE_SERIAL_PRINTF("%s [FSM] FAULT CLEAR reason=%s detail=%s\n",
                 LogMarker::kClear,
                 faultCodeName(cleared),
                 detail ? detail : "n/a");
+  HumanReadableLog::safety(faultCodeName(cleared), "保护状态已清除");
 
   syncReadyState();
   emitVisibleSignals();
@@ -581,11 +588,12 @@ void SystemStateMachine::clearRecoverablePause(FaultCode code, const char* detai
   if (pause_reason_code != code) return;
 
   pause_reason_code = FaultCode::NONE;
-  Serial.printf("%s [FSM] SAFETY CLEAR reason=%s effect=%s detail=%s\n",
+  SW_VERBOSE_SERIAL_PRINTF("%s [FSM] SAFETY CLEAR reason=%s effect=%s detail=%s\n",
                 LogMarker::kClear,
                 faultCodeName(code),
                 safetySignalName(SafetySignalKind::RECOVERABLE_PAUSE),
                 detail ? detail : "n/a");
+  HumanReadableLog::safety(faultCodeName(code), "暂停原因已清除");
 
   syncReadyState();
   emitVisibleSignals();
@@ -638,7 +646,7 @@ void SystemStateMachine::onUserOff() {
   const UserLeftProtectionDecision decision = decideUserLeftAction();
 
   if (decision.action == UserLeftProtectionAction::NOT_ELIGIBLE) {
-    Serial.printf(
+    SW_VERBOSE_SERIAL_PRINTF(
         "%s [LEAVE] suppress action=not_eligible reason=%s state=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d leave_stop_enabled=%d\n",
         LogMarker::kSafety,
         decision.suppressReason,
@@ -653,7 +661,7 @@ void SystemStateMachine::onUserOff() {
 
   if (decision.action == UserLeftProtectionAction::WARNING_ONLY) {
     const uint32_t now = millis();
-    Serial.printf(
+    SW_VERBOSE_SERIAL_PRINTF(
         "%s [LEAVE] suppress action=warning_only state=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d leave_stop_enabled=0\n",
         LogMarker::kSafety,
         topStateName(st),
@@ -669,7 +677,7 @@ void SystemStateMachine::onUserOff() {
     return;
   }
 
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "%s [LEAVE] trigger enabled=1 state=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d policy=%s leave_stop_enabled=1\n",
       LogMarker::kSafety,
       topStateName(st),
@@ -720,7 +728,7 @@ void SystemStateMachine::setFallStopEnabled(bool enabled) {
 
   fall_stop_enabled = enabled;
   last_suppressed_fall_notice_ms = 0;
-  Serial.printf("%s [FALL_STOP] enabled=%d mode=%s\n",
+  SW_VERBOSE_SERIAL_PRINTF("%s [FALL_STOP] enabled=%d mode=%s\n",
                 LogMarker::kSafety,
                 enabled ? 1 : 0,
                 fallStopModeName());
@@ -761,7 +769,7 @@ void SystemStateMachine::setMotionSamplingMode(bool enabled) {
 
   motion_sampling_mode_enabled = enabled;
   last_suppressed_fall_notice_ms = 0;
-  Serial.printf("[MOTION_SAMPLE_MODE] enabled=%s\n", enabled ? "true" : "false");
+  SW_VERBOSE_SERIAL_PRINTF("[MOTION_SAMPLE_MODE] enabled=%s\n", enabled ? "true" : "false");
 }
 
 void SystemStateMachine::setDegradedStartAuthorized(bool enabled) {
@@ -770,7 +778,7 @@ void SystemStateMachine::setDegradedStartAuthorized(bool enabled) {
   if (degraded_start_authorized == nextAuthorized) return;
 
   degraded_start_authorized = nextAuthorized;
-  Serial.printf(
+      SW_VERBOSE_SERIAL_PRINTF(
       "[DEGRADED_START] authorized=%d available=%d platform_laser_installed=%d sensor_known=%d sensor_healthy=%d\n",
       degraded_start_authorized ? 1 : 0,
       available ? 1 : 0,
@@ -789,7 +797,7 @@ void SystemStateMachine::setRuntimeReady(bool ready) {
   runtime_ready = ready;
 
   if (changed) {
-    Serial.printf(
+      SW_VERBOSE_SERIAL_PRINTF(
         "%s [READY] runtime_ready=%d user_present=%d baseline_ready=%d stable_weight_kg=%.2f note=presence_only\n",
         LogMarker::kFsm,
         runtime_ready ? 1 : 0,
@@ -825,7 +833,7 @@ void SystemStateMachine::setStartReadiness(bool ready, float stableWeightKg) {
               kStartReadyLogDeltaKg);
 
   if (shouldLog) {
-    Serial.printf(
+    SW_VERBOSE_SERIAL_PRINTF(
         "%s [READY] start_ready=%d stable_weight_kg=%.2f runtime_ready=%d leave_enabled=%d note=formal_start_gate\n",
         LogMarker::kBaselineReady,
         start_ready ? 1 : 0,
@@ -908,7 +916,7 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
   const PlatformSnapshot startSnapshot = snapshot();
   const bool runtimeReadyNow = effectiveRuntimeReady();
   const bool startReadyNow = effectiveStartReady();
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "[LAYER:START_GATE] phase=entry top_state=%s runtime_ready=%d start_ready=%d baseline_ready=%d user_present=%d blocking_fault=%s pause_reason=%s warning=%s platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d\n",
       topStateName(st),
       runtimeReadyNow ? 1 : 0,
@@ -925,28 +933,29 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
 
   if (blocking_fault_code != FaultCode::NONE) {
     reason = FaultCode::FAULT_LOCKED;
-    Serial.printf(
+    SW_VERBOSE_SERIAL_PRINTF(
         "[LAYER:START_GATE] decision=reject reason=FAULT_LOCKED top_state=%s runtime_ready=%d start_ready=%d\n",
         topStateName(st),
         runtimeReadyNow ? 1 : 0,
         startReadyNow ? 1 : 0);
-    Serial.printf("%s [FSM] START REJECT reason=FAULT_LOCKED detail=%s active_fault=%s\n",
+    SW_VERBOSE_SERIAL_PRINTF("%s [FSM] START REJECT reason=FAULT_LOCKED detail=%s active_fault=%s\n",
                   LogMarker::kFsm,
                   recoveryDetail(),
                   faultCodeName(blocking_fault_code));
+    HumanReadableLog::startDecision(false, "：设备仍处于故障锁定状态");
     return false;
   }
 
   if (pause_reason_code != FaultCode::NONE) {
     reason = FaultCode::NOT_ARMED;
-    Serial.printf(
+    SW_VERBOSE_SERIAL_PRINTF(
         "[LAYER:START_GATE] decision=reject reason=NOT_ARMED detail=pause_reason=%s top_state=%s runtime_ready=%d start_ready=%d baseline_ready=%d\n",
         faultCodeName(pause_reason_code),
         topStateName(st),
         runtimeReadyNow ? 1 : 0,
         startReadyNow ? 1 : 0,
         startSnapshot.baselineReady ? 1 : 0);
-    Serial.printf(
+    SW_VERBOSE_SERIAL_PRINTF(
         "%s [FSM] START REJECT reason=NOT_ARMED detail=pause_reason=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d userPresent=%d leave_enabled=%d\n",
                   LogMarker::kFsm,
                   faultCodeName(pause_reason_code),
@@ -955,20 +964,21 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
                   runtimeReadyNow ? 1 : 0,
                   startSnapshot.userPresent ? 1 : 0,
                   leaveDetectionEnabled() ? 1 : 0);
+    HumanReadableLog::startDecision(false, "：设备尚未恢复到可开始状态");
     return false;
   }
 
   if (!runtimeReadyNow || !startReadyNow) {
     reason = FaultCode::NOT_ARMED;
     const char* detail = !runtimeReadyNow ? "user_not_present" : "start_gate_not_ready";
-    Serial.printf(
+    SW_VERBOSE_SERIAL_PRINTF(
         "[LAYER:START_GATE] decision=reject reason=NOT_ARMED detail=%s top_state=%s runtime_ready=%d start_ready=%d baseline_ready=%d\n",
         detail,
         topStateName(st),
         runtimeReadyNow ? 1 : 0,
         startReadyNow ? 1 : 0,
         startSnapshot.baselineReady ? 1 : 0);
-    Serial.printf(
+    SW_VERBOSE_SERIAL_PRINTF(
         "%s [FSM] START REJECT reason=NOT_ARMED detail=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d userPresent=%d leave_enabled=%d warning=%s\n",
         LogMarker::kFsm,
         detail,
@@ -978,10 +988,11 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
         startSnapshot.userPresent ? 1 : 0,
         leaveDetectionEnabled() ? 1 : 0,
         faultCodeName(warning_fault_code));
+    HumanReadableLog::startDecision(false, "：测量或安全条件尚未满足");
     return false;
   }
 
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "[LAYER:START_GATE] decision=allow top_state=%s runtime_ready=%d start_ready=%d baseline_ready=%d platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d\n",
       topStateName(st),
       runtimeReadyNow ? 1 : 0,
@@ -991,7 +1002,7 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
       startSnapshot.laserInstalled ? 1 : 0,
       startSnapshot.laserAvailable ? 1 : 0,
       startSnapshot.protectionDegraded ? 1 : 0);
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "%s [FSM] START ALLOW baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d userPresent=%d leave_enabled=%d warning=%s\n",
                 LogMarker::kFsm,
                 startReadyNow ? 1 : 0,
@@ -1000,6 +1011,7 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
                 startSnapshot.userPresent ? 1 : 0,
                 leaveDetectionEnabled() ? 1 : 0,
                 faultCodeName(warning_fault_code));
+  HumanReadableLog::startDecision(true, nullptr);
   rememberStopContext("NONE", VerificationStopSource::NONE, SafetySignalKind::NONE);
   setState(TopState::RUNNING);
   reason = FaultCode::NONE;
@@ -1008,7 +1020,7 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
 
 void SystemStateMachine::requestStop() {
   const bool wasRunning = (st == TopState::RUNNING);
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "%s [FSM] STOP REQUEST state=%s baseline_ready=%d stable_weight_kg=%.2f runtime_ready=%d active_block=%s active_visible=%s\n",
                 LogMarker::kFsm,
                 topStateName(st),
@@ -1017,9 +1029,8 @@ void SystemStateMachine::requestStop() {
                 runtime_ready ? 1 : 0,
                 faultCodeName(blocking_fault_code),
                 faultCodeName(visibleReasonCode()));
-
   if (blocking_fault_code != FaultCode::NONE) {
-    Serial.printf("%s [FSM] STOP while fault latched active_fault=%s\n",
+    SW_VERBOSE_SERIAL_PRINTF("%s [FSM] STOP while fault latched active_fault=%s\n",
                   LogMarker::kFsm,
                   faultCodeName(blocking_fault_code));
     if (wave) wave->stopSoft();
@@ -1046,7 +1057,8 @@ void SystemStateMachine::requestStop() {
   clearPendingStopContext();
   if (st == target) {
     if (wave) wave->stopSoft();
-    Serial.printf("%s [FSM] STOP RESULT state=%s\n", LogMarker::kFsm, topStateName(st));
+    SW_VERBOSE_SERIAL_PRINTF("%s [FSM] STOP RESULT state=%s\n", LogMarker::kFsm, topStateName(st));
+    HumanReadableLog::waveStopped("用户或状态机请求停止");
     return;
   }
 

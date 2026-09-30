@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "config/GlobalConfig.h"
+#include "core/VerboseSerial.h"
 
 bool BaselineContractDiagnostics::hasState(const BaselineContractStateView& state) {
   return state.stableCandidate ||
@@ -24,7 +25,7 @@ void BaselineContractDiagnostics::logLatch(
     return;
   }
 
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "[BASELINE_CONTRACT] event=latch source=%s baseline_latched=1 weight=%.2f distance=%.2f captured_ms=%lu user_present=%d stable_live=%d start_ready=%d bridge=%s\n",
       source ? source : "unknown",
       weight,
@@ -44,7 +45,7 @@ void BaselineContractDiagnostics::logClear(
     return;
   }
 
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "[BASELINE_CONTRACT] event=clear reason=%s before_user_present=%d before_stable_candidate=%d before_stable_live=%d before_baseline_latched=%d before_start_ready=%d before_baseline_weight=%.2f before_start_weight=%.2f before_bridge=%s cleared_ms=%lu\n",
       reason ? reason : "unspecified",
       before.userPresent ? 1 : 0,
@@ -64,7 +65,7 @@ void BaselineContractDiagnostics::logStartReadyWriteback(
     return;
   }
 
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "[BASELINE_CONTRACT] event=start_ready_writeback source=%s top_state=%s start_ready=%d start_weight=%.2f reason=%s user_present=%d baseline_latched=%d stable_live=%d baseline_weight=%.2f\n",
       input.source ? input.source : "unknown",
       topStateName(input.topState),

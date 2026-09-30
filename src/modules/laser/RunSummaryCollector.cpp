@@ -1,4 +1,5 @@
 #include "modules/laser/RunSummaryCollector.h"
+#include "core/VerboseSerial.h"
 
 #include <math.h>
 #include "core/LogMarkers.h"
@@ -35,7 +36,7 @@ void RunSummaryCollector::start(
   state.recentCount = 0;
 
   // Test-summary logs stay event-driven: baseline latch, run start, and run end.
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "%s [TEST_START] test_id=%lu freq_hz=%.2f intensity=%d intensity_norm=%.3f "
       "baseline_ready=%d stable_weight_kg=%.2f stable_distance=%.2f fall_stop_enabled=%d\n",
       LogMarker::kTestStart,
@@ -133,7 +134,7 @@ void RunSummaryCollector::finish(
   const bool abnormalStop = (outcome.kind == StopOutcomeSummaryKind::ABORT_SUMMARY);
   const char* summaryMarker = abnormalStop ? LogMarker::kTestAbort : LogMarker::kTestStop;
 
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "%s [%s] test_id=%lu result=%s stop_reason=%s stop_source=%s freq_hz=%.2f intensity=%d intensity_norm=%.3f "
       "baseline_ready=%d stable_weight_kg=%.2f stable_distance=%.2f "
       "fall_stop_enabled=%d "

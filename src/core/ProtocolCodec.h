@@ -6,6 +6,7 @@
 #include "EventBus.h"
 #include "PlatformSnapshot.h"
 #include "config/GlobalConfig.h"
+#include "core/VerboseSerial.h"
 
 class ProtocolCodec {
 public:
@@ -28,7 +29,7 @@ public:
                                                    size_t budgetBytes,
                                                    const String& payload) {
     if (framedLen <= budgetBytes) return;
-    Serial.printf(
+    SW_VERBOSE_SERIAL_PRINTF(
         "[PROTO] warn=%s_budget_exceeded framed_len=%u budget=%u payload=%s\n",
         frameKind,
         static_cast<unsigned>(framedLen),
@@ -448,7 +449,7 @@ public:
         if (const char* compatReason = minimalCompatFaultReason(e.fault)) {
           s += " reason=";
           s += compatReason;
-          Serial.printf("[FAULT_COMPAT] export code=%u reason=%s route=EVT:FAULT\n",
+          SW_VERBOSE_SERIAL_PRINTF("[FAULT_COMPAT] export code=%u reason=%s route=EVT:FAULT\n",
                         static_cast<unsigned>(e.fault),
                         compatReason);
         }

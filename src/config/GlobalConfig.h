@@ -113,11 +113,17 @@ static constexpr uint32_t MEASUREMENT_INVALID_KEEPALIVE_MS = 250UL;
 static constexpr uint32_t MEASUREMENT_PLANE_LOG_INTERVAL_MS = 2000UL;
 static constexpr uint32_t MEASUREMENT_NO_LASER_BYPASS_LOG_INTERVAL_MS = 5000UL;
 static constexpr bool DEBUG_MEASUREMENT_PLANE_VERBOSE = false;
-static constexpr bool START_GATE_DIAG_ENABLED = true;
+static constexpr bool START_GATE_DIAG_ENABLED = false;
 static constexpr uint32_t START_GATE_DIAG_LOG_INTERVAL_MS = 5000UL;
-static constexpr bool BASELINE_CONTRACT_DIAG_ENABLED = true;
+static constexpr bool BASELINE_CONTRACT_DIAG_ENABLED = false;
 #define DEBUG_LASER_STREAM 0
 #define DEBUG_BLE_TX_VERBOSE 0
+
+// USB 串口默认只显示人话运行日志。需要排查底层时临时改为 true，
+// 不影响 BLE 通信、状态机和波形控制。
+#ifndef SERIAL_VERBOSE_DIAGNOSTICS
+#define SERIAL_VERBOSE_DIAGNOSTICS 0
+#endif
 
 // ===== Diagnostic Flags =====
 #define DIAG_DISABLE_LASER_SAFETY 0

@@ -1,5 +1,7 @@
 #include "modules/laser/LaserMeasurementReader.h"
 #include "config/GlobalConfig.h"
+#include "core/HumanReadableLog.h"
+#include "core/VerboseSerial.h"
 
 namespace {
 constexpr uint32_t kReadFailureSummaryIntervalMs = 10000UL;
@@ -114,7 +116,7 @@ void LaserMeasurementReader::logMeasurementDiag(
       diagWindowMs > 0
           ? (static_cast<float>(attempts) * 1000.0f / static_cast<float>(diagWindowMs))
           : 0.0f;
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "[MEASUREMENT_DIAG] trigger=%s window_ms=%lu ok=%lu fail=%lu last_result=0x%02X last_read_ms=%lu max_read_ms=%lu interval_ms=%lu attempt_rate_hz=%.2f top_state=%s laser_installed=%d next_read_backoff_ms=%ld\n",
       slowRead ? "slow_read" : "periodic",
       static_cast<unsigned long>(diagWindowMs),
@@ -169,7 +171,7 @@ void LaserMeasurementReader::noteTransientFailure(
     return;
   }
 
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "[MEASUREMENT_TRANSIENT] event=%s code=0x%02X consecutive=%lu elapsed_ms=%lu read_ms=%lu top_state=%s laser_installed=%d total_failures=%lu total_bursts=%lu\n",
       newBurst ? "fail_start" : "fail_continue",
       static_cast<unsigned>(result),
@@ -196,7 +198,7 @@ void LaserMeasurementReader::noteTransientRecovery(
     transientMaxBurstMs = durationMs;
   }
 
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "[MEASUREMENT_TRANSIENT] event=recovered code=0x%02X consecutive=%lu duration_ms=%lu recovery_read_ms=%lu top_state=%s last_failure_top_state=%s total_failures=%lu total_bursts=%lu max_burst_ms=%lu\n",
       static_cast<unsigned>(transientLastCode),
       static_cast<unsigned long>(transientConsecutiveFailures),
@@ -227,7 +229,8 @@ void LaserMeasurementReader::noteReadFailure(
 
   if (!hasLoggedReadFailure || lastReadFailureCode != result) {
     clearFailureBurst(now, true);
-    Serial.printf("❌ Modbus read fail (0x%02X)\n", result);
+    SW_VERBOSE_SERIAL_PRINTF("❌ Modbus read fail (0x%02X)\n", result);
+    HumanReadableLog::measurementFailure();
     hasLoggedReadFailure = true;
     lastReadFailureCode = result;
     lastReadFailureLogMs = now;
@@ -242,7 +245,7 @@ void LaserMeasurementReader::noteReadFailure(
   }
 
   if (suppressedReadFailureCount > 0) {
-    Serial.printf(
+    SW_VERBOSE_SERIAL_PRINTF(
         "❌ Modbus read fail (0x%02X) suppressed=%lu window_ms=%lu\n",
         result,
         static_cast<unsigned long>(suppressedReadFailureCount),
@@ -257,7 +260,7 @@ void LaserMeasurementReader::noteReadFailure(
 
 void LaserMeasurementReader::clearFailureBurst(uint32_t now, bool flushSummary) {
   if (flushSummary && hasLoggedReadFailure && suppressedReadFailureCount > 0) {
-    Serial.printf(
+    SW_VERBOSE_SERIAL_PRINTF(
         "❌ Modbus read fail (0x%02X) suppressed=%lu window_ms=%lu\n",
         lastReadFailureCode,
         static_cast<unsigned long>(suppressedReadFailureCount),
