@@ -164,6 +164,15 @@ sealed class Event {
         val valid: Boolean,
         val reason: String?,
         val raw: String,
+        // The combined `valid` bit is retained for old firmware and old
+        // clients.  New firmware reports the two measurement qualities
+        // independently so a valid distance is still usable when the weight
+        // model is unavailable.
+        val distanceValid: Boolean = distance?.isFinite() == true,
+        val weightValid: Boolean = weight?.isFinite() == true,
+        val distanceReason: String? = null,
+        val weightReason: String? = null,
+        val sensorBackend: String? = null,
     ) : Event()
     data class CalibrationPoint(
         val index: Int?,
@@ -181,11 +190,18 @@ sealed class Event {
         val c0: Float?,
         val c1: Float?,
         val c2: Float?,
+        val ready: Boolean? = null,
         val raw: String,
     ) : Event()
     data class CalibrationSetModelResult(
         val success: Boolean,
         val type: CalibrationModelType?,
+        val ready: Boolean? = null,
+        val reason: String?,
+        val raw: String,
+    ) : Event()
+    data class CalibrationZeroResult(
+        val success: Boolean,
         val reason: String?,
         val raw: String,
     ) : Event()

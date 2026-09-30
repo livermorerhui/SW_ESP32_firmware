@@ -58,8 +58,13 @@ data class TelemetryPointUi(
     // The live EVT:STREAM distance is exposed in the telemetry UI as "rhythm distance".
     val distance: Float,
     // The live EVT:STREAM weight is the app-side "rhythm weight"/"unstable weight" signal.
-    val unstableWeight: Float,
+    val unstableWeight: Float?,
     val measurementValid: Boolean = true,
+    val distanceValid: Boolean = true,
+    val weightValid: Boolean = unstableWeight?.isFinite() == true,
+    val distanceReason: String? = null,
+    val weightReason: String? = null,
+    val sensorBackend: String? = null,
     val ma12: Float? = null,
     val stableWeight: Float? = null,
     val ma3: Float? = null,
@@ -70,10 +75,10 @@ data class TelemetryPointUi(
     val rhythmDistance: Float
         get() = distance
 
-    val rhythmWeight: Float
+    val rhythmWeight: Float?
         get() = unstableWeight
 
-    val weight: Float
+    val weight: Float?
         get() = unstableWeight
 }
 
@@ -82,6 +87,11 @@ data class MeasurementDisplayUiState(
     val weight: Float? = null,
     val ma12: Float? = null,
     val measurementValid: Boolean = false,
+    val distanceValid: Boolean = false,
+    val weightValid: Boolean = false,
+    val distanceReason: String? = null,
+    val weightReason: String? = null,
+    val sensorBackend: String? = null,
     val lastMeasurementSequence: Long? = null,
     val telemetryPoints: List<TelemetryPointUi> = emptyList(),
 )
@@ -102,10 +112,15 @@ data class MotionSamplingRowUi(
     val timestampMs: Long,
     val elapsedMs: Long,
     val distanceMm: Float,
-    val liveWeightKg: Float,
+    val liveWeightKg: Float?,
     val ma12WeightKg: Float? = null,
     val stableWeightKg: Float? = null,
     val measurementValid: Boolean,
+    val distanceValid: Boolean = true,
+    val weightValid: Boolean = liveWeightKg?.isFinite() == true,
+    val distanceReason: String? = null,
+    val weightReason: String? = null,
+    val sensorBackend: String? = null,
     val stableVisible: Boolean,
     val runtimeStateCode: String,
     val waveStateCode: String,
@@ -206,6 +221,7 @@ data class CalibrationModelUi(
     val c0: Float = 0.0f,
     val c1: Float = 1.0f,
     val c2: Float = 0.0f,
+    val ready: Boolean? = null,
     val raw: String = "",
 )
 

@@ -764,8 +764,8 @@ void test_laser_sensor_profile_wang_wtx_j100_decode_contract() {
   assert(profile.modbus.distanceRegister == 0x0064);
   assert(profile.modbus.distanceRegisterCount == 1);
   assert(profile.decode.signedRaw16);
-  assert(profile.decode.scaleDivisor == 100.0f);
-  assert(profile.decode.offset == 0.0f);
+  assert(profile.decode.scaleDivisor == -10000.0f);
+  assert(profile.decode.offset == 1.0f);
   assert(profile.decode.validMinRaw == -3570);
   assert(profile.decode.validMaxRaw == 3570);
   assert(profile.decode.sentinelOverRangeRaw == 32767);
@@ -774,31 +774,31 @@ void test_laser_sensor_profile_wang_wtx_j100_decode_contract() {
   assert(decoded.validDistance);
   assert(!decoded.sentinel);
   assert(decoded.signedRaw == 0);
-  expect_float_close(decoded.scaledDistance, 0.0f);
+  expect_float_close(decoded.scaledDistance, 1.0f);
   assert(decoded.invalidReason == nullptr);
 
   decoded = decodeLaserDistanceRaw(profile, static_cast<uint16_t>(static_cast<int16_t>(-2200)));
   assert(decoded.validDistance);
   assert(decoded.signedRaw == -2200);
-  expect_float_close(decoded.scaledDistance, -22.0f);
+  expect_float_close(decoded.scaledDistance, 1.22f);
 
   decoded = decodeLaserDistanceRaw(profile, static_cast<uint16_t>(static_cast<int16_t>(-3570)));
   assert(decoded.validDistance);
   assert(!decoded.sentinel);
   assert(decoded.signedRaw == -3570);
-  expect_float_close(decoded.scaledDistance, -35.70f);
+  expect_float_close(decoded.scaledDistance, 1.357f);
   assert(decoded.invalidReason == nullptr);
 
   decoded = decodeLaserDistanceRaw(profile, 3500);
   assert(decoded.validDistance);
   assert(decoded.signedRaw == 3500);
-  expect_float_close(decoded.scaledDistance, 35.0f);
+  expect_float_close(decoded.scaledDistance, 0.65f);
 
   decoded = decodeLaserDistanceRaw(profile, 3570);
   assert(decoded.validDistance);
   assert(!decoded.sentinel);
   assert(decoded.signedRaw == 3570);
-  expect_float_close(decoded.scaledDistance, 35.70f);
+  expect_float_close(decoded.scaledDistance, 0.643f);
   assert(decoded.invalidReason == nullptr);
 
   decoded = decodeLaserDistanceRaw(profile, static_cast<uint16_t>(static_cast<int16_t>(-3571)));
@@ -815,7 +815,7 @@ void test_laser_sensor_profile_wang_wtx_j100_decode_contract() {
   assert(!decoded.validDistance);
   assert(decoded.sentinel);
   expect_reason(decoded.invalidReason, "SENTINEL_OVER_RANGE");
-  expect_float_close(decoded.scaledDistance, 327.67f);
+  expect_float_close(decoded.scaledDistance, -2.2767f);
 }
 
 void test_fall_stop_action_decision() {
@@ -1486,7 +1486,8 @@ void test_protocol_encode_stream_contract() {
   event.ma12WeightKg = 66.543f;
   encoded = ProtocolCodec::encodeEvent(event);
   expect_contains(encoded, "valid=1");
-  expect_contains(encoded, "distance=12.35");
+  expect_contains(encoded, "distance_mm=1234.50");
+  expect_not_contains(encoded, "distance=");
   expect_contains(encoded, "weight=67.89");
   expect_contains(encoded, "ma12=66.54");
   expect_not_contains(encoded, "reason=");
@@ -1641,12 +1642,12 @@ void test_hub_ack_builder_calibration_contracts() {
   encoded = HubAckBuilder::calibrationModel(model);
   expect_reason(
       encoded.c_str(),
-      "ACK:CAL_MODEL type=QUADRATIC ref=10.1235 c0=1.234567 c1=2.345678 c2=3.456789");
+      "ACK:CAL_MODEL type=QUADRATIC ref=10.1235 c0=1.234567 c1=2.345678 c2=3.456789 ready=1");
 
   encoded = HubAckBuilder::calibrationSetModel(model);
   expect_reason(
       encoded.c_str(),
-      "ACK:CAL_SET_MODEL type=QUADRATIC ref=10.1235 c0=1.234567 c1=2.345678 c2=3.456789");
+      "ACK:CAL_SET_MODEL type=QUADRATIC ref=10.1235 c0=1.234567 c1=2.345678 c2=3.456789 ready=1");
 
   encoded = HubAckBuilder::calibrationSetModelRejected(CalibrationModelType::LINEAR, "NON_MONOTONIC");
   expect_reason(encoded.c_str(), "NACK:CAL_SET_MODEL type=LINEAR reason=NON_MONOTONIC");

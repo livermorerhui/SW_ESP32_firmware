@@ -19,6 +19,7 @@ class CalibrationSessionStoreTest {
                 isRecording = true,
                 captureReferenceInput = "bad",
                 distance = 10f,
+                distanceValid = true,
             ),
         )
         val available = store.withCaptureAvailability(
@@ -66,9 +67,9 @@ class CalibrationSessionStoreTest {
     @Test
     fun validPointsBuildComparisonAndAutoPrepareSelectedFit() {
         val state = listOf(
-            point(distanceMm = -1000f, referenceWeightKg = 50f),
-            point(distanceMm = 0f, referenceWeightKg = 70f),
-            point(distanceMm = 1000f, referenceWeightKg = 90f),
+            point(distanceMm = 100f, referenceWeightKg = 0f),
+            point(distanceMm = 200f, referenceWeightKg = 50f),
+            point(distanceMm = 300f, referenceWeightKg = 100f),
         ).fold(UiState(isConnected = true, isRecording = true, distance = 1f)) { current, point ->
             store.appendPoint(
                 state = current,
@@ -89,9 +90,9 @@ class CalibrationSessionStoreTest {
     @Test
     fun selectingQuadraticUsesQuadraticFitWhenAvailable() {
         val fitted = listOf(
-            point(distanceMm = -1000f, referenceWeightKg = 50f),
-            point(distanceMm = 0f, referenceWeightKg = 70f),
-            point(distanceMm = 1000f, referenceWeightKg = 90f),
+            point(distanceMm = 100f, referenceWeightKg = 0f),
+            point(distanceMm = 200f, referenceWeightKg = 50f),
+            point(distanceMm = 300f, referenceWeightKg = 100f),
         ).fold(UiState()) { current, point ->
             store.appendPoint(
                 state = current,
@@ -112,9 +113,9 @@ class CalibrationSessionStoreTest {
     @Test
     fun invalidPointsStayVisibleButDoNotFeedFitDataset() {
         val state = listOf(
-            point(distanceMm = -1000f, referenceWeightKg = 50f),
-            point(distanceMm = 0f, referenceWeightKg = 70f, validFlag = false),
-            point(distanceMm = 1000f, referenceWeightKg = 90f),
+            point(distanceMm = 100f, referenceWeightKg = 0f),
+            point(distanceMm = 200f, referenceWeightKg = 50f, validFlag = false),
+            point(distanceMm = 300f, referenceWeightKg = 90f),
         ).fold(UiState()) { current, point ->
             store.appendPoint(
                 state = current,

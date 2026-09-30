@@ -230,7 +230,7 @@ class ProtocolCodecTest {
 
     @Test
     fun decodeEvtStreamAndBareCsv() {
-        val evt = ProtocolCodec.decode("EVT:STREAM seq=42 ts_ms=1234 valid=1 ma12_ready=1 distance=120.35 weight=66.80 ma12=66.10")
+        val evt = ProtocolCodec.decode("EVT:STREAM seq=42 ts_ms=1234 valid=1 ma12_ready=1 distance_mm=120.35 weight=66.80 ma12=66.10")
         val streamEvt = assertIs<Event.StreamSample>(evt)
         assertEquals(MeasurementCarrier.FORMAL_EVT_STREAM, streamEvt.carrier)
         assertEquals(42L, streamEvt.sequence)
@@ -240,6 +240,10 @@ class ProtocolCodecTest {
         assertEquals(66.1f, streamEvt.ma12)
         assertEquals(true, streamEvt.ma12Ready)
         assertEquals(true, streamEvt.valid)
+
+        val legacy = ProtocolCodec.decode("EVT:STREAM seq=43 ts_ms=1235 valid=1 ma12_ready=1 distance=1.2035 weight=66.80")
+        val legacyStream = assertIs<Event.StreamSample>(legacy)
+        assertEquals(null, legacyStream.distance)
 
         val bare = ProtocolCodec.decode("120.35,66.80")
         val streamBare = assertIs<Event.StreamSample>(bare)
@@ -264,13 +268,14 @@ class ProtocolCodecTest {
 
     @Test
     fun decodeCalibrationModelAck() {
-        val event = ProtocolCodec.decode("ACK:CAL_MODEL type=QUADRATIC ref=1.2000 c0=0.100000 c1=1.100000 c2=0.200000")
+        val event = ProtocolCodec.decode("ACK:CAL_MODEL type=QUADRATIC ref=1.2000 c0=0.100000 c1=1.100000 c2=0.200000 ready=1")
         val model = assertIs<Event.CalibrationModel>(event)
         assertEquals(CalibrationModelType.QUADRATIC, model.type)
         assertEquals(1.2f, model.referenceDistance)
         assertEquals(0.1f, model.c0)
         assertEquals(1.1f, model.c1)
         assertEquals(0.2f, model.c2)
+        assertEquals(true, model.ready)
     }
 
     @Test
@@ -288,10 +293,11 @@ class ProtocolCodecTest {
 
     @Test
     fun decodeCalibrationSetModelAck() {
-        val event = ProtocolCodec.decode("ACK:CAL_SET_MODEL type=QUADRATIC ref=1.2000 c0=0.100000 c1=1.100000 c2=0.200000")
+        val event = ProtocolCodec.decode("ACK:CAL_SET_MODEL type=QUADRATIC ref=1.2000 c0=0.100000 c1=1.100000 c2=0.200000 ready=1")
         val result = assertIs<Event.CalibrationSetModelResult>(event)
         assertEquals(true, result.success)
         assertEquals(CalibrationModelType.QUADRATIC, result.type)
+        assertEquals(true, result.ready)
         assertEquals(null, result.reason)
     }
 

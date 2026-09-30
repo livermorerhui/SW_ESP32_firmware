@@ -5,12 +5,15 @@ import com.sonicwave.protocol.CalibrationComparisonResult
 import com.sonicwave.protocol.CalibrationFitResult
 import com.sonicwave.protocol.CalibrationFitSample
 import com.sonicwave.protocol.CalibrationModelType
+import com.sonicwave.protocol.CALIBRATION_EMPTY_WEIGHT_EPSILON_KG
+import com.sonicwave.protocol.calibrationDistanceRangeForBackend
+import com.sonicwave.protocol.calibrationEmptyDistanceToleranceForBackend
+import kotlin.math.abs
 
 internal class CalibrationSessionStore {
     fun withCaptureAvailability(state: UiState): UiState {
         return state.copy(
             canCaptureCalibrationPoint = state.isConnected &&
-                state.isRecording &&
                 isCaptureReferenceValid(state.captureReferenceInput) &&
                 hasCaptureDistanceSnapshot(state),
         )
@@ -23,6 +26,7 @@ internal class CalibrationSessionStore {
                     latestCalibrationPoint = null,
                     calibrationPoints = emptyList(),
                     comparisonResult = null,
+                    latestModel = null,
                     selectedComparisonModel = state.modelType,
                     captureStatus = null,
                     writeModelStatus = null,
@@ -101,10 +105,20 @@ internal class CalibrationSessionStore {
                 comparisonResult = if (samples.isEmpty()) {
                     null
                 } else {
-                    CalibrationComparisonEngine.compare(samples)
+                    CalibrationComparisonEngine.compare(
+                        samples = samples,
+                        emptyDistanceMm = samples
+                            .firstOrNull { abs(it.referenceWeightKg) <= CALIBRATION_EMPTY_WEIGHT_EPSILON_KG }
+                            ?.distanceMm,
+                        emptyDistanceToleranceMm = calibrationEmptyDistanceToleranceForBackend(
+                            state.sensorBackend,
+                        ),
+                        validationDistanceRangeMm = calibrationDistanceRangeForBackend(
+                            state.sensorBackend,
+                        ),
+                    )
                 },
                 canCaptureCalibrationPoint = state.isConnected &&
-                    state.isRecording &&
                     isCaptureReferenceValid(state.captureReferenceInput) &&
                     hasCaptureDistanceSnapshot(state),
             ),
@@ -161,7 +175,11 @@ internal class CalibrationSessionStore {
     }
 
     fun synchronizeModelSelectionUi(state: UiState): UiState {
+        val deployable = state.preparedModel?.let { model ->
+            canDeployModel(state, model)
+        } == true
         return state.copy(
+            canDeployCalibrationModel = deployable,
             modelOptions = SUPPORTED_CALIBRATION_MODEL_TYPES.map { type ->
                 CalibrationModelOptionUi(
                     type = type,
@@ -204,11 +222,43 @@ internal class CalibrationSessionStore {
         }
     }
 
+    /** The 0 kg point is the only source of this device's empty anchor. */
+    fun emptyDistanceMm(state: UiState): Float? {
+        return state.calibrationPoints
+            .asSequence()
+            .filter { it.validFlag != false }
+            .mapNotNull { point ->
+                val distance = point.distanceMm
+                val weight = point.referenceWeightKg
+                if (distance != null && weight != null &&
+                    distance.isFinite() && weight.isFinite() &&
+                    abs(weight) <= CALIBRATION_EMPTY_WEIGHT_EPSILON_KG
+                ) {
+                    distance
+                } else {
+                    null
+                }
+            }
+            .firstOrNull()
+    }
+
+    fun canDeployModel(state: UiState, model: PreparedCalibrationModelUi): Boolean {
+        val emptyDistance = state.comparisonResult?.emptyDistanceMm
+            ?: emptyDistanceMm(state)
+            ?: return false
+        val expectedReference = emptyDistance / 100.0f
+        val referenceMatches = abs(model.referenceDistance - expectedReference) <=
+            calibrationEmptyDistanceToleranceForBackend(state.sensorBackend) / 100.0f
+        val fixedIntercept = abs(model.c2) <= 0.0001f
+        val fit = fitForType(state.comparisonResult, model.type)
+        return referenceMatches && fixedIntercept && fit?.isAvailable == true
+    }
+
     private fun isCaptureReferenceValid(input: String): Boolean {
         return input.toFloatOrNull()?.let { it >= 0.0f } == true
     }
 
     private fun hasCaptureDistanceSnapshot(state: UiState): Boolean {
-        return state.distance?.isFinite() == true
+        return state.distanceValid && state.distance?.isFinite() == true
     }
 }

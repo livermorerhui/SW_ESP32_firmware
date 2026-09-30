@@ -43,6 +43,7 @@ object ProtocolCodec {
         parseStreamSubscription(raw)?.let { return it }
         parseCalibrationModel(raw)?.let { return it }
         parseCalibrationSetModelResult(raw)?.let { return it }
+        parseCalibrationZeroResult(raw)?.let { return it }
         parseCalibrationPoint(raw)?.let { return it }
         parseSnapshot(raw)?.let { return it }
         parseWaveOutput(raw)?.let { return it }
@@ -161,6 +162,7 @@ object ProtocolCodec {
             c0 = kv["C0"]?.toFloatOrNull(),
             c1 = kv["C1"]?.toFloatOrNull(),
             c2 = kv["C2"]?.toFloatOrNull(),
+            ready = parseBooleanFlag(kv["READY"]),
             raw = raw,
         )
     }
@@ -188,6 +190,7 @@ object ProtocolCodec {
             return Event.CalibrationSetModelResult(
                 success = true,
                 type = parseCalibrationModelType(kv["TYPE"]),
+                ready = parseBooleanFlag(kv["READY"]),
                 reason = null,
                 raw = raw,
             )
@@ -198,6 +201,25 @@ object ProtocolCodec {
         return Event.CalibrationSetModelResult(
             success = false,
             type = parseCalibrationModelType(kv["TYPE"]),
+            ready = parseBooleanFlag(kv["READY"]),
+            reason = kv["REASON"]?.takeIf { it.isNotBlank() } ?: nackPayload.ifBlank { "UNKNOWN" },
+            raw = raw,
+        )
+    }
+
+    private fun parseCalibrationZeroResult(raw: String): Event.CalibrationZeroResult? {
+        if (raw.startsWith("ACK:CAL_ZERO", ignoreCase = true)) {
+            return Event.CalibrationZeroResult(
+                success = true,
+                reason = null,
+                raw = raw,
+            )
+        }
+
+        val nackPayload = payloadAfterPrefix(raw, "NACK:CAL_ZERO") ?: return null
+        val kv = parseKeyValuePayload(nackPayload)
+        return Event.CalibrationZeroResult(
+            success = false,
             reason = kv["REASON"]?.takeIf { it.isNotBlank() } ?: nackPayload.ifBlank { "UNKNOWN" },
             raw = raw,
         )
@@ -341,11 +363,25 @@ object ProtocolCodec {
                 kv.containsKey("TS_MS") ||
                 kv.containsKey("VALID") ||
                 kv.containsKey("DISTANCE") ||
+                kv.containsKey("DISTANCE_MM") ||
                 kv.containsKey("WEIGHT") ||
                 kv.containsKey("MA12")
             ) {
-                val distance = kv["DISTANCE"]?.toFloatOrNull()
+                // The firmware is the only unit-conversion owner. Demo APP
+                // consumes the explicit physical-mm field as-is and never
+                // guesses a sensor-specific conversion from legacy distance.
+                val distance = kv["DISTANCE_MM"]?.toFloatOrNull()
                 val weight = kv["WEIGHT"]?.toFloatOrNull()
+                val combinedValid = parseBooleanFlag(kv["VALID"])
+                // New fields are authoritative.  For old frames, a present
+                // finite value is the best quality evidence available; this
+                // lets a partial frame retain its distance without treating
+                // a missing weight as zero.
+                val distanceValid = parseBooleanFlag(kv["DISTANCE_VALID"])
+                    ?: (distance?.isFinite() == true)
+                val weightValid = parseBooleanFlag(kv["WEIGHT_VALID"])
+                    ?: (weight?.isFinite() == true)
+                val valid = combinedValid ?: (distanceValid && weightValid)
                 return Event.StreamSample(
                     carrier = MeasurementCarrier.FORMAL_EVT_STREAM,
                     sequence = kv["SEQ"]?.toLongOrNull(),
@@ -354,9 +390,14 @@ object ProtocolCodec {
                     weight = weight,
                     ma12 = kv["MA12"]?.toFloatOrNull(),
                     ma12Ready = parseBooleanFlag(kv["MA12_READY"]) ?: kv["MA12"]?.toFloatOrNull()?.let { true } ?: false,
-                    valid = parseBooleanFlag(kv["VALID"]) ?: (distance != null && weight != null),
+                    valid = valid,
                     reason = kv["REASON"],
                     raw = raw,
+                    distanceValid = distanceValid,
+                    weightValid = weightValid,
+                    distanceReason = kv["DISTANCE_REASON"] ?: kv["REASON"].takeIf { !distanceValid },
+                    weightReason = kv["WEIGHT_REASON"] ?: kv["REASON"].takeIf { !weightValid },
+                    sensorBackend = kv["SENSOR_BACKEND"] ?: kv["BACKEND"],
                 )
             }
         }
@@ -374,6 +415,8 @@ object ProtocolCodec {
                 valid = true,
                 reason = null,
                 raw = raw,
+                distanceValid = true,
+                weightValid = true,
             )
         }
     }

@@ -53,7 +53,7 @@ class MeasurementDisplayStoreTest {
 
         assertEquals(120f, invalid.state.distance)
         assertNull(invalid.state.weight)
-        assertEquals(12f, invalid.state.ma12)
+        assertNull(invalid.state.ma12)
         assertFalse(invalid.state.measurementValid)
         assertEquals(3L, invalid.state.lastMeasurementSequence)
         assertNull(nextValid.latestPoint?.ma3)

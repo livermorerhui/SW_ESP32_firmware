@@ -199,7 +199,10 @@ fun CalibrationToolsSection(
             }
             Button(
                 onClick = actions.commands.onSetModel,
-                enabled = uiState.preparedModel != null,
+                enabled = uiState.isConnected &&
+                    uiState.protocolMode == com.sonicwave.protocol.ProtocolMode.PRIMARY &&
+                    uiState.canDeployCalibrationModel &&
+                    uiState.writeModelStatus?.kind != WriteModelFeedbackKind.PENDING,
                 colors = writeButtonColors,
                 modifier = Modifier.fillMaxWidth(),
             ) {
@@ -519,7 +522,13 @@ private fun ModelSelectionCard(
 @Composable
 private fun fitStatusLabel(fit: CalibrationFitResult?): String {
     return when {
-        fit?.isAvailable != true -> stringResource(R.string.label_fit_status_insufficient)
+        fit == null -> stringResource(R.string.label_fit_status_insufficient)
+        fit.isAvailable -> stringResource(R.string.label_fit_status_pass)
+        fit.failureReason == "MISSING_EMPTY_ANCHOR" -> stringResource(R.string.label_fit_status_missing_empty_anchor)
+        fit.failureReason == "EMPTY_ANCHOR_CONFLICT" -> stringResource(R.string.label_fit_status_empty_anchor_conflict)
+        fit.failureReason == "DISTANCE_OUT_OF_RANGE" -> stringResource(R.string.label_fit_status_distance_out_of_range)
+        fit.failureReason == "NON_MONOTONIC" -> stringResource(R.string.label_fit_status_non_monotonic)
+        fit.failureReason == "SINGULAR_FIT" -> stringResource(R.string.label_fit_status_singular)
         fit.monotonic == true -> stringResource(R.string.label_fit_status_pass)
         else -> stringResource(R.string.label_fit_status_fail)
     }
@@ -1213,11 +1222,7 @@ private fun ModelSummaryCard(
             )
         } else {
             Text(
-                text = stringResource(
-                    R.string.label_model_fit_insufficient,
-                    fit.sampleCount,
-                    fit.requiredPointCount,
-                ),
+                text = fitStatusLabel(fit),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

@@ -10,7 +10,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.sonicwave.protocol.CalibrationComparisonResult
 import com.sonicwave.protocol.CalibrationModelType
-import com.sonicwave.protocol.CALIBRATION_DISTANCE_RUNTIME_DIVISOR
 import com.sonicwave.protocol.CapabilityResult
 import com.sonicwave.protocol.Command
 import com.sonicwave.protocol.DeviceState
@@ -35,6 +34,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 sealed interface ScanState {
@@ -80,6 +80,11 @@ data class UiState(
     val weight: Float? = null,
     val ma12: Float? = null,
     val measurementValid: Boolean = false,
+    val distanceValid: Boolean = false,
+    val weightValid: Boolean = false,
+    val distanceInvalidReason: String? = null,
+    val weightInvalidReason: String? = null,
+    val sensorBackend: String? = null,
     val lastMeasurementSequence: Long? = null,
     val telemetryPoints: List<TelemetryPointUi> = emptyList(),
     val stableWeight: Float? = null,
@@ -100,6 +105,7 @@ data class UiState(
         )
     },
     val preparedModel: PreparedCalibrationModelUi? = null,
+    val canDeployCalibrationModel: Boolean = false,
     val canCaptureCalibrationPoint: Boolean = false,
     val captureStatus: CaptureFeedbackUi? = null,
     val writeModelStatus: WriteModelFeedbackUi? = null,
@@ -159,6 +165,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private val testSessionBridge = TestSessionBridge(nowProvider = { System.currentTimeMillis() })
     private val testSessionExporter = TestSessionExporter(application)
     private val motionSamplingExporter = MotionSamplingExporter(application)
+    private val demoSessionPersistence = DemoSessionPersistence(application)
     private val recordingMutex = Mutex()
     private val measurementTrace = DemoMeasurementTrace()
     private val measurementDisplayStore = MeasurementDisplayStore(TELEMETRY_WINDOW_MS)
@@ -198,15 +205,24 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private var disconnectRequested: Boolean = false
     private var hadConnectedSession: Boolean = false
     private var awaitingCalibrationCaptureResult: Boolean = false
+    private var awaitingCalibrationZeroResult: Boolean = false
     private var awaitingModelWriteResult: Boolean = false
+    private var awaitingModelReadback: Boolean = false
     private var pendingDeviceConfigWatchdogJob: Job? = null
+    private var calibrationCaptureTimeoutJob: Job? = null
+    private var calibrationZeroTimeoutJob: Job? = null
+    private var modelWriteTimeoutJob: Job? = null
+    private var modelReadbackTimeoutJob: Job? = null
+    private var persistenceWriteJob: Job? = null
     private var pendingWriteModelType: CalibrationModelType? = null
+    private var pendingModelReadback: PreparedCalibrationModelUi? = null
     private var degradedStartDialogSuppressed: Boolean = false
     private var preferredLaserPlatformModel: PlatformModel = PlatformModel.PLUS
     private var testSessionStore: TestSessionUi? = null
     private var motionSamplingSessionStore: MotionSamplingSessionUi? = null
 
     init {
+        restorePersistedSessions()
         observeClient()
         refreshPermissionState()
         _uiState.update {
@@ -219,6 +235,47 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     ),
                 ),
             )
+        }
+    }
+
+    private fun restorePersistedSessions() {
+        viewModelScope.launch {
+            val snapshot = withContext(Dispatchers.IO) {
+                demoSessionPersistence.load()
+            } ?: return@launch
+            motionSamplingSessionStore = snapshot.samplingSession
+            _uiState.update { state ->
+                val restored = calibrationSessionStore.rebuildComparison(
+                    state.copy(
+                        calibrationPoints = snapshot.calibrationPoints,
+                        selectedComparisonModel = snapshot.selectedModel,
+                        modelType = snapshot.selectedModel,
+                        preparedModel = snapshot.preparedModel,
+                        motionSamplingSession = snapshot.samplingSession,
+                        isMotionSamplingActive = false,
+                    ),
+                )
+                calibrationSessionStore.withCaptureAvailability(restored)
+            }
+            appendSystemLog("[PERSISTENCE] restored calibration_points=${snapshot.calibrationPoints.size} sampling_rows=${snapshot.samplingSession?.rows?.size ?: 0}")
+        }
+    }
+
+    private fun persistSessions() {
+        persistenceWriteJob?.cancel()
+        persistenceWriteJob = viewModelScope.launch {
+            delay(PERSISTENCE_DEBOUNCE_MS)
+            val state = _uiState.value
+            val snapshot = DemoSessionSnapshot(
+                calibrationPoints = state.calibrationPoints,
+                preparedModel = state.preparedModel,
+                selectedModel = state.selectedComparisonModel,
+                samplingSession = motionSamplingSessionStore,
+            )
+            withContext(Dispatchers.IO) {
+                runCatching { demoSessionPersistence.save(snapshot) }
+                    .onFailure { appendSystemLog("[PERSISTENCE] save_failed reason=${it.message ?: "UNKNOWN"}") }
+            }
         }
     }
 
@@ -281,9 +338,20 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         disconnectRequested = false
         hadConnectedSession = false
         awaitingCalibrationCaptureResult = false
+        calibrationCaptureTimeoutJob?.cancel()
+        calibrationCaptureTimeoutJob = null
+        awaitingCalibrationZeroResult = false
+        calibrationZeroTimeoutJob?.cancel()
+        calibrationZeroTimeoutJob = null
         awaitingModelWriteResult = false
+        modelWriteTimeoutJob?.cancel()
+        modelWriteTimeoutJob = null
+        awaitingModelReadback = false
+        modelReadbackTimeoutJob?.cancel()
+        modelReadbackTimeoutJob = null
         clearPendingDeviceConfigWriteState()
         pendingWriteModelType = null
+        pendingModelReadback = null
         wavePendingLifecycleStore.clearAll()
         preferredLaserPlatformModel = PlatformModel.PLUS
         degradedStartDialogSuppressed = false
@@ -296,11 +364,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         measurementTrace.reset()
         resetMeasurementDisplayState()
         resetRawConsoleState()
-        resetSessionStores(clearTestSession = false)
+        resetSessionStores(clearTestSession = false, clearMotionSamplingSession = false)
 
         _uiState.update {
-            calibrationSessionStore.reset(
-                calibrationSessionStore.withCaptureAvailability(
+            calibrationSessionStore.withCaptureAvailability(
                     it.copy(
                         scanState = ScanState.Idle,
                         statusLabel = currentStatusLabel(connectionState = ConnectionState.Connecting, isScanning = false),
@@ -359,8 +426,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         faultStatus = FaultStatusUi(),
                         safetyStatus = defaultSafetyStatus(),
                     ),
-                ),
-            ).resetWaveRuntime()
+                ).resetWaveRuntime()
         }
         publishTestSessionPanel(force = true)
 
@@ -460,9 +526,20 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         disconnectRequested = true
         hadConnectedSession = false
         awaitingCalibrationCaptureResult = false
+        calibrationCaptureTimeoutJob?.cancel()
+        calibrationCaptureTimeoutJob = null
+        awaitingCalibrationZeroResult = false
+        calibrationZeroTimeoutJob?.cancel()
+        calibrationZeroTimeoutJob = null
         awaitingModelWriteResult = false
+        modelWriteTimeoutJob?.cancel()
+        modelWriteTimeoutJob = null
+        awaitingModelReadback = false
+        modelReadbackTimeoutJob?.cancel()
+        modelReadbackTimeoutJob = null
         clearPendingDeviceConfigWriteState()
         pendingWriteModelType = null
+        pendingModelReadback = null
         wavePendingLifecycleStore.clearAll()
         degradedStartDialogSuppressed = false
         finishTestSessionIfRecording(
@@ -479,10 +556,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         stopMotionSamplingIfActive(text(R.string.motion_sampling_status_stopped_disconnect))
         telemetrySessionStartMs = 0L
         resetMeasurementDisplayState()
-        resetSessionStores(clearTestSession = false)
+        resetSessionStores(clearTestSession = false, clearMotionSamplingSession = false)
         _uiState.update {
-            calibrationSessionStore.reset(
-                calibrationSessionStore.withCaptureAvailability(
+            calibrationSessionStore.withCaptureAvailability(
                     it.copy(
                         connectedDeviceName = null,
                         isConnecting = false,
@@ -540,8 +616,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             isScanning = isScanActive(it.scanState),
                         ),
                     ),
-                ),
-            ).resetWaveRuntime()
+                ).resetWaveRuntime()
         }
         publishTestSessionPanel(force = true)
     }
@@ -591,24 +666,28 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { state ->
             calibrationSessionStore.updateManualModelInput(state, referenceInput = value)
         }
+        persistSessions()
     }
 
     fun updateModelC0Input(value: String) {
         _uiState.update { state ->
             calibrationSessionStore.updateManualModelInput(state, c0Input = value)
         }
+        persistSessions()
     }
 
     fun updateModelC1Input(value: String) {
         _uiState.update { state ->
             calibrationSessionStore.updateManualModelInput(state, c1Input = value)
         }
+        persistSessions()
     }
 
     fun updateModelC2Input(value: String) {
         _uiState.update { state ->
             calibrationSessionStore.updateManualModelInput(state, c2Input = value)
         }
+        persistSessions()
     }
 
     fun toggleEngineeringSection() {
@@ -627,6 +706,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { state ->
             calibrationSessionStore.selectModelType(state, type)
         }
+        persistSessions()
         val prepared = _uiState.value.preparedModel
         if (prepared != null && prepared.type == type) {
             appendSystemLog(
@@ -865,12 +945,30 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     fun sendCalibrationCapture() {
         val state = _uiState.value
         appendSystemLog(buildCapturePreconditionLog(state))
-        appendSystemLog(buildCalibrationCaptureAttemptLog(state, route = CalibrationCaptureRouteUi.APP_LIVE_SNAPSHOT.name))
+        val primaryRoute = state.protocolMode == ProtocolMode.PRIMARY
+        val route = if (primaryRoute) {
+            CalibrationCaptureRouteUi.DEVICE_STABLE_CAPTURE
+        } else {
+            CalibrationCaptureRouteUi.APP_LIVE_SNAPSHOT
+        }
+        appendSystemLog(buildCalibrationCaptureAttemptLog(state, route = route.name))
+        if (awaitingCalibrationCaptureResult) {
+            val pendingReferenceWeight = state.captureReferenceInput.toFloatOrNull() ?: 0.0f
+            _uiState.update {
+                it.copy(
+                    lastAckOrError = text(
+                        R.string.capture_status_pending,
+                        pendingReferenceWeight,
+                    ),
+                )
+            }
+            return
+        }
         if (!state.canCaptureCalibrationPoint) {
             appendSystemLog(
                 buildCalibrationCaptureFailureLog(
                     state = state,
-                    route = CalibrationCaptureRouteUi.APP_LIVE_SNAPSHOT.name,
+                    route = route.name,
                     reason = "PRECONDITION_NOT_MET",
                 ),
             )
@@ -890,7 +988,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             appendSystemLog(
                 buildCalibrationCaptureFailureLog(
                     state = state,
-                    route = CalibrationCaptureRouteUi.APP_LIVE_SNAPSHOT.name,
+                    route = route.name,
                     reason = "INVALID_REFERENCE_WEIGHT",
                 ),
             )
@@ -906,12 +1004,74 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             }
             return
         }
-        val distanceRuntime = state.distance
-        if (distanceRuntime == null || !distanceRuntime.isFinite()) {
+
+        if (primaryRoute) {
+            awaitingCalibrationCaptureResult = true
+            calibrationCaptureTimeoutJob?.cancel()
+            calibrationCaptureTimeoutJob = viewModelScope.launch {
+                delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+                if (!awaitingCalibrationCaptureResult) return@launch
+                awaitingCalibrationCaptureResult = false
+                appendSystemLog("[CAL_UI] capture timeout after ${CALIBRATION_REQUEST_TIMEOUT_MS}ms")
+                _uiState.update { it.copy(
+                    lastAckOrError = text(R.string.capture_status_timeout),
+                    captureStatus = captureFeedback(
+                        kind = CaptureFeedbackKind.FAILURE,
+                        message = text(R.string.capture_status_timeout),
+                        rawReason = "TIMEOUT",
+                    ),
+                ) }
+            }
+            _uiState.update {
+                it.copy(
+                    captureStatus = captureFeedback(
+                        kind = CaptureFeedbackKind.PENDING,
+                        message = text(R.string.capture_status_pending, referenceWeight),
+                        rawReason = route.name,
+                    ),
+                    lastAckOrError = text(R.string.capture_status_pending, referenceWeight),
+                )
+            }
+            appendSystemLog("[CAL_CAPTURE] send CAL:CAPTURE reference_weight=$referenceWeight route=${route.name}")
+            viewModelScope.launch {
+                runCatching {
+                    client.send(Command.CalibrationCapture(referenceWeight))
+                }.onSuccess {
+                    _uiState.update { it.copy(lastAckOrError = text(R.string.message_sent, "CAL:CAPTURE")) }
+                }.onFailure { error ->
+                    awaitingCalibrationCaptureResult = false
+                    calibrationCaptureTimeoutJob?.cancel()
+                    calibrationCaptureTimeoutJob = null
+                    _uiState.update {
+                        it.copy(
+                            lastAckOrError = text(
+                                R.string.message_send_failed,
+                                "CAL:CAPTURE",
+                                error.message ?: text(R.string.common_not_available),
+                            ),
+                            captureStatus = captureFeedback(
+                                kind = CaptureFeedbackKind.FAILURE,
+                                message = text(
+                                    R.string.capture_status_send_failed,
+                                    error.message ?: text(R.string.common_not_available),
+                                ),
+                                rawReason = "SEND_FAILED",
+                            ),
+                        )
+                    }
+                }
+            }
+            return
+        }
+
+        // Legacy fallback: retain an explicit APP snapshot route, but it is
+        // never allowed to masquerade as a device-stable point.
+        val liveDistanceMm = state.distance
+        if (liveDistanceMm == null || !liveDistanceMm.isFinite()) {
             appendSystemLog(
                 buildCalibrationCaptureFailureLog(
                     state = state,
-                    route = CalibrationCaptureRouteUi.APP_LIVE_SNAPSHOT.name,
+                    route = route.name,
                     reason = "NO_LIVE_DISTANCE",
                 ),
             )
@@ -931,12 +1091,14 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val point = CalibrationPointUi(
             index = nextIndex,
             timestampMs = System.currentTimeMillis(),
-            distanceMm = distanceRuntime * CALIBRATION_DISTANCE_RUNTIME_DIVISOR,
+            // Formal EVT:STREAM distance is already physical millimetres.
+            // Do not apply the legacy runtime-unit x100 conversion here.
+            distanceMm = liveDistanceMm,
             referenceWeightKg = referenceWeight,
             predictedWeightKg = state.weight,
             liveWeightKg = state.weight,
             stableWeightKg = state.stableWeight,
-            captureRoute = CalibrationCaptureRouteUi.APP_LIVE_SNAPSHOT,
+            captureRoute = route,
             visibleSampleValid = hasVisibleCaptureQuality(state),
             stableFlag = state.stableWeightActive,
             validFlag = true,
@@ -965,6 +1127,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 ),
             )
         }
+        persistSessions()
         appendSystemLog(
             "[CAL_APP] point appended count=${_uiState.value.calibrationPoints.size} distance_mm=${point.distanceMm} ref=${point.referenceWeightKg} stableVisible=${point.stableFlag} route=${point.captureRoute.name}",
         )
@@ -974,6 +1137,79 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendCalibrationGetModel() {
         sendCommand(Command.CalibrationGetModel, "CAL:GET_MODEL")
+    }
+
+    private fun modelReadbackMatches(
+        expected: PreparedCalibrationModelUi,
+        actual: Event.CalibrationModel,
+    ): Boolean {
+        if (actual.ready == false || actual.type != expected.type) return false
+        fun close(actualValue: Float?, expectedValue: Float, tolerance: Float): Boolean {
+            return actualValue != null && actualValue.isFinite() &&
+                kotlin.math.abs(actualValue - expectedValue) <= tolerance
+        }
+        return close(actual.referenceDistance, expected.referenceDistance, 0.0002f) &&
+            close(actual.c0, expected.c0, 0.00001f) &&
+            close(actual.c1, expected.c1, 0.00001f) &&
+            close(actual.c2, expected.c2, 0.00001f)
+    }
+
+    private fun beginModelReadback(expected: PreparedCalibrationModelUi) {
+        awaitingModelReadback = true
+        modelReadbackTimeoutJob?.cancel()
+        modelReadbackTimeoutJob = viewModelScope.launch {
+            delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+            if (!awaitingModelReadback) return@launch
+            awaitingModelReadback = false
+            pendingModelReadback = null
+            appendSystemLog("[CAL_UI] model readback timeout after ${CALIBRATION_REQUEST_TIMEOUT_MS}ms")
+            _uiState.update { it.copy(writeModelStatus = writeModelFeedback(
+                kind = WriteModelFeedbackKind.FAILURE,
+                message = text(R.string.write_model_status_timeout),
+                modelType = expected.type,
+                rawReason = "READBACK_TIMEOUT",
+            )) }
+        }
+        pendingModelReadback = expected
+        _uiState.update {
+            it.copy(
+                writeModelStatus = writeModelFeedback(
+                    kind = WriteModelFeedbackKind.PENDING,
+                    message = text(R.string.write_model_status_verifying),
+                    modelType = expected.type,
+                ),
+            )
+        }
+        appendSystemLog("[CAL_UI] writeModel ack accepted; requesting CAL:GET_MODEL for readback")
+        viewModelScope.launch {
+            runCatching { client.send(Command.CalibrationGetModel) }
+                .onFailure { error ->
+                    awaitingModelReadback = false
+                    modelReadbackTimeoutJob?.cancel()
+                    modelReadbackTimeoutJob = null
+                    pendingModelReadback = null
+                    val reason = "READBACK_SEND_FAILED"
+                    appendSystemLog("[CAL_UI] readback result=failure reason=${error.message ?: reason}")
+                    _uiState.update {
+                        it.copy(
+                            lastAckOrError = text(
+                                R.string.message_send_failed,
+                                "CAL:GET_MODEL",
+                                error.message ?: text(R.string.common_not_available),
+                            ),
+                            writeModelStatus = writeModelFeedback(
+                                kind = WriteModelFeedbackKind.FAILURE,
+                                message = text(
+                                    R.string.write_model_status_failure_with_reason,
+                                    formatModelWriteFailure(reason),
+                                ),
+                                modelType = expected.type,
+                                rawReason = reason,
+                            ),
+                        )
+                    }
+                }
+        }
     }
 
     fun sendCalibrationSetModel() {
@@ -997,8 +1233,50 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             }
             return
         }
+        if (!state.isConnected || state.protocolMode != ProtocolMode.PRIMARY) {
+            _uiState.update {
+                it.copy(lastAckOrError = text(R.string.message_model_requires_primary))
+            }
+            return
+        }
+        if (awaitingModelWriteResult || awaitingModelReadback) {
+            _uiState.update {
+                it.copy(lastAckOrError = text(R.string.message_model_write_pending))
+            }
+            return
+        }
+        if (!calibrationSessionStore.canDeployModel(state, prepared)) {
+            _uiState.update {
+                it.copy(
+                    lastAckOrError = text(R.string.message_model_not_deployable),
+                    writeModelStatus = writeModelFeedback(
+                        kind = WriteModelFeedbackKind.FAILURE,
+                        message = text(R.string.message_model_not_deployable),
+                        modelType = prepared.type,
+                    ),
+                )
+            }
+            return
+        }
         awaitingModelWriteResult = true
+        modelWriteTimeoutJob?.cancel()
+        modelWriteTimeoutJob = viewModelScope.launch {
+            delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+            if (!awaitingModelWriteResult) return@launch
+            awaitingModelWriteResult = false
+            pendingWriteModelType = null
+            pendingModelReadback = null
+            appendSystemLog("[CAL_UI] model write timeout after ${CALIBRATION_REQUEST_TIMEOUT_MS}ms")
+            _uiState.update { it.copy(writeModelStatus = writeModelFeedback(
+                kind = WriteModelFeedbackKind.FAILURE,
+                message = text(R.string.write_model_status_timeout),
+                modelType = it.selectedComparisonModel,
+                rawReason = "WRITE_TIMEOUT",
+            )) }
+        }
+        awaitingModelReadback = false
         pendingWriteModelType = prepared.type
+        pendingModelReadback = prepared
         _uiState.update {
             it.copy(
                 writeModelStatus = writeModelFeedback(
@@ -1029,7 +1307,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(lastAckOrError = text(R.string.message_sent, "CAL:SET_MODEL")) }
             }.onFailure { error ->
                 awaitingModelWriteResult = false
+                modelWriteTimeoutJob?.cancel()
+                modelWriteTimeoutJob = null
+                awaitingModelReadback = false
                 pendingWriteModelType = null
+                pendingModelReadback = null
                 appendSystemLog("[CAL_UI] writeModel result=failure reason=${error.message ?: "send_failed"}")
                 _uiState.update {
                     it.copy(
@@ -1194,8 +1476,42 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendCalibrationZero() {
+        if (awaitingCalibrationZeroResult) {
+            _uiState.update {
+                it.copy(lastAckOrError = text(R.string.cal_zero_status_pending))
+            }
+            return
+        }
+        awaitingCalibrationZeroResult = true
+        calibrationZeroTimeoutJob?.cancel()
+        calibrationZeroTimeoutJob = viewModelScope.launch {
+            delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+            if (!awaitingCalibrationZeroResult) return@launch
+            awaitingCalibrationZeroResult = false
+            appendSystemLog("[CAL_UI] calZero timeout after ${CALIBRATION_REQUEST_TIMEOUT_MS}ms")
+            _uiState.update { it.copy(lastAckOrError = text(R.string.cal_zero_status_timeout)) }
+        }
         appendSystemLog("[CAL_UI] calZeroRequested")
-        sendCommand(Command.CalibrationZero, "CAL:ZERO")
+        viewModelScope.launch {
+            runCatching {
+                client.send(Command.CalibrationZero)
+            }.onSuccess {
+                _uiState.update { it.copy(lastAckOrError = text(R.string.message_sent, "CAL:ZERO")) }
+            }.onFailure { error ->
+                awaitingCalibrationZeroResult = false
+                calibrationZeroTimeoutJob?.cancel()
+                calibrationZeroTimeoutJob = null
+                _uiState.update {
+                    it.copy(
+                        lastAckOrError = text(
+                            R.string.message_send_failed,
+                            "CAL:ZERO",
+                            error.message ?: text(R.string.common_not_available),
+                        ),
+                    )
+                }
+            }
+        }
     }
 
     fun startRecording() {
@@ -1245,6 +1561,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { state ->
             calibrationSessionStore.reset(state)
         }
+        persistSessions()
         appendSystemLog("[CAL_APP] points cleared count=$pointCount")
     }
 
@@ -1316,6 +1633,16 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         if (state.isMotionSamplingActive) return
 
         val now = System.currentTimeMillis()
+        if (!state.isConnected || state.protocolMode != ProtocolMode.PRIMARY) {
+            _uiState.update { it.copy(motionSamplingStatus = text(R.string.motion_sampling_status_requires_primary_stream)) }
+            appendSystemLog("[MOTION_SAMPLE] start rejected reason=PRIMARY_CONNECTION_REQUIRED")
+            return
+        }
+        if (!state.notifyEnabled || lastStreamAtMs <= 0L || now - lastStreamAtMs > NO_STREAM_WARNING_TIMEOUT_MS) {
+            _uiState.update { it.copy(motionSamplingStatus = text(R.string.motion_sampling_status_requires_primary_stream)) }
+            appendSystemLog("[MOTION_SAMPLE] start rejected reason=STREAM_NOT_READY lastStreamAtMs=$lastStreamAtMs")
+            return
+        }
         val sessionId = "motion_$now"
         val session = motionSamplingStore.start(
             state = state,
@@ -1333,6 +1660,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 motionSamplingStatus = text(R.string.motion_sampling_status_started, sessionId),
             )
         }
+        persistSessions()
         appendSystemLog("[MOTION_SAMPLE] session started id=$sessionId")
     }
 
@@ -1354,6 +1682,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 motionSamplingStatus = text(R.string.motion_sampling_status_cleared),
             )
         }
+        persistSessions()
         appendSystemLog("[MOTION_SAMPLE] session cleared id=$sessionId")
     }
 
@@ -1745,9 +2074,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 if (connection is ConnectionState.Error || connection is ConnectionState.Disconnected) {
                     hadConnectedSession = false
                     awaitingCalibrationCaptureResult = false
+                    awaitingCalibrationZeroResult = false
                     awaitingModelWriteResult = false
+                    awaitingModelReadback = false
                     clearPendingDeviceConfigWriteState()
                     pendingWriteModelType = null
+                    pendingModelReadback = null
                     wavePendingLifecycleStore.clearAll()
                     lastRequestedWaveParams = null
                     liveWaveParamSendJob?.cancel()
@@ -1761,11 +2093,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     stopRecordingIfActive(text(R.string.recording_stopped_disconnect))
                     stopMotionSamplingIfActive(text(R.string.motion_sampling_status_stopped_disconnect))
                     resetMeasurementDisplayState()
-                    resetSessionStores(clearTestSession = false)
+                    resetSessionStores(clearTestSession = false, clearMotionSamplingSession = false)
                     degradedStartDialogSuppressed = false
                     _uiState.update { state ->
-                        calibrationSessionStore.reset(
-                            calibrationSessionStore.withCaptureAvailability(
+                        calibrationSessionStore.withCaptureAvailability(
                                 state.copy(
                                     devicePlatformModel = null,
                                     deviceLaserInstalled = null,
@@ -1802,8 +2133,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                     leaveProtectionCapabilityVerified = false,
                                     isLeaveProtectionSyncInProgress = false,
                                 ),
-                            ),
-                        ).resetWaveRuntime()
+                            ).resetWaveRuntime()
                     }
                     publishTestSessionPanel(force = true)
                 }
@@ -2210,34 +2540,75 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             ),
                         )
                     }.also {
+                        persistSessions()
                         appendSystemLog("[CAL_UI] pointRecorded count=${_uiState.value.calibrationPoints.size}")
                         _uiState.value.latestCalibrationPoint?.let { point ->
                             appendSystemLog(buildCalibrationCaptureResultLog(result = "success", point = point))
                         }
                     }
 
-                    is Event.CalibrationModel -> _uiState.update {
+                    is Event.CalibrationModel -> {
                         val type = event.type ?: CalibrationModelType.LINEAR
-                        calibrationSessionStore.synchronizeModelSelectionUi(
-                            it.copy(
-                            latestModel = CalibrationModelUi(
-                                type = type,
-                                referenceDistance = event.referenceDistance ?: 0.0f,
-                                c0 = event.c0 ?: 0.0f,
-                                c1 = event.c1 ?: 1.0f,
-                                c2 = event.c2 ?: 0.0f,
-                                raw = event.raw,
-                            ),
-                            lastAckOrError = event.raw,
-                            ),
+                        val latestModel = CalibrationModelUi(
+                            type = type,
+                            referenceDistance = event.referenceDistance ?: 0.0f,
+                            c0 = event.c0 ?: 0.0f,
+                            c1 = event.c1 ?: 1.0f,
+                            c2 = event.c2 ?: 0.0f,
+                            ready = event.ready,
+                            raw = event.raw,
                         )
-                    }.also {
-                        val model = _uiState.value.latestModel
-                        if (model != null) {
+                        val pending = pendingModelReadback
+                        val isReadback = awaitingModelReadback && pending != null
+                        val readbackMatches = isReadback && modelReadbackMatches(pending!!, event)
+                        if (isReadback) {
+                            awaitingModelReadback = false
+                            modelReadbackTimeoutJob?.cancel()
+                            modelReadbackTimeoutJob = null
+                            pendingModelReadback = null
+                        }
+                        val readbackStatus = if (!isReadback) {
+                            null
+                        } else if (readbackMatches) {
                             appendSystemLog(
-                                "[CAL_UI] fetchedModel ref=${model.referenceDistance} c0=${model.c0} c1=${model.c1} c2=${model.c2}",
+                                "[CAL_UI] readback result=success ref=${latestModel.referenceDistance} c0=${latestModel.c0} c1=${latestModel.c1} c2=${latestModel.c2} ready=${event.ready}",
+                            )
+                            writeModelFeedback(
+                                kind = WriteModelFeedbackKind.SUCCESS,
+                                message = text(
+                                    R.string.write_model_status_success,
+                                    modelTypeLabel(pending!!.type),
+                                ),
+                                modelType = pending.type,
+                                rawReason = event.raw,
+                            )
+                        } else {
+                            val reason = if (event.ready == false) "READBACK_NOT_READY" else "READBACK_MISMATCH"
+                            appendSystemLog(
+                                "[CAL_UI] readback result=failure reason=$reason expected=${pending!!.type} actual=${event.type} raw=${event.raw}",
+                            )
+                            writeModelFeedback(
+                                kind = WriteModelFeedbackKind.FAILURE,
+                                message = text(
+                                    R.string.write_model_status_failure_with_reason,
+                                    formatModelWriteFailure(reason),
+                                ),
+                                modelType = pending.type,
+                                rawReason = reason,
                             )
                         }
+                        _uiState.update { state ->
+                            calibrationSessionStore.synchronizeModelSelectionUi(
+                                state.copy(
+                                    latestModel = latestModel,
+                                    lastAckOrError = event.raw,
+                                    writeModelStatus = readbackStatus ?: state.writeModelStatus,
+                                ),
+                            )
+                        }
+                        appendSystemLog(
+                            "[CAL_UI] fetchedModel ref=${latestModel.referenceDistance} c0=${latestModel.c0} c1=${latestModel.c1} c2=${latestModel.c2} ready=${event.ready}",
+                        )
                     }
 
                     is Event.Capabilities -> _uiState.update { state ->
@@ -2380,6 +2751,41 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
 
+                    is Event.CalibrationZeroResult -> {
+                        awaitingCalibrationZeroResult = false
+                        calibrationZeroTimeoutJob?.cancel()
+                        calibrationZeroTimeoutJob = null
+                        awaitingModelWriteResult = false
+                        awaitingModelReadback = false
+                        pendingWriteModelType = null
+                        pendingModelReadback = null
+                        if (event.success) {
+                            _uiState.update { state ->
+                                calibrationSessionStore.reset(state).copy(
+                                    lastAckOrError = event.raw,
+                                    captureStatus = captureFeedback(
+                                        kind = CaptureFeedbackKind.SUCCESS,
+                                        message = text(R.string.action_device_zero),
+                                        rawReason = "CAL_ZERO",
+                                    ),
+                                )
+                            }
+                            appendSystemLog("[CAL_UI] calZeroResult=SUCCESS parametersCleared=true")
+                        } else {
+                            _uiState.update {
+                                it.copy(
+                                    lastAckOrError = formatNackMessage(event.reason ?: "UNKNOWN"),
+                                    captureStatus = captureFeedback(
+                                        kind = CaptureFeedbackKind.FAILURE,
+                                        message = formatNackMessage(event.reason ?: "UNKNOWN"),
+                                        rawReason = event.reason,
+                                    ),
+                                )
+                            }
+                            appendSystemLog("[CAL_UI] calZeroResult=FAILURE reason=${event.reason ?: "UNKNOWN"}")
+                        }
+                    }
+
                     is Event.CalibrationSetModelResult -> {
                         val systemLogs = mutableListOf<String>()
                         val activeModelType = event.type ?: pendingWriteModelType
@@ -2387,22 +2793,32 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             awaitingModelWriteResult = false
                             pendingWriteModelType = null
                             if (event.success) {
-                                systemLogs += "[CAL_UI] writeModel ack success selected=${activeModelType?.name ?: "UNKNOWN"} raw=${event.raw}"
-                                systemLogs += "[CAL_UI_BIND] buttonTextSource=writeModelStatus value=SUCCESS"
-                                systemLogs += "[CAL_UI_BIND] buttonVisualSource=writeModelStatus value=SUCCESS"
-                                systemLogs += "[CAL_UI_BIND] resultCardSource=writeModelStatus value=SUCCESS"
-                                systemLogs += "[CAL_UI] writeResult state=SUCCESS visible=true model=${activeModelType?.name ?: "UNKNOWN"}"
-                                writeModelFeedback(
-                                    kind = WriteModelFeedbackKind.SUCCESS,
-                                    message = text(
-                                        R.string.write_model_status_success,
-                                        modelTypeLabel(activeModelType),
-                                    ),
-                                    modelType = activeModelType,
-                                    rawReason = event.raw,
-                                )
+                                val expected = pendingModelReadback
+                                if (expected != null) {
+                                    systemLogs += "[CAL_UI] writeModel ack success selected=${activeModelType?.name ?: "UNKNOWN"} raw=${event.raw}; readback pending"
+                                    beginModelReadback(expected)
+                                    writeModelFeedback(
+                                        kind = WriteModelFeedbackKind.PENDING,
+                                        message = text(R.string.write_model_status_verifying),
+                                        modelType = expected.type,
+                                        rawReason = event.raw,
+                                    )
+                                } else {
+                                    systemLogs += "[CAL_UI] writeModel ack success but no pending model for readback"
+                                    writeModelFeedback(
+                                        kind = WriteModelFeedbackKind.FAILURE,
+                                        message = text(
+                                            R.string.write_model_status_failure_with_reason,
+                                            formatModelWriteFailure("READBACK_MISMATCH"),
+                                        ),
+                                        modelType = activeModelType,
+                                        rawReason = "READBACK_MISMATCH",
+                                    )
+                                }
                             } else {
                                 val reason = event.reason ?: "UNKNOWN"
+                                pendingModelReadback = null
+                                awaitingModelReadback = false
                                 systemLogs += "[CAL_UI] writeModel ack failure selected=${activeModelType?.name ?: "UNKNOWN"} reason=$reason"
                                 systemLogs += "[CAL_UI_BIND] buttonTextSource=writeModelStatus value=FAILURE"
                                 systemLogs += "[CAL_UI_BIND] buttonVisualSource=writeModelStatus value=FAILURE"
@@ -2440,6 +2856,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             event.raw.equals("ACK:OK", ignoreCase = true)
                         val captureStatus = if (awaitingCalibrationCaptureResult) {
                             awaitingCalibrationCaptureResult = false
+                            calibrationCaptureTimeoutJob?.cancel()
+                            calibrationCaptureTimeoutJob = null
                             systemLogs += "[CAL_AUDIT] captureAckUnexpected raw=${event.raw}"
                             captureFeedback(
                                 kind = CaptureFeedbackKind.FAILURE,
@@ -2453,19 +2871,28 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             val modelType = pendingWriteModelType
                             awaitingModelWriteResult = false
                             pendingWriteModelType = null
-                            systemLogs += "[CAL_UI] writeModel result=success model=${modelType?.name ?: "UNKNOWN"}"
-                            systemLogs += "[CAL_UI_BIND] buttonTextSource=writeModelStatus value=SUCCESS"
-                            systemLogs += "[CAL_UI_BIND] buttonVisualSource=writeModelStatus value=SUCCESS"
-                            systemLogs += "[CAL_UI_BIND] resultCardSource=writeModelStatus value=SUCCESS"
-                            writeModelFeedback(
-                                kind = WriteModelFeedbackKind.SUCCESS,
-                                message = text(
-                                    R.string.write_model_status_success,
-                                    modelTypeLabel(modelType),
-                                ),
-                                modelType = modelType,
-                                rawReason = event.raw,
-                            )
+                            val expected = pendingModelReadback
+                            if (expected != null) {
+                                systemLogs += "[CAL_UI] generic write ACK received model=${modelType?.name ?: "UNKNOWN"}; readback pending"
+                                beginModelReadback(expected)
+                                writeModelFeedback(
+                                    kind = WriteModelFeedbackKind.PENDING,
+                                    message = text(R.string.write_model_status_verifying),
+                                    modelType = expected.type,
+                                    rawReason = event.raw,
+                                )
+                            } else {
+                                systemLogs += "[CAL_UI] generic write ACK has no pending model for readback"
+                                writeModelFeedback(
+                                    kind = WriteModelFeedbackKind.FAILURE,
+                                    message = text(
+                                        R.string.write_model_status_failure_with_reason,
+                                        formatModelWriteFailure("READBACK_MISMATCH"),
+                                    ),
+                                    modelType = modelType,
+                                    rawReason = "READBACK_MISMATCH",
+                                )
+                            }
                         } else {
                             null
                         }
@@ -2525,6 +2952,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         val systemLogs = mutableListOf<String>()
                         val captureStatus = if (awaitingCalibrationCaptureResult) {
                             awaitingCalibrationCaptureResult = false
+                            calibrationCaptureTimeoutJob?.cancel()
+                            calibrationCaptureTimeoutJob = null
                             systemLogs += "[CAL_AUDIT] captureFailed reason=$reason"
                             captureFeedback(
                                 kind = CaptureFeedbackKind.FAILURE,
@@ -2579,6 +3008,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         val systemLogs = mutableListOf<String>()
                         val captureStatus = if (awaitingCalibrationCaptureResult) {
                             awaitingCalibrationCaptureResult = false
+                            calibrationCaptureTimeoutJob?.cancel()
+                            calibrationCaptureTimeoutJob = null
                             systemLogs += "[CAL_AUDIT] captureError reason=${event.reason}"
                             captureFeedback(
                                 kind = CaptureFeedbackKind.FAILURE,
@@ -2686,6 +3117,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     weight = displayState.weight,
                     ma12 = displayState.ma12,
                     measurementValid = displayState.measurementValid,
+                    distanceValid = displayState.distanceValid,
+                    weightValid = displayState.weightValid,
+                    distanceInvalidReason = displayState.distanceReason,
+                    weightInvalidReason = displayState.weightReason,
+                    sensorBackend = displayState.sensorBackend,
                     lastMeasurementSequence = displayState.lastMeasurementSequence,
                 ),
             )
@@ -2855,13 +3291,15 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         if (_uiState.value.streamWarning != null) {
             _uiState.update { it.copy(streamWarning = null) }
         }
-        if (!sample.valid || sample.distance == null || sample.weight == null) {
+        val distance = sample.distance
+            ?.takeIf { sample.distanceValid && it.isFinite() }
+        if (distance == null) {
             val invalidSequence = sample.sequence
             val invalidSnapshot = measurementTrace.recordInvalid(
                 sequence = invalidSequence,
                 distance = sample.distance,
                 weight = sample.weight,
-                reason = sample.reason,
+                reason = sample.distanceReason ?: sample.reason,
             )
             measurementDisplayStore.applyInvalid(sample)
             publishMeasurementDisplay(force = true)
@@ -2880,8 +3318,13 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val distance = sample.distance ?: return
-        val weight = sample.weight ?: return
+        // Distance remains consumable when the firmware has no usable weight
+        // model (for example immediately after CAL:ZERO). The combined
+        // measurement is then invalid, but the distance is still displayed,
+        // recorded and eligible for the 0 kg calibration anchor.
+        val weight = sample.weight
+            ?.takeIf { sample.weightValid && it.isFinite() }
+        val completeSample = sample.valid && weight != null
         val sampleSequence = sample.sequence
         val currentState = _uiState.value
         val currentSignals = sessionCaptureSignals
@@ -2893,7 +3336,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         )
         motionSamplingSessionStore = samplingAppendResult.session
         val samplingRow = samplingAppendResult.row
-        val displaySnapshot = measurementDisplayStore.applyValid(
+        val displaySnapshot = measurementDisplayStore.applySample(
             sample = sample,
             nowMs = now,
             telemetrySessionStartMs = telemetrySessionStartMs,
@@ -2901,13 +3344,22 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             stableWeightActive = currentState.stableWeightActive,
         )
         val point = displaySnapshot.latestPoint ?: return
-        val validSnapshot = measurementTrace.recordValid(
-            sequence = sampleSequence,
-            distance = distance,
-            weight = weight,
-        )
+        val measurementSnapshot = if (completeSample && weight != null) {
+            measurementTrace.recordValid(
+                sequence = sampleSequence,
+                distance = distance,
+                weight = weight,
+            )
+        } else {
+            measurementTrace.recordInvalid(
+                sequence = sampleSequence,
+                distance = distance,
+                weight = weight,
+                reason = sample.weightReason ?: sample.reason ?: "WEIGHT_INVALID",
+            )
+        }
         val trackTestSessions = shouldTrackTestSessionAutomation(currentState)
-        val testSessionSample = if (trackTestSessions) {
+        val testSessionSample = if (trackTestSessions && completeSample && weight != null) {
             buildTestSessionSample(
                 telemetryPoint = point,
                 signals = currentSignals,
@@ -2920,6 +3372,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { state ->
                 state.copy(motionSamplingSession = motionSamplingSessionStore)
             }
+            persistSessions()
         }
         publishMeasurementDisplay()
         if (trackTestSessions) {
@@ -2940,13 +3393,14 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             sampleSequence % MEASUREMENT_CONSUME_LOG_INTERVAL == 0L
         ) {
             appendSystemLog(
-                "[LAYER:MEASUREMENT_CONSUME] seq=$sampleSequence valid=1 distance=$distance weight=$weight ma12=${sample.ma12?.toString() ?: "-"}",
+                "[LAYER:MEASUREMENT_CONSUME] seq=$sampleSequence distance_valid=1 weight_valid=${if (weight != null) 1 else 0} distance=$distance weight=${weight ?: "-"} ma12=${sample.ma12?.toString() ?: "-"}",
             )
         }
         maybeLogMeasurementConsumeSummary(
-            snapshot = validSnapshot,
-            source = "valid_sample",
-            force = sampleSequence == null || validSnapshot.validCount == 1L,
+            snapshot = measurementSnapshot,
+            source = if (completeSample) "valid_sample" else "distance_only_sample",
+            force = sampleSequence == null ||
+                measurementSnapshot.validCount + measurementSnapshot.invalidCount == 1L,
         )
 
         if (_uiState.value.isRecording) {
@@ -3605,6 +4059,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun scheduleDeviceConfigWriteWatchdog() {
         pendingDeviceConfigWatchdogJob?.cancel()
+        calibrationCaptureTimeoutJob?.cancel()
+        calibrationZeroTimeoutJob?.cancel()
+        modelWriteTimeoutJob?.cancel()
+        modelReadbackTimeoutJob?.cancel()
         pendingDeviceConfigWatchdogJob = viewModelScope.launch {
             delay(DEVICE_CONFIG_WRITE_CONFIRM_REFRESH_DELAY_MS)
             if (deviceConfigWriteTracker.shouldRefreshConfirmation(_uiState.value.isConnected)) {
@@ -3721,6 +4179,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         return when (reason.uppercase()) {
             "INVALID_MODEL" -> text(R.string.message_invalid_model_values)
             "NON_MONOTONIC" -> text(R.string.write_model_status_non_monotonic)
+            "READBACK_MISMATCH" -> text(R.string.write_model_status_readback_mismatch)
+            "READBACK_NOT_READY" -> text(R.string.write_model_status_readback_not_ready)
+            "READBACK_SEND_FAILED" -> text(R.string.write_model_status_send_failed_reason, "readback")
             "INVALID_PARAM" -> text(R.string.message_invalid_model_values)
             else -> formatNackMessage(reason)
         }
@@ -3729,7 +4190,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private fun describeCaptureUnavailable(state: UiState): String {
         return when {
             !state.isConnected -> text(R.string.capture_unavailable_disconnected)
-            !state.isRecording -> text(R.string.message_capture_requires_recording)
             !isCaptureReferenceValid(state.captureReferenceInput) -> text(R.string.capture_status_invalid_reference)
             !hasCaptureDistanceSnapshot(state) -> text(R.string.capture_unavailable_no_live_distance)
             else -> text(R.string.capture_unavailable_generic)
@@ -4116,6 +4576,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
+        persistSessions()
         stopResult.stoppedSessionId?.let { sessionId ->
             appendSystemLog("[MOTION_SAMPLE] session stopped id=$sessionId rows=${stopResult.stoppedRowCount}")
         }
@@ -4210,6 +4671,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     companion object {
+        private const val CALIBRATION_REQUEST_TIMEOUT_MS = 10_000L
+        private const val PERSISTENCE_DEBOUNCE_MS = 250L
         private val NAME_KEYWORDS = listOf("sonicwave", "vibrate")
         private const val NO_STREAM_WARNING_TIMEOUT_MS = 3_000L
         private const val DEMO_STREAM_RATE_HZ = 10

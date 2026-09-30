@@ -492,7 +492,7 @@ fun MotionSamplingSection(
                         text = stringResource(
                             R.string.label_motion_sampling_last_values_summary,
                             latestRow.distanceMm.format2(),
-                            latestRow.liveWeightKg.format2(),
+                            latestRow.liveWeightKg?.format2() ?: notAvailable,
                             latestRow.stableWeightKg?.format2() ?: notAvailable,
                             safetyEffectLabel(latestRow.safetyStateCode),
                         ),
@@ -782,7 +782,9 @@ private fun MotionSamplingChart(
     val weightColor = Color(0xFFC2410C)
     val gridColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
     val distanceRawSeries = rows.map { MotionChartPoint(elapsedMs = it.elapsedMs, value = it.distanceMm) }
-    val liveWeightRawSeries = rows.map { MotionChartPoint(elapsedMs = it.elapsedMs, value = it.liveWeightKg) }
+    val liveWeightRawSeries = rows.mapNotNull {
+        it.liveWeightKg?.let { weight -> MotionChartPoint(elapsedMs = it.elapsedMs, value = weight) }
+    }
     val distanceRange = motionValueRange((distanceRawSeries + distanceAverageSeries).map { it.value })
     val weightRange = motionValueRange((liveWeightRawSeries + liveWeightAverageSeries).map { it.value })
 
@@ -962,14 +964,14 @@ private fun formatTimestamp(timestampMs: Long): String {
 private fun buildMovingAverageSeries(
     rows: List<MotionSamplingRowUi>,
     pointCount: Int,
-    selector: (MotionSamplingRowUi) -> Float,
+    selector: (MotionSamplingRowUi) -> Float?,
 ): List<MotionChartPoint> {
     if (rows.isEmpty()) return emptyList()
     val windowSize = pointCount.coerceIn(MOTION_MA_MIN_POINTS, MOTION_MA_MAX_POINTS)
     val window = ArrayDeque<Float>(windowSize)
     var runningSum = 0f
-    return rows.map { row ->
-        val value = selector(row)
+    return rows.mapNotNull { row ->
+        val value = selector(row) ?: return@mapNotNull null
         window.addLast(value)
         runningSum += value
         if (window.size > windowSize) {

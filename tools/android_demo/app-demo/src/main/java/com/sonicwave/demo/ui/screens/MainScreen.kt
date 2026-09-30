@@ -94,7 +94,10 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
     }
     val calibrationActions = buildCalibrationToolsActions(
         viewModel = viewModel,
-        onZero = { pendingCalibrationDeviceWrite = PendingCalibrationDeviceWrite.SCALE_ZERO },
+        // The visible calibration action is the product-level parameter reset.
+        // SCALE:ZERO is a separate low-level device-baseline operation and must
+        // never be reached through the button labelled “参数归零”.
+        onZero = { pendingCalibrationDeviceWrite = PendingCalibrationDeviceWrite.CAL_ZERO },
         onCalibrationZero = { pendingCalibrationDeviceWrite = PendingCalibrationDeviceWrite.CAL_ZERO },
     )
     val launcher = rememberLauncherForActivityResult(
