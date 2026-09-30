@@ -286,7 +286,11 @@ WaveModule::CueRequestResult WaveModule::requestCue(AudioCueId id,
     return CueRequestResult::DUPLICATE;
   }
 
-  const bool waveBusy = run_requested || run_state;
+  // A previous WAVE may still be in its stop ramp after BLE reconnects. It
+  // is safe to queue CONNECT in that state; audioTask will start it only once
+  // the WAVE amplitude is zero and I2S has stopped. A requested/running WAVE
+  // still rejects a new CONNECT cue.
+  const bool waveBusy = run_requested;
   if (id == AudioCueId::CONNECT && waveBusy) {
     portEXIT_CRITICAL(&mux);
     SW_VERBOSE_SERIAL_PRINTF("[CUE] request id=%s result=%s session_id=%lu\n",
@@ -573,6 +577,31 @@ void WaveModule::audioTask() {
   uint32_t cue_phase_acc = 0;
   uint32_t cue_total_samples = 0;
 
+  auto finishCue = [&](bool complete, bool failed) {
+    const esp_err_t zeroErr = i2s_zero_dma_buffer(I2S_PORT);
+    const esp_err_t stopErr = i2s_stop(I2S_PORT);
+    i2s_active = false;
+    const AudioCueId finishedId = cue_active_id;
+    cue_active_local = false;
+    cue_sample_index = 0;
+    cue_phase_acc = 0;
+    cue_total_samples = 0;
+    portENTER_CRITICAL(&mux);
+    cue_playing = false;
+    cue_playing_id = AudioCueId::CONNECT;
+    cue_playing_session_id = 0;
+    cue_preempt_requested = false;
+    portEXIT_CRITICAL(&mux);
+    SW_VERBOSE_SERIAL_PRINTF(
+        "[CUE] event=%s id=%s zero_dma=%d stop=%d\n",
+        failed ? "failed" : (complete ? "complete" : "preempted"),
+        audioCueIdName(finishedId),
+        static_cast<int>(zeroErr),
+        static_cast<int>(stopErr));
+    if (failed) HumanReadableLog::cueFailed(cueDisplayName(finishedId));
+    else if (complete) HumanReadableLog::cueCompleted(cueDisplayName(finishedId));
+  };
+
   auto setRunState = [&](bool running) {
     if (running == last_run_state) return;
     portENTER_CRITICAL(&mux);
@@ -620,6 +649,10 @@ void WaveModule::audioTask() {
             static_cast<int>(zeroErr),
             static_cast<int>(startErr),
             static_cast<unsigned long>(cue_total_samples));
+        if (startErr != ESP_OK) {
+          finishCue(false, true);
+          continue;
+        }
         HumanReadableLog::cueStarted(cueDisplayName(cue_active_id));
         i2s_active = true;
       }
@@ -635,7 +668,8 @@ void WaveModule::audioTask() {
       size_t bytes_written = 0;
       const esp_err_t writeErr = i2s_write(
           I2S_PORT, audio_buffer, sizeof(audio_buffer), &bytes_written, portMAX_DELAY);
-      if (writeErr != ESP_OK || bytes_written != sizeof(audio_buffer)) {
+      const bool writeFailed = writeErr != ESP_OK || bytes_written != sizeof(audio_buffer);
+      if (writeFailed) {
         SW_VERBOSE_SERIAL_PRINTF(
             "[CUE] event=write_error id=%s err=%d bytes=%lu expected=%lu\n",
             audioCueIdName(cue_active_id),
@@ -645,30 +679,8 @@ void WaveModule::audioTask() {
       }
 
       const bool complete = cue_sample_index >= cue_total_samples;
-      if (complete || preemptRequested) {
-        const esp_err_t zeroErr = i2s_zero_dma_buffer(I2S_PORT);
-        const esp_err_t stopErr = i2s_stop(I2S_PORT);
-        i2s_active = false;
-        const AudioCueId completedId = cue_active_id;
-        cue_active_local = false;
-        cue_sample_index = 0;
-        cue_phase_acc = 0;
-        cue_total_samples = 0;
-        portENTER_CRITICAL(&mux);
-        cue_playing = false;
-        cue_playing_id = AudioCueId::CONNECT;
-        cue_playing_session_id = 0;
-        cue_preempt_requested = false;
-        portEXIT_CRITICAL(&mux);
-        SW_VERBOSE_SERIAL_PRINTF(
-            "[CUE] event=%s id=%s zero_dma=%d stop=%d\n",
-            complete ? "complete" : "preempted",
-            audioCueIdName(completedId),
-            static_cast<int>(zeroErr),
-            static_cast<int>(stopErr));
-        if (complete) {
-          HumanReadableLog::cueCompleted(cueDisplayName(completedId));
-        }
+      if (complete || preemptRequested || writeFailed) {
+        finishCue(complete && !writeFailed && !preemptRequested, writeFailed);
       }
       continue;
     }

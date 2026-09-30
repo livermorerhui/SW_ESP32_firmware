@@ -61,6 +61,10 @@ inline void cueCompleted(const char* cue) {
   Serial.printf("[提示音] 已播放完成：%s\n", cue ? cue : "未知音效");
 }
 
+inline void cueFailed(const char* cue) {
+  Serial.printf("[提示音] 播放失败，已停止输出：%s\n", cue ? cue : "未知音效");
+}
+
 inline void stateChanged(const char* previous, const char* current) {
   Serial.printf("[设备状态] 状态变化：%s → %s\n",
                 previous ? previous : "未知",

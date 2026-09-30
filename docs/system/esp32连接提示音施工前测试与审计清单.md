@@ -170,7 +170,7 @@ iOS 当前没有名为 `protocolReady` 的单一字段。CoreBluetooth 已 conne
 - `python3 tools/test_release_build_contract.py`：通过，4 个测试通过。
 - `python3 -m platformio run -e esp32s3`：通过。
 - Android `:sonicwave-protocol:test`、`:core-device-sonicwave:test`：通过。
-- iOS `DeviceContractsTests` 与连接提示音 repository focused test：通过；完整 CoreDeviceSonicWaveTests 仍有 6 个既有基线失败，未归因于本次 CUE 改动。
+- iOS `DeviceContractsTests` 与连接提示音 repository focused test：通过；完整 CoreDeviceSonicWaveTests 出现 6 个失败，尚未做独立基线隔离，不能认定它们与本次改动无关。
 - `git diff --check`：通过。
 
 仍待执行：

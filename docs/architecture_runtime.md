@@ -90,8 +90,8 @@ APP
 ```text
 LaserModule::taskLoop()
 -> weight < LEAVE_TH && userPresent
--> SystemStateMachine::onUserOff()
--> SystemStateMachine::setState(FAULT_STOP)
+-> SystemStateMachine::onBleDisconnected()
+-> SystemStateMachine 进入可恢复暂停并调用唯一停波 owner
 -> WaveModule.stopSoft()
 ```
 

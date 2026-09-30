@@ -46,7 +46,7 @@ WAVE 原有 0～50 Hz、强度 0～120、软停、`isOutputActive()` WAVE-only �
 - iOS `DeviceContractsTests` 与 `testConnectCueIsSentOnceAfterFreshSnapshotWhenCapabilityIsSupported`：通过。
 - `git diff --check`：通过。
 
-完整 iOS `CoreDeviceSonicWaveTests` 仍有 6 个既有失败（旧连接 late frame 超时、旧 CAP 缺少测试 fixture 字段导致的初始事实断言），本次新增 CUE focused test 已单独通过；这些失败不作为本次 CUE 已通过的证据。
+完整 iOS `CoreDeviceSonicWaveTests` 出现 6 个失败，集中在旧连接 late frame 超时和初始事实断言。本次新增 CUE focused test 已单独通过；目前尚未对这 6 个失败做独立基线隔离，不能断言它们与本次改动无关，也不把完整套件写成通过。
 
 `tools/test_bootchain_baseline_build_flags.py` 仍受本机系统 Python 缺少 `SCons` 影响，未安装新依赖；PlatformIO 自带环境的正式固件构建已通过。
 
