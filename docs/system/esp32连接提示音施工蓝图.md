@@ -14,6 +14,7 @@
 施工结果摘要：
 
 - 固件已增加独立 `AUDIO:CUE` 解析、能力字段 `cue_supported=1`、单一 `I2S_Audio` 任务内的 CONNECT/DISCONNECT CUE 和 session/connId 过期消息丢弃。
+- 真实断开事件优先进入控制队列；队列满时有界清出一条断开后失效的旧消息，保证停波事件有机会进入既有 FSM。
 - Android/iOS 只在当前连接协议事实成立且设备声明支持 CUE 时发送一次 CONNECT；断开音由 ESP32 的真实 BLE 断开事件触发。
 - WAVE 的 `0..50 Hz`、强度 `0..120`、`isOutputActive()` 和现有安全停波 owner 保持不变。
 - 固件、Android/iOS 的自动验证已完成；真机时序、喇叭听感和 PCM5102A `0.8 Vpk` 仍需单独验收。

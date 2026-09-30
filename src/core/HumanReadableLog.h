@@ -65,6 +65,15 @@ inline void cueFailed(const char* cue) {
   Serial.printf("[提示音] 播放失败，已停止输出：%s\n", cue ? cue : "未知音效");
 }
 
+inline void bleDisconnectQueueRecovered() {
+  Serial.println("[连接] 控制队列拥堵，已优先处理设备断开");
+}
+
+inline void bleLifecycleQueueFailed(bool disconnect) {
+  Serial.printf("[连接] %s事件排队失败，请检查设备状态\n",
+                disconnect ? "断开" : "连接");
+}
+
 inline void stateChanged(const char* previous, const char* current) {
   Serial.printf("[设备状态] 状态变化：%s → %s\n",
                 previous ? previous : "未知",

@@ -1129,7 +1129,24 @@ bool BleTransport::enqueueDisconnectEvent(uint32_t sessionIdValue,
   msg.sessionId = sessionIdValue;
   msg.connId = connIdValue;
   msg.connIdKnown = connIdKnown;
-  return xQueueSend(controlQueue, &msg, 0) == pdTRUE;
+  // A real disconnect outranks all queued commands from the retired BLE
+  // session. If RX traffic filled the queue, make bounded room so the FSM
+  // still receives its stop event; the callback never waits or writes I2S.
+  if (xQueueSendToFront(controlQueue, &msg, 0) == pdTRUE) return true;
+
+  ControlMsg discarded{};
+  for (uint8_t attempt = 0; attempt < kControlQueueLen; ++attempt) {
+    if (xQueueReceive(controlQueue, &discarded, 0) != pdTRUE) break;
+    if (xQueueSendToFront(controlQueue, &msg, 0) == pdTRUE) {
+      SW_VERBOSE_SERIAL_PRINTF(
+          "[BLE CTRL] event=disconnect_priority_recovered session_id=%lu discarded_type=%u\n",
+          static_cast<unsigned long>(sessionIdValue),
+          static_cast<unsigned>(discarded.type));
+      HumanReadableLog::bleDisconnectQueueRecovered();
+      return true;
+    }
+  }
+  return false;
 }
 
 bool BleTransport::enqueueTxLine(const String& s) {
@@ -1305,6 +1322,8 @@ void BleTransport::noteEventEnqueueFailure(EventType type, const char* line) {
 
 void BleTransport::noteLifecycleControlEnqueueFailure(const char* lifecycleEvent) {
   lifecycleControlDropCount += 1;
+  HumanReadableLog::bleLifecycleQueueFailed(
+      lifecycleEvent && strcmp(lifecycleEvent, "BLE_DISCONNECTED") == 0);
   SW_VERBOSE_SERIAL_PRINTF(
       "[BLE CTRL] event=lifecycle_enqueue_failed lifecycle=%s drops=%lu depth=%u\n",
       lifecycleEvent ? lifecycleEvent : "UNKNOWN",

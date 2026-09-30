@@ -16,6 +16,7 @@
 5. ESP32 真实 BLE 断开事件先进入既有 `SystemStateMachine::onBleDisconnected()` 停波路径；同一个 audio task 在 WAVE 静音且 I2S 停止后播放 DISCONNECT CUE。
    APP 不能通过 RX 伪造 DISCONNECT；该命令面返回 `LOCAL_ONLY`。
 6. BLE 控制队列消息携带 `sessionId/connId`；旧连接的 RX、连接、断开消息在控制任务中丢弃。重复生命周期事件不重复触发提示音。
+   真实断开事件采用队列前端优先投递；队列满时有界移除断开后已失效的旧消息，再投递断开事件，由原 FSM 执行停波。
 7. 新连接在旧断开提示音尚未结束时，会按新 session 优先级抢占旧 CUE，避免快速重连漏播 CONNECT。
 
 ## 固件参数
