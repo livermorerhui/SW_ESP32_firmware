@@ -403,6 +403,7 @@ pio run -t upload --upload-port <PORT>
 - 参数与引脚：`src/config/GlobalConfig.h`（`SAMPLE_RATE/BUFFER_LEN/I2S_*_PIN`）
 - 驱动配置与合成逻辑：`src/modules/wave/WaveModule.cpp/.h`
 - 若涉及协议控制范围：`src/core/ProtocolCodec.h`（参数校验）
+- 修改前必须先阅读 [ESP32 到 PCM5102A 输出幅值设计说明](audio_output_amplitude_design.md)，其中记录了强度范围、`MAX_AMPLITUDE=8826`、0.8V 峰值推导、I2S 封装差异和硬件测量边界。
 
 ### 13.4 新增状态机事件：需要改哪些文件
 - 状态与故障枚举：`src/core/Types.h`

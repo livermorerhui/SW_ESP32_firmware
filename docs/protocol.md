@@ -40,6 +40,7 @@
 - 参数：
   - `f` / `freq`: 0 ~ 50
   - `i` / `amp`: 0 ~ 120
+- 强度的数字样本、PCM5102A 名义电压和 0.8V 峰值推导见 [ESP32 到 PCM5102A 输出幅值设计说明](audio_output_amplitude_design.md)。
 - 示例：
   - 请求：`WAVE:SET f=40,i=80`
   - 响应：`ACK:OK`
