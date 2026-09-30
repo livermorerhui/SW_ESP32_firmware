@@ -98,6 +98,23 @@
 - 错误情况：
   - 缺失 `z` 或 `k`：`NACK:INVALID_PARAM`
 
+### 2.8 激光校准模型命令
+
+- `CAL:ZERO`
+  - 作用：清空 ESP32 已保存的正式体重模型、空载引用和运行时状态。
+  - 不读取当前距离，也不自动生成 0kg 定点。
+  - 成功响应：`ACK:CAL_ZERO`。
+- `CAL:CAPTURE w=<referenceWeightKg>`
+  - 作用：由 ESP32 返回当前稳定的物理距离快照。
+  - `w=0` 时只要求距离稳定，用于建立本台设备的空载定点；非零重量还要求有人基线稳定。
+  - 成功响应：`ACK:CAL_POINT idx=<n> ts=<ms> d_mm=<physicalMm> ref_kg=<kg> pred_kg=<kg> stable=1 valid=1`。
+- `CAL:GET_MODEL`
+  - 成功响应：`ACK:CAL_MODEL type=<LINEAR|QUADRATIC> ref=<runtimeDistance> c0=<...> c1=<...> c2=<...> ready=<0|1>`。
+- `CAL:SET_MODEL type=<LINEAR|QUADRATIC>,ref=<runtimeDistance>,c0=<...>,c1=<...>,c2=<...>`
+  - 固件重复校验有限值、`c2=0` 和选定传感器范围内的单调性。
+  - 成功响应：`ACK:CAL_SET_MODEL ... ready=1`；失败响应：`NACK:CAL_SET_MODEL ... reason=<...>`。
+  - Demo APP 收到成功响应后必须再发 `CAL:GET_MODEL`，逐项比对后才显示模型部署成功。
+
 ## 3. Legacy 协议
 
 兼容命令：
@@ -164,19 +181,21 @@
 ### 5.5 `EVT:STREAM`
 - 正式格式：
   - valid sample:
-    - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=1 ma12_ready=<0|1> distance=<distance> weight=<weightKg> [ma12=<ma12Kg>]`
+    - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=<0|1> distance_valid=1 weight_valid=<0|1> ma12_ready=<0|1> distance=<legacyRuntimeDistance> distance_mm=<physicalMillimetres> [weight=<weightKg>] [ma12=<ma12Kg>] backend=<...>`
   - invalid sample:
-    - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=0 ma12_ready=0 reason=<READ_FAIL|OUT_OF_RANGE_LOW|...>`
+    - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=0 distance_valid=0 weight_valid=0 ma12_ready=0 reason=<READ_FAIL|DISTANCE_OUT_OF_RANGE|...> backend=<...>`
 - 含义：measurement plane 的唯一正式 continuous carrier。
 - 说明：
   - 只有当前 BLE session 通过 `STREAM:SET enabled=1` 订阅后，固件才通过 BLE 上行该实时流。
   - stream 订阅关闭时，固件内部测量、baseline、安全判断仍继续运行。
-  - `distance / weight / ma12 / valid / reason / seq` 属于同一 formal sample。
+  - `distance` 保留旧运行时单位，用于兼容既有协议；`distance_mm` 是 ESP32 输出的统一物理毫米字段。Demo APP 只读取并记录 `distance_mm`，不按传感器类型自行换算；缺少该字段时样本视为不完整。
+  - `distance_valid`、`weight_valid`、`distance_reason`、`weight_reason` 和 `backend` 是新增的分离质量字段。距离有效但体重模型未准备时，距离仍可进入 Demo 显示、采样和日志。
+  - `distance / distance_mm / weight / ma12 / valid / reason / seq` 属于同一 formal sample。
   - 裸 CSV `<dist>,<weight>` 仅保留为 legacy/fallback，不再是 primary 协议的正式载体。
 
 常见 uplink 示例（解析前原始帧）：
-- `EVT:STREAM seq=42 ts_ms=1234 valid=1 ma12_ready=1 distance=-22.58 weight=7.42 ma12=7.31\n`
-- `EVT:STREAM seq=43 ts_ms=1260 valid=0 ma12_ready=0 reason=READ_FAIL\n`
+- `EVT:STREAM seq=42 ts_ms=1234 valid=1 distance_valid=1 weight_valid=1 ma12_ready=1 distance=1.12 distance_mm=112.25 weight=0.00 ma12=0.00 backend=LASER_485\n`
+- `EVT:STREAM seq=43 ts_ms=1260 valid=0 distance_valid=0 weight_valid=0 ma12_ready=0 reason=READ_FAIL backend=LASER_485\n`
 - `EVT:STABLE:65.20\n`
 - `EVT:PARAM:-22.00,1.0000\n`
 - `EVT:STATE RUNNING\n`

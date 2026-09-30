@@ -45,11 +45,15 @@ ESP32-S3
 - `I2S_DOUT_PIN = 2`
   - I2S 数据输出（DIN 到 PCM5102A）。
 - `RX_PIN = 17`
-  - UART 接收（MAX485 模块 TXD/RO -> ESP32 RX）。
+  - 本项目 485 接线标记为：485 `RXD` -> ESP32 GPIO17；固件 `Serial1` 接收脚为 GPIO17。
 - `TX_PIN = 18`
-  - UART 发送（ESP32 TX -> MAX485 模块 RXD/DI）。
+  - 本项目 485 接线标记为：485 `TXD` -> ESP32 GPIO18；固件 `Serial1` 发送脚为 GPIO18。
+- `I2C_SCL_PIN = 15`
+  - CYD3S1612-IIC 时钟线（SCL）。
+- `I2C_SDA_PIN = 16`
+  - CYD3S1612-IIC 数据线（SDA）。
 
-当前 active profile 与旧底座 legacy profile 见 `docs/system/esp32s3_pin_profiles.md`。
+当前正式硬件 profile 见 `docs/system/esp32s3_pin_profiles.md`。
 
 ## 4. 音频链路
 
