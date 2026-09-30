@@ -894,7 +894,12 @@ void SystemStateMachine::setSensorHealthy(bool healthy) {
   }
 
   if (healthy) {
-    emitSnapshot();
+    // Sensor health is fed on every valid sample. Only publish a snapshot when
+    // the health state actually changes; otherwise a disconnected BLE link
+    // would enqueue/drop one SNAPSHOT for every measurement cycle.
+    if (changed) {
+      emitSnapshot();
+    }
     clearWarningFault(FaultCode::MEASUREMENT_UNAVAILABLE, "sensor_recovered");
   }
 

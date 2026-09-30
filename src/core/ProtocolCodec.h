@@ -263,7 +263,7 @@ public:
     if (s.equalsIgnoreCase("WAVE:START")) { out.type = CmdType::WAVE_START; return true; }
     if (s.equalsIgnoreCase("WAVE:STOP"))  { out.type = CmdType::WAVE_STOP;  return true; }
     if (s.equalsIgnoreCase("SCALE:ZERO")) { out.type = CmdType::SCALE_ZERO; return true; }
-    if (s.equalsIgnoreCase("CAL:ZERO"))   { out.type = CmdType::SCALE_ZERO; return true; }
+    if (s.equalsIgnoreCase("CAL:ZERO"))   { out.type = CmdType::CAL_ZERO; return true; }
     if (s.startsWith("SCALE:CAL")) {
       out.type = CmdType::SCALE_CAL;
       String zStr, kStr;
@@ -477,6 +477,14 @@ public:
         s += String(e.v2, 4);
         return s;
       case EventType::STREAM:
+        // Older producers only populated measurementValid. Infer a complete
+        // pair for that legacy shape; new producers set the two explicit
+        // quality bits and can therefore represent distance-only samples.
+        {
+        const bool legacyComplete = e.measurementValid &&
+            !e.distanceValid && !e.weightValid;
+        const bool encodedDistanceValid = e.distanceValid || legacyComplete;
+        const bool encodedWeightValid = e.weightValid || legacyComplete;
         s = "EVT:STREAM ";
         s += "seq=";
         s += String(e.sampleSeq);
@@ -484,22 +492,45 @@ public:
         s += String(e.ts_ms);
         s += " valid=";
         s += e.measurementValid ? "1" : "0";
+        s += " distance_valid=";
+        s += encodedDistanceValid ? "1" : "0";
+        s += " weight_valid=";
+        s += encodedWeightValid ? "1" : "0";
         s += " ma12_ready=";
         s += e.ma12Ready ? "1" : "0";
-        if (e.measurementValid) {
-          s += " distance=";
-          s += String(e.distance, 2);
+        if (encodedDistanceValid) {
+          s += " distance_mm=";
+          s += String(e.distance * LASER_DISTANCE_RUNTIME_DIVISOR, 2);
+        }
+        if (encodedWeightValid) {
           s += " weight=";
           s += String(e.weightKg, 2);
           if (e.ma12Ready) {
             s += " ma12=";
             s += String(e.ma12WeightKg, 2);
           }
-        } else {
+        }
+        // Keep the normal complete frame compact. A reason is emitted for
+        // transport/quality failures and partial samples only.
+        if ((!e.measurementValid || !encodedDistanceValid || !encodedWeightValid) &&
+            e.measurementReason[0] != '\0') {
           s += " reason=";
-          s += (e.measurementReason[0] != '\0') ? e.measurementReason : "INVALID";
+          s += e.measurementReason;
+        }
+        if (e.distanceReason[0] != '\0') {
+          s += " distance_reason=";
+          s += e.distanceReason;
+        }
+        if (e.weightReason[0] != '\0') {
+          s += " weight_reason=";
+          s += e.weightReason;
+        }
+        if (e.sensorBackend[0] != '\0') {
+          s += " backend=";
+          s += e.sensorBackend;
         }
         return s;
+        }
       case EventType::BASELINE_MAIN:
         s = "EVT:BASELINE ";
         s += "start_ready=";

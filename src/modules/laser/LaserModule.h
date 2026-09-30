@@ -11,6 +11,7 @@
 #include "modules/laser/CalibrationRuntime.h"
 #include "modules/laser/CalibrationModelStore.h"
 #include "modules/laser/DeviceConfigStore.h"
+#include "modules/laser/DistanceStateChain.h"
 #include "modules/laser/LaserDiagnostics.h"
 #include "modules/laser/LaserMeasurementReader.h"
 #include "modules/laser/LaserStableWindow.h"
@@ -208,6 +209,14 @@ private:
       float distance,
       float weight,
       const char* reason);
+  void publishMeasurementSample(
+      uint32_t now,
+      bool distanceValid,
+      bool weightValid,
+      float distance,
+      float weight,
+      const char* distanceReason,
+      const char* weightReason);
   bool shouldPublishStreamSample(uint32_t now);
   void logLatestMeasurementPlaneSummary(const char* trigger);
 
@@ -226,6 +235,7 @@ private:
   WaveModule* wave = nullptr;
 
   LaserMeasurementReader measurementReader;
+  DistanceStateChain distanceStateChain;
   MeasurementPlane measurementPlane;
   DeviceConfigStore deviceConfigStore;
   CalibrationModelStore calibrationModelStore;
@@ -237,6 +247,9 @@ private:
   float zeroDistance = 0.0f;
   float scaleFactor = 1.0f;
   CalibrationModel calibrationModel{};
+  // A cleared or never-written model must not be silently treated as a valid
+  // weight calibration. Distance state can still run without it.
+  bool calibrationModelReady = false;
   DualZeroState dualZero{};
 
   float weightBuffer[WINDOW_N]{};

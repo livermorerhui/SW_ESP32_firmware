@@ -36,9 +36,33 @@ static constexpr float RAMP_FREQ_STEP_HZ = 0.5f;
 // ===== Laser / Modbus =====
 #define RX_PIN 17
 #define TX_PIN 18
+#define I2C_SCL_PIN 15
+#define I2C_SDA_PIN 16
 #define MODBUS_BAUD 9600
 #define MODBUS_SLAVE_ID 1
 #define REG_DISTANCE 0x0064
+
+// Legacy images select one compile-time backend. The unified image compiles
+// both transports and selects exactly one at boot after an explicit probe.
+#if (defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC) && defined(SW_DISTANCE_BACKEND_485)) || \
+    (defined(SW_DISTANCE_BACKEND_UNIFIED) && \
+     (defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC) || defined(SW_DISTANCE_BACKEND_485)))
+#error "Select one distance backend mode"
+#endif
+#if !defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC) && \
+    !defined(SW_DISTANCE_BACKEND_485) && !defined(SW_DISTANCE_BACKEND_UNIFIED)
+#define SW_DISTANCE_BACKEND_485 1
+#endif
+#if defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC)
+static constexpr bool DISTANCE_BACKEND_CYD3S1612_IIC = true;
+#else
+static constexpr bool DISTANCE_BACKEND_CYD3S1612_IIC = false;
+#endif
+#if defined(SW_DISTANCE_BACKEND_UNIFIED)
+static constexpr bool DISTANCE_BACKEND_UNIFIED = true;
+#else
+static constexpr bool DISTANCE_BACKEND_UNIFIED = false;
+#endif
 
 // ===== Board indicators =====
 static constexpr uint8_t BOARD_RGB_LED_PIN = 48;
@@ -47,6 +71,7 @@ static constexpr uint8_t BOARD_RGB_LED_PIN = 48;
 // samples flowing without forcing the legacy stable/baseline semantics to run
 // at the same cadence.
 static constexpr uint32_t LASER_MEASUREMENT_READ_INTERVAL_MS = 20UL;
+static constexpr uint32_t LASER_IIC_MEASUREMENT_READ_INTERVAL_MS = 33UL;
 static constexpr uint32_t LASER_STATE_EVAL_INTERVAL_DEFAULT_MS = 100UL;
 static constexpr uint32_t LASER_STATE_EVAL_INTERVAL_STABLE_BUILD_MS = 80UL;
 // The sensor register is currently treated as a signed fixed-point value with
@@ -57,6 +82,31 @@ static constexpr uint16_t LASER_SENTINEL_OVER_RANGE_RAW = 32767;
 static constexpr float LASER_DISTANCE_RUNTIME_DIVISOR = 100.0f;
 static constexpr float LASER_DISTANCE_MM_TO_RUNTIME_UNITS =
     1.0f / LASER_DISTANCE_RUNTIME_DIVISOR;
+// Wang WTX-J100 reports signed relative displacement around its 100 mm
+// mechanical center. A negative displacement means the target is farther
+// away, so physical distance is 100 mm minus the reported displacement.
+static constexpr float LASER_WANG_REFERENCE_DISTANCE_RUNTIME = 1.0f;
+static constexpr float LASER_WANG_VALID_RUNTIME_DISTANCE_MIN =
+    LASER_WANG_REFERENCE_DISTANCE_RUNTIME +
+    static_cast<float>(LASER_VALID_MEASUREMENT_MAX_RAW) /
+        -(LASER_DISTANCE_RUNTIME_DIVISOR * LASER_DISTANCE_RUNTIME_DIVISOR);
+static constexpr float LASER_WANG_VALID_RUNTIME_DISTANCE_MAX =
+    LASER_WANG_REFERENCE_DISTANCE_RUNTIME +
+    static_cast<float>(LASER_VALID_MEASUREMENT_MIN_RAW) /
+        -(LASER_DISTANCE_RUNTIME_DIVISOR * LASER_DISTANCE_RUNTIME_DIVISOR);
+#if defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC)
+// CYD3S1612-IIC reports absolute millimetres. Keep its calibration validation
+// range independent from the legacy signed fixed-point 485 sensor range.
+static constexpr float LASER_VALID_RUNTIME_DISTANCE_MIN = 0.20f;  // 20 mm
+static constexpr float LASER_VALID_RUNTIME_DISTANCE_MAX = 50.0f;  // 5000 mm
+#elif defined(SW_DISTANCE_BACKEND_UNIFIED)
+// Both unified backends expose physical distance to the business layer.
+static constexpr float LASER_VALID_RUNTIME_DISTANCE_MIN = 0.20f;
+static constexpr float LASER_VALID_RUNTIME_DISTANCE_MAX = 50.0f;
+#else
+static constexpr float LASER_VALID_RUNTIME_DISTANCE_MIN = 0.20f;
+static constexpr float LASER_VALID_RUNTIME_DISTANCE_MAX = 50.0f;
+#endif
 static constexpr uint32_t LASER_INVALID_LOG_INTERVAL_MS = 1000UL;
 static constexpr uint32_t LASER_STARTUP_GRACE_MS = 10000UL;
 static constexpr uint32_t BLE_STARTUP_MEASUREMENT_READY_WAIT_MS = 12000UL;

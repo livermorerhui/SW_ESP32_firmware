@@ -256,6 +256,11 @@ public:
         outAck = HubAckBuilder::ok();
         return true;
 
+      case CmdType::CAL_ZERO:
+        l->triggerZero();
+        outAck = HubAckBuilder::calibrationZero();
+        return true;
+
       case CmdType::SCALE_CAL:
         l->setParams(c.p1, c.p2);
         outAck = HubAckBuilder::ok();
@@ -281,8 +286,8 @@ public:
 
       case CmdType::CAL_GET_MODEL: {
         CalibrationModel model{};
-        l->getCalibrationModel(model);
-        outAck = HubAckBuilder::calibrationModel(model);
+        const bool ready = l->getCalibrationModel(model);
+        outAck = HubAckBuilder::calibrationModel(model, ready);
         return true;
       }
 
@@ -309,7 +314,7 @@ public:
             model.coefficients[0],
             model.coefficients[1],
             model.coefficients[2]);
-        outAck = HubAckBuilder::calibrationSetModel(model);
+        outAck = HubAckBuilder::calibrationSetModel(model, true);
         return true;
       }
 

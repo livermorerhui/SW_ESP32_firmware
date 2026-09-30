@@ -193,7 +193,7 @@ void RhythmStateJudge::noteInvalidMeasurement() {
 }
 
 void RhythmStateJudge::refreshBaselineFromStable(float stableDistance, float stableWeightKg, uint32_t nowMs) {
-  if (!isfinite(stableDistance) || !isfinite(stableWeightKg) || stableWeightKg <= 0.0f) {
+  if (!isfinite(stableDistance) || !isfinite(stableWeightKg)) {
     return;
   }
 
@@ -264,11 +264,20 @@ void RhythmStateJudge::updateFormalFallCandidate(const RhythmStateJudgeInput& in
   const float weightDeltaKg = input.weightKg - lastWeightKg;
   const float distanceDelta = input.distance - lastDistance;
   const float signedWeightRateKgPerSec = weightDeltaKg / dt;
+  const float signedDistanceRate = distanceDelta / dt;
   const bool shouldTrack =
       input.topState == TopState::RUNNING && input.userPresent;
-  const bool directionConsistentDrop =
-      signedWeightRateKgPerSec < -params.fall.suspectRateThresholdKgPerSec &&
-      distanceDelta < 0.0f;
+  const float fallRateThreshold = input.useDistance
+      ? input.distanceFallRateThreshold
+      : params.fall.suspectRateThresholdKgPerSec;
+  const float minimumDistanceDrop = input.useDistance
+      ? input.distanceMinimumCumulativeDrop
+      : params.fall.minimumCumulativeDistanceDrop;
+  const bool directionConsistentDrop = input.useDistance
+      ? signedDistanceRate < -fallRateThreshold &&
+          distanceDelta < 0.0f
+      : signedWeightRateKgPerSec < -params.fall.suspectRateThresholdKgPerSec &&
+          distanceDelta < 0.0f;
 
   if (!shouldTrack) {
     clearFormalFallCandidate();
@@ -281,10 +290,10 @@ void RhythmStateJudge::updateFormalFallCandidate(const RhythmStateJudgeInput& in
         params.fall.minimumCumulativeWeightDropKg *
         params.fall.sustainDropRatioAfterThreshold;
     const float requiredDistanceHold =
-        params.fall.minimumCumulativeDistanceDrop *
+        minimumDistanceDrop *
         params.fall.sustainDropRatioAfterThreshold;
 
-    if (sustainedWeightDropKg < requiredWeightHoldKg ||
+    if ((!input.useDistance && sustainedWeightDropKg < requiredWeightHoldKg) ||
         sustainedDistanceDrop < requiredDistanceHold) {
       clearFormalFallCandidate();
     } else {
@@ -315,8 +324,8 @@ void RhythmStateJudge::updateFormalFallCandidate(const RhythmStateJudgeInput& in
           fallCandidateStartDistance - input.distance;
 
       if (fallConfirmCount >= params.fall.confirmSamples &&
-          cumulativeWeightDropKg >= params.fall.minimumCumulativeWeightDropKg &&
-          cumulativeDistanceDrop >= params.fall.minimumCumulativeDistanceDrop) {
+          (input.useDistance || cumulativeWeightDropKg >= params.fall.minimumCumulativeWeightDropKg) &&
+          cumulativeDistanceDrop >= minimumDistanceDrop) {
         fallHoldPending = true;
         fallHoldCount = 0;
       }
@@ -373,14 +382,23 @@ void RhythmStateJudge::updatePrimaryState(const RhythmStateJudgeInput& input) {
 
   const float stableWeightKg = result.evidence.baselineWeightKg;
   const float deviationKg = result.evidence.ma12WeightKg - stableWeightKg;
-  const float ratio =
-      (stableWeightKg > 0.0f) ? fabsf(deviationKg) / stableWeightKg : 0.0f;
+  const float distanceDeviation =
+      result.evidence.ma12Distance - result.evidence.baselineDistance;
+  const float ratio = input.useDistance
+      ? fabsf(distanceDeviation)
+      : ((stableWeightKg > 0.0f) ? fabsf(deviationKg) / stableWeightKg : 0.0f);
   result.evidence.deviationKg = deviationKg;
   result.evidence.ratio = ratio;
   result.evidence.directDangerBandTriggered = false;
   result.evidence.dangerFromUnrecoveredAbnormal = false;
 
-  if (ratio <= params.baseline.safeBandRatio) {
+  const float safeBand = input.useDistance
+      ? input.distanceSafeBand
+      : params.baseline.safeBandRatio;
+  const float dangerBand = input.useDistance
+      ? input.distanceDangerBand
+      : params.baseline.dangerBandRatio;
+  if (ratio <= safeBand) {
     abnormalStartedAtMs = 0;
     dangerStartedAtMs = 0;
     result.evidence.abnormalDurationMs = 0;
@@ -395,7 +413,7 @@ void RhythmStateJudge::updatePrimaryState(const RhythmStateJudgeInput& input) {
   }
   result.evidence.abnormalDurationMs = input.nowMs - abnormalStartedAtMs;
 
-  if (ratio > params.baseline.dangerBandRatio) {
+  if (ratio > dangerBand) {
     if (dangerStartedAtMs == 0) {
       dangerStartedAtMs = input.nowMs;
     }
@@ -459,11 +477,20 @@ void RhythmStateJudge::updateRiskAdvisory(const RhythmStateJudgeInput& input) {
   }
 
   const float ratio = result.evidence.ratio;
-  if (ratio > params.baseline.safeBandRatio) {
+  const float safeBand = input.useDistance
+      ? input.distanceSafeBand
+      : params.baseline.safeBandRatio;
+  const float advisoryBand = input.useDistance
+      ? input.distanceAdvisoryBand
+      : params.advisory.advisoryBandRatio;
+  const float nearDangerBand = input.useDistance
+      ? input.distanceNearDangerBand
+      : params.advisory.advisoryNearDangerBandRatio;
+  if (ratio > safeBand) {
     advisoryExcursionActive = true;
     advisoryLastAbnormalDurationMs = result.evidence.abnormalDurationMs;
     advisoryLastDangerDurationMs = result.evidence.dangerDurationMs;
-    if (ratio >= params.advisory.advisoryNearDangerBandRatio) {
+    if (ratio >= nearDangerBand) {
       advisoryNearDangerSeen = true;
     }
     if (ratio >= advisoryPeakRatio) {
@@ -471,7 +498,7 @@ void RhythmStateJudge::updateRiskAdvisory(const RhythmStateJudgeInput& input) {
     }
   }
 
-  if (ratio <= params.baseline.safeBandRatio) {
+  if (ratio <= safeBand) {
     if (!advisoryExcursionActive) {
       return;
     }
@@ -506,7 +533,7 @@ void RhythmStateJudge::updateRiskAdvisory(const RhythmStateJudgeInput& input) {
     return;
   }
 
-  if (ratio >= params.advisory.advisoryNearDangerBandRatio) {
+  if (ratio >= nearDangerBand) {
     fillAdvisoryState(
         RiskAdvisoryType::WEIGHT_DEVIATION_HIGH,
         RiskAdvisoryLevel::WARN,
@@ -517,7 +544,7 @@ void RhythmStateJudge::updateRiskAdvisory(const RhythmStateJudgeInput& input) {
     return;
   }
 
-  if (ratio >= params.advisory.advisoryBandRatio) {
+  if (ratio >= advisoryBand) {
     fillAdvisoryState(
         RiskAdvisoryType::LOAD_SHIFT_LARGE,
         RiskAdvisoryLevel::INFO,

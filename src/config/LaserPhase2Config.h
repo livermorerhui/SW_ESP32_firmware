@@ -43,8 +43,11 @@ struct LaserStableThresholdConfig {
 };
 
 struct LaserRuntimeZeroThresholdConfig {
-  bool refreshEnabled = true;
-  bool applyToWeightConversion = true;
+  // The formal calibration point is owned by the persisted model. Runtime
+  // zero is diagnostic-only until a separately approved drift policy exists;
+  // it must never move the 0 kg point during normal operation.
+  bool refreshEnabled = false;
+  bool applyToWeightConversion = false;
   float emptyWindowMaxWeightKg = LEAVE_TH;
   uint8_t refreshSamples = WINDOW_N;
   float refreshStdDevDistance = 0.08f;

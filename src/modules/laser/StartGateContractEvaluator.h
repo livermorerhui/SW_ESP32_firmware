@@ -9,7 +9,9 @@ struct StartGateContractInput {
   bool userPresent = false;
   bool baselineReadyLatched = false;
   bool stableReadyLive = false;
+  bool useDistance = false;
   float baselineReadyWeightKg = 0.0f;
+  float baselineReadyDistance = 0.0f;
   TopState topState = TopState::IDLE;
 };
 

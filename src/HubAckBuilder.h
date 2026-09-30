@@ -41,6 +41,10 @@ inline String ok() {
   return "ACK:OK";
 }
 
+inline String calibrationZero() {
+  return "ACK:CAL_ZERO";
+}
+
 inline String unsupported() {
   return "NACK:UNSUPPORTED";
 }
@@ -139,25 +143,27 @@ inline String calibrationPoint(
   return out;
 }
 
-inline String calibrationModel(const CalibrationModel& model) {
+inline String calibrationModel(const CalibrationModel& model, bool ready = true) {
   String out;
-  out.reserve(104);
+  out.reserve(116);
   appendKeyValue(out, "ACK:CAL_MODEL type=", calibrationModelTypeName(model.type));
   appendKeyFloatValue(out, " ref=", model.referenceDistance, 4);
   appendKeyFloatValue(out, " c0=", model.coefficients[0], 6);
   appendKeyFloatValue(out, " c1=", model.coefficients[1], 6);
   appendKeyFloatValue(out, " c2=", model.coefficients[2], 6);
+  appendKeyIntValue(out, " ready=", ready ? 1 : 0);
   return out;
 }
 
-inline String calibrationSetModel(const CalibrationModel& model) {
+inline String calibrationSetModel(const CalibrationModel& model, bool ready = true) {
   String out;
-  out.reserve(112);
+  out.reserve(124);
   appendKeyValue(out, "ACK:CAL_SET_MODEL type=", calibrationModelTypeName(model.type));
   appendKeyFloatValue(out, " ref=", model.referenceDistance, 4);
   appendKeyFloatValue(out, " c0=", model.coefficients[0], 6);
   appendKeyFloatValue(out, " c1=", model.coefficients[1], 6);
   appendKeyFloatValue(out, " c2=", model.coefficients[2], 6);
+  appendKeyIntValue(out, " ready=", ready ? 1 : 0);
   return out;
 }
 

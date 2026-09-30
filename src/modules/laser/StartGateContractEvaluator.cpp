@@ -8,7 +8,9 @@ StartGateContractResult StartGateContractEvaluator::evaluate(
   const bool baselineReadyOk =
       !config.requireBaselineReady ||
       (input.baselineReadyLatched &&
-       input.baselineReadyWeightKg >= config.minimumBaselineWeightKg);
+       (input.useDistance
+            ? input.baselineReadyDistance > 0.0f
+            : input.baselineReadyWeightKg >= config.minimumBaselineWeightKg));
   const bool liveStableOk =
       !config.requireLiveStableWhenIdle ||
       input.topState == TopState::RUNNING ||

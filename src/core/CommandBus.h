@@ -12,6 +12,8 @@ enum class CmdType : uint8_t {
   WAVE_START,
   WAVE_STOP,
   SCALE_ZERO,
+  // Formal calibration reset; distinct from the legacy SCALE:ZERO ACK.
+  CAL_ZERO,
   SCALE_CAL,
   CAL_CAPTURE,
   CAL_GET_MODEL,
