@@ -327,11 +327,16 @@ void FirmwareOtaManager::fail(FirmwareOtaError error, const char* detail) {
 }
 
 void FirmwareOtaManager::abortUpdateIfNeeded(FirmwareOtaState previousState, const char* detail) {
+  // The detailed OTA log is compile-time disabled in daily mode. Keep the
+  // control path warning-free when its arguments are not expanded by the log
+  // macro.
+  (void)detail;
   if (!shouldAbortUpdateOnFailure(previousState)) {
     return;
   }
   if (otaHandleActive) {
     const esp_err_t abortErr = esp_ota_abort(otaHandle);
+    (void)abortErr;
     SW_OTA_LOGF("[OTA] event=esp_ota_abort result=%s err=%d",
         abortErr == ESP_OK ? "success" : "failure",
         static_cast<int>(abortErr));
