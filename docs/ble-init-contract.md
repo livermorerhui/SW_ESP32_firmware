@@ -25,7 +25,7 @@ Allowed fields:
 - static protocol capabilities, when they are short and explicitly reviewed,
   for example `stream_control_supported`
 
-- `cue_supported`：静态提示音能力；值为 `1` 时 APP 可以在当前协议 ready 边沿发送一次 `AUDIO:CUE id=CONNECT`。
+- `cue_supported`：静态提示音能力；值为 `1` 时表示固件会在有效 `BLE_CONNECTED` 生命周期事件中本地播放连接提示音。`AUDIO:CUE id=CONNECT` 仍保留为旧 APP 的兼容入口，但正式 APP 不需要发送它。
 
 If compatibility requires temporary retention of additional fields, they must remain few, short, and explicitly reviewed.
 

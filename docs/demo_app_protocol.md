@@ -53,7 +53,8 @@
 - 停止: `WAVE:STOP`
 
 #### 2.5 连接提示音
-- APP 在当前连接完成 CAP/SNAPSHOT 协议确认且 `cue_supported=1` 时发送一次 `AUDIO:CUE id=CONNECT`。
+- 固件在当前 BLE 连接生命周期事件通过控制任务确认后，由 `HubHandler::onBleConnected()` 本地触发一次连接提示音。APP 继续按原来的 `CAP? / SNAPSHOT? / WAVE:*` 协议通讯，不再发送 `AUDIO:CUE id=CONNECT`。
+- `AUDIO:CUE id=CONNECT` 仍保留为旧 APP 的兼容入口；旧命令与本地连接事件使用同一 `sessionId` 去重，返回 `DUPLICATE` 时不重复播放。
 - 断开提示音由 ESP32 在真实 BLE 断开后本地播放；APP 不发送 `DISCONNECT` 命令。
 - 提示音失败不影响连接、WAVE、停止和 Plus 运行状态判断。
 

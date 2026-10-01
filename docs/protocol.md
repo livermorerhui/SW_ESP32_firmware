@@ -32,7 +32,7 @@
 - 示例：
   - 请求：`CAP?`
   - 响应：`ACK:CAP fw=SW-HUB-1.0.0 proto=1`
-- 当前固件还会在能力字段中返回 `cue_supported=1`，表示支持 ESP32 侧连接/断开提示音；旧固件没有该字段时，APP 跳过提示音但继续正常连接和控制。
+- 当前固件还会在能力字段中返回 `cue_supported=1`，表示支持 ESP32 侧连接/断开提示音。连接成功提示音由 ESP32 在有效 BLE_CONNECTED 生命周期事件中本地触发；APP 不再发送连接提示音命令。旧 APP 仍可能发送 `AUDIO:CUE id=CONNECT`，固件保留该入口作为兼容请求，并按当前 session 去重，不会重复播放或影响正常连接和控制。
 - 错误情况：一般无参数错误；若链路异常可能无响应。
 
 ### 2.2 `WAVE:SET`
@@ -67,7 +67,7 @@
 
 ### 2.5 `AUDIO:CUE`
 - 格式：`AUDIO:CUE id=CONNECT`
-- 作用：请求当前 BLE session 播放一次连接成功提示音。APP 只在协议 ready 且 `cue_supported=1` 时发送；断开提示音由 ESP32 的真实 BLE 断开事件本地触发，不由 APP 发送。
+- 作用：兼容入口，用于请求当前 BLE session 播放一次连接成功提示音。正式连接链路由 ESP32 在有效 BLE_CONNECTED 生命周期事件中本地触发；APP 不再发送该命令。收到旧 APP 的同 session 请求时，固件按 session 去重并返回 `ACCEPTED` 或 `DUPLICATE`。断开提示音由 ESP32 的真实 BLE 断开事件本地触发，不由 APP 发送。
 - 响应：`ACK:AUDIO_CUE id=CONNECT result=ACCEPTED|DUPLICATE`
 - 拒绝：`NACK:AUDIO_CUE id=CONNECT reason=BUSY_WAVE|BUSY_CUE|INVALID`；`DISCONNECT` 仅由固件 BLE 生命周期内部触发，APP 发送时返回 `reason=LOCAL_ONLY`。
 - CUE 与 `WAVE:SET` 的 0~50 Hz、0~120 强度范围无关，也不改变 WAVE 状态。
@@ -150,7 +150,7 @@
   - 能力查询成功返回。
 - 当前包含 `stream_control_supported=1`，表示设备支持 `STREAM:SET` 显式实时流订阅；支持提示音的固件还包含 `cue_supported=1`。
 - `ACK:AUDIO_CUE id=CONNECT result=ACCEPTED|DUPLICATE`
-  - 连接提示音请求已接受或已在当前 BLE session 播放过。
+  - 兼容请求已接受或已在当前 BLE session 播放过；APP 不需要发送该命令。
 - `ACK:STREAM enabled=<0|1> supported=1 rate_hz=<rate>`
   - 实时测量流订阅设置成功。
 - 线上传输示例（含帧结尾）：

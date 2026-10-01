@@ -416,7 +416,21 @@ public:
 
   void onBleConnected() override {
     if (l) l->resetStreamSubscription("ble_connected");
-    if (w) w->resetCuesForNewSession(g_ble.currentSessionId());
+    const uint32_t sessionId = g_ble.currentSessionId();
+    if (w) {
+      w->resetCuesForNewSession(sessionId);
+      if (g_ble.isConnected()) {
+        const WaveModule::CueRequestResult result = w->requestCue(
+            AudioCueId::CONNECT,
+            sessionId,
+            0,
+            false);
+        SW_VERBOSE_SERIAL_PRINTF(
+            "[CUE] source=ble_connected id=CONNECT result=%d session_id=%lu\n",
+            static_cast<int>(result),
+            static_cast<unsigned long>(sessionId));
+      }
+    }
     if (sm) sm->onBleConnected();
   }
 

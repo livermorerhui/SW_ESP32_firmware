@@ -11,8 +11,8 @@
 
 - [ ] 已冻结 `AUDIO:CUE` 命令、ACK 字段、能力兼容方式和 OTA 期间行为。
 - [ ] 已冻结本轮声音参数：CONNECT=`660 Hz → 880 Hz`，DISCONNECT=`440 Hz → 330 Hz`，两段间隔约 20 ms，包络 5–10 ms；后续只验听感、时长和电压。
-- [ ] 已冻结 Android 的 ready 边沿：当前 `transportEpoch` 内 `protocolReady` 从 false 变 true，只触发一次 CONNECT CUE。
-- [ ] 已冻结 iOS 的 ready 边沿：`connected + hasCurrentConnectionSnapshot + fresh`，不能把 CoreBluetooth 已连接当成协议完成。
+- [ ] 已冻结 ESP32 的连接音边沿：有效 `BLE_CONNECTED` 生命周期事件经控制任务校验后，只触发一次 CONNECT CUE。
+- [ ] 已确认 Android/iOS 不再发送 CONNECT CUE；旧 APP 的 `AUDIO:CUE id=CONNECT` 仅作为兼容入口，并与本地连接事件按 firmware `sessionId` 去重。
 - [ ] 已定义 ESP32 的 `stopSoft` 完成通知或序列号；由 `audioTask` 发布，控制任务只能异步等待，不得阻塞 BLE 回调。
 - [ ] 已定义 ESP32 transport session 去重身份。当前 `BleTransport::sessionId` 在新连接时递增，断开时不递增，施工应按该 session 做一次性去重。
 - [ ] 已明确产品构建不能启用 `WARNING_ONLY` 断连策略；若必须保留该配置，先实现由 `SystemStateMachine` 发起的独立停波请求。
@@ -27,10 +27,10 @@
 
 | 编号 | 测试 | 预期 |
 |---|---|---|
-| FW-CUE-001 | `protocolReady=false` 请求 CONNECT | 拒绝，不产生播放计划 |
-| FW-CUE-002 | 同一 session 首次 CONNECT | 接受一次 |
+| FW-CUE-001 | 有效 BLE_CONNECTED 生命周期事件 | 由 `HubHandler::onBleConnected()` 接受一次 CONNECT 播放计划 |
+| FW-CUE-002 | 同一 session 首次 CONNECT（本地事件或旧 APP 兼容命令） | 接受一次 |
 | FW-CUE-003 | 同一 session 重复 CONNECT | `DUPLICATE`，不重复播放 |
-| FW-CUE-004 | 新 session CONNECT | 允许一次 |
+| FW-CUE-004 | 新 session BLE_CONNECTED | 允许一次本地 CONNECT |
 | FW-CUE-005 | 空闲时 DISCONNECT | 接受一次 |
 | FW-CUE-006 | 同一 `sessionId` 重复断开 | `DUPLICATE`，不重复播放 |
 | FW-CUE-007 | pending CONNECT 后收到 DISCONNECT | 丢弃 CONNECT，DISCONNECT 优先 |
@@ -86,19 +86,19 @@
 
 ## 5. Android 测试
 
-Android ready 真相位于 gateway/repository，不在页面：
+连接音真相位于 ESP32 BLE 生命周期和 `WaveModule`，不在 Android gateway/repository 或页面：
 
 | 编号 | 场景 | 预期 |
 |---|---|---|
-| AND-CUE-001 | BLE transport connected，CAP/SNAPSHOT 未完成 | 不发送 CONNECT CUE |
-| AND-CUE-002 | 当前 `transportEpoch` 首次 `protocolReady=false → true` | 发送一次 CONNECT CUE |
-| AND-CUE-003 | 重复 `markProtocolReady`、重复 ACK、页面重建 | 不重复发送 |
-| AND-CUE-004 | `transportEpoch` 改变后再次 ready | 新 session 允许一次 |
-| AND-CUE-005 | CUE NACK/超时 | 连接仍保持成功，记录可选能力失败 |
+| AND-CUE-001 | BLE transport connected，CAP/SNAPSHOT 未完成 | ESP32 已在有效 BLE_CONNECTED 生命周期中本地触发；APP 不发送 CONNECT CUE |
+| AND-CUE-002 | 当前 firmware `sessionId` 首次有效 BLE_CONNECTED | ESP32 发送一次 CONNECT CUE 到唯一 audioTask |
+| AND-CUE-003 | 重复连接回调、重复 ACK、页面重建或旧 APP 重复命令 | firmware session 去重，不重复发声 |
+| AND-CUE-004 | firmware `sessionId` 改变后再次连接 | 新 session 允许一次本地 CONNECT CUE |
+| AND-CUE-005 | 旧 APP `AUDIO:CUE` 到达本地连接音之后 | 返回 `DUPLICATE`，连接仍保持成功 |
 | AND-CUE-006 | 用户主动断开 | 不发送断开命令，等待 ESP32 本地断开音 |
 | AND-CUE-007 | 旧 epoch ACK/refresh 在新 epoch 到达；`sendCommand()` 时 transport 已断开 | 丢弃旧结果/不发送 CUE，不把旧结果当作新连接 ready |
 
-应复用现有 Android connection epoch 和 protocol-ready 延迟测试，新增“发送次数”“epoch”“transportConnected guard”断言；`markProtocolReady()` 以及新增 CUE 的 `sendCommand()` 都要覆盖旧 epoch 和断开后的 late callback。
+应保留旧 APP 兼容命令的 parser/去重回归；正式 APP 的连接、协议 ready 和页面生命周期测试不得再把 CONNECT CUE 发送次数当成连接成功条件。
 
 ## 6. iOS 测试
 
@@ -106,15 +106,15 @@ iOS 当前没有名为 `protocolReady` 的单一字段。CoreBluetooth 已 conne
 
 | 编号 | 场景 | 预期 |
 |---|---|---|
-| IOS-CUE-001 | CoreBluetooth connected，但没有 SNAPSHOT | 不发送 CONNECT CUE |
-| IOS-CUE-002 | 当前 generation 首次收到 fresh SNAPSHOT | 发送一次 CONNECT CUE |
-| IOS-CUE-003 | 重复 SNAPSHOT/重复 identity readback | 不重复发送 |
-| IOS-CUE-004 | 旧 generation 的 SNAPSHOT 到达 | 丢弃，不触发提示音 |
-| IOS-CUE-005 | 新 generation 再次 ready | 允许一次 CONNECT CUE |
+| IOS-CUE-001 | CoreBluetooth connected，但没有 SNAPSHOT | 不影响 ESP32 已按 BLE_CONNECTED 生命周期本地触发的连接音 |
+| IOS-CUE-002 | 当前 generation 收到 fresh SNAPSHOT | 只刷新原有连接/设备状态，不发送 CONNECT CUE |
+| IOS-CUE-003 | 重复 SNAPSHOT/重复 identity readback | 不发送 CONNECT CUE、不重复发声 |
+| IOS-CUE-004 | 旧 generation 的 SNAPSHOT 到达 | 丢弃旧状态，不影响 firmware session 音效 |
+| IOS-CUE-005 | 新 generation 再次连接 | firmware 新 session 允许一次本地 CONNECT CUE |
 | IOS-CUE-006 | 主动/异常断开 | 不发送断开命令，由 ESP32 本地事件负责 |
 | IOS-CUE-007 | 新固件没有 CUE 能力 | 连接状态仍按正式 snapshot 投影，CUE 作为可选能力缺失 |
 
-施工时需同步更新 `SonicWaveCommand`、`SonicWaveProtocolCodec`、repository 的 send owner 和对应 Swift tests。
+APP 侧保留旧命令解码兼容即可；正式连接链路不再需要 `SonicWaveCommand`、`SonicWaveProtocolCodec` 或 repository 主动发送 CONNECT CUE。
 
 ## 7. 真机顺序测试
 
@@ -170,7 +170,7 @@ iOS 当前没有名为 `protocolReady` 的单一字段。CoreBluetooth 已 conne
 - `python3 tools/test_release_build_contract.py`：通过，4 个测试通过。
 - `python3 -m platformio run -e esp32s3`：通过。
 - Android `:sonicwave-protocol:test`、`:core-device-sonicwave:test`：通过。
-- iOS `DeviceContractsTests` 与连接提示音 repository focused test：通过；完整 CoreDeviceSonicWaveTests 出现 6 个失败，尚未做独立基线隔离，不能认定它们与本次改动无关。
+- iOS `DeviceContractsTests`：30 项通过；`DefaultSonicWaveDeviceRepositoryTests` 运行 68 项、7 项失败，完整 `CoreDeviceSonicWaveTests` 运行 218 项、8 项失败。失败集中在既有设备事实/重连测试，尚未完成独立基线隔离，因此本轮只认定协议 focused 测试通过，不把 Repository 全量结果认定为本次改动通过。
 - `git diff --check`：通过。
 
 仍待执行：

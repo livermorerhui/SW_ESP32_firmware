@@ -109,15 +109,15 @@ BleTransport::MyServerCallbacks::onDisconnect()
 
 ### 3.5 CONNECT CUE
 ```text
-APP 当前连接 epoch 的协议确认 + CAP cue_supported=1
--> AUDIO:CUE id=CONNECT
--> BleTransport 校验当前 session/connId
--> ProtocolCodec::parseCommand()
--> CommandBus::dispatch()
--> HubHandler::handle(AUDIO_CUE)
--> WaveModule::requestCue(CONNECT)
+BleTransport::MyServerCallbacks::onConnect()
+-> 捕获当前 sessionId/connId，并将 BLE_CONNECTED 投递到控制队列
+-> BleTransport::controlTaskLoop() 校验当前连接生命周期
+-> HubHandler::onBleConnected()
+-> WaveModule::requestCue(CONNECT, 当前 sessionId)
 -> WaveModule::audioTask 播放 CONNECT CUE
 ```
+
+`AUDIO:CUE id=CONNECT` 仍保留为旧 APP 的兼容入口。旧 APP 可能在协议确认后发送该命令；固件按当前 `sessionId` 去重，返回 `DUPLICATE` 时不重复发声。正式 APP 不再发送连接提示音命令，CAP/SNAPSHOT/WAVE 等正常通讯仍按原协议运行。
 
 ## 4. Control Plane 与 Data Plane 对应
 
