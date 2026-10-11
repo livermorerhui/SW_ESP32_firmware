@@ -17,6 +17,10 @@ object ProtocolCodec {
         is Command.ScaleCal -> "SCALE:CAL z=${command.zeroDistance},k=${command.scaleFactor}"
         is Command.CalibrationCapture -> "CAL:CAPTURE w=${command.referenceWeightKg}"
         Command.CalibrationGetModel -> "CAL:GET_MODEL"
+        Command.EmptyDistanceGet -> "EMPTY:GET"
+        is Command.EmptyDistanceSet -> "EMPTY:SET distance_mm=${command.distanceMm}"
+        Command.EmptyDistanceClear -> "EMPTY:CLEAR"
+        Command.CalibrationClearWeightModel -> "CAL:CLEAR_WEIGHT_MODEL"
         is Command.CalibrationSetModel -> {
             "CAL:SET_MODEL type=${command.type.name},ref=${command.referenceDistance}," +
                 "c0=${command.c0},c1=${command.c1},c2=${command.c2}"
@@ -41,6 +45,8 @@ object ProtocolCodec {
         parseLeaveProtection(raw)?.let { return it }
         parseDegradedStart(raw)?.let { return it }
         parseStreamSubscription(raw)?.let { return it }
+        parseEmptyDistance(raw)?.let { return it }
+        parseWeightModelClear(raw)?.let { return it }
         parseCalibrationModel(raw)?.let { return it }
         parseCalibrationSetModelResult(raw)?.let { return it }
         parseCalibrationZeroResult(raw)?.let { return it }
@@ -148,6 +154,44 @@ object ProtocolCodec {
             enabled = enabled,
             supported = parseBooleanFlag(kv["SUPPORTED"]) ?: true,
             rateHz = kv["RATE_HZ"]?.toIntOrNull(),
+            raw = raw,
+        )
+    }
+
+    private fun parseEmptyDistance(raw: String): Event.EmptyDistanceResult? {
+        val isAck = raw.startsWith("ACK:EMPTY", ignoreCase = true)
+        val isNack = raw.startsWith("NACK:EMPTY", ignoreCase = true)
+        if (!isAck && !isNack) return null
+        val prefix = if (isAck) "ACK:EMPTY" else "NACK:EMPTY"
+        val payload = raw.substringAfter(prefix, "").trim()
+        val kv = parseKeyValuePayload(payload)
+        return Event.EmptyDistanceResult(
+            operation = kv["OP"],
+            success = isAck && (parseBooleanFlag(kv["SUCCESS"]) ?: true),
+            supported = parseBooleanFlag(kv["SUPPORTED"]) ?: isAck,
+            status = kv["STATUS"],
+            distanceMm = kv["DISTANCE_MM"]?.toFloatOrNull(),
+            toleranceMm = kv["TOLERANCE_MM"]?.toFloatOrNull(),
+            backend = kv["BACKEND"] ?: kv["SENSOR_BACKEND"],
+            reason = kv["REASON"]?.takeIf { it.isNotBlank() }
+                ?: if (isNack) payload.ifBlank { "UNKNOWN" } else null,
+            raw = raw,
+        )
+    }
+
+    private fun parseWeightModelClear(raw: String): Event.WeightModelClearResult? {
+        val isAck = raw.startsWith("ACK:CAL_CLEAR_WEIGHT_MODEL", ignoreCase = true)
+        val isNack = raw.startsWith("NACK:CAL_CLEAR_WEIGHT_MODEL", ignoreCase = true)
+        if (!isAck && !isNack) return null
+        val prefix = if (isAck) "ACK:CAL_CLEAR_WEIGHT_MODEL" else "NACK:CAL_CLEAR_WEIGHT_MODEL"
+        val payload = raw.substringAfter(prefix, "").trim()
+        val kv = parseKeyValuePayload(payload)
+        return Event.WeightModelClearResult(
+            success = isAck && (parseBooleanFlag(kv["SUCCESS"]) ?: true),
+            supported = parseBooleanFlag(kv["SUPPORTED"]) ?: isAck,
+            ready = parseBooleanFlag(kv["READY"]),
+            reason = kv["REASON"]?.takeIf { it.isNotBlank() }
+                ?: if (isNack) payload.ifBlank { "UNKNOWN" } else null,
             raw = raw,
         )
     }

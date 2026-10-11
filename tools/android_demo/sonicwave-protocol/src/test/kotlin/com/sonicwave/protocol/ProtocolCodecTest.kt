@@ -27,6 +27,10 @@ class ProtocolCodecTest {
         assertEquals("SCALE:CAL z=-22.0,k=1.0", ProtocolCodec.encode(Command.ScaleCal()))
         assertEquals("CAL:CAPTURE w=72.5", ProtocolCodec.encode(Command.CalibrationCapture(72.5f)))
         assertEquals("CAL:GET_MODEL", ProtocolCodec.encode(Command.CalibrationGetModel))
+        assertEquals("EMPTY:GET", ProtocolCodec.encode(Command.EmptyDistanceGet))
+        assertEquals("EMPTY:SET distance_mm=112.56", ProtocolCodec.encode(Command.EmptyDistanceSet(112.56f)))
+        assertEquals("EMPTY:CLEAR", ProtocolCodec.encode(Command.EmptyDistanceClear))
+        assertEquals("CAL:CLEAR_WEIGHT_MODEL", ProtocolCodec.encode(Command.CalibrationClearWeightModel))
         assertEquals(
             "CAL:SET_MODEL type=QUADRATIC,ref=1.2,c0=0.1,c1=1.1,c2=0.2",
             ProtocolCodec.encode(
@@ -92,6 +96,36 @@ class ProtocolCodecTest {
         assertEquals("DETECT_ONLY", cap.values["FALL_STOP_MODE"])
         assertEquals("1", cap.values["MOTION_SAMPLING_MODE"])
         assertEquals("1", cap.values["FALL_ACTION_SUPPRESSED"])
+    }
+
+    @Test
+    fun decodeEmptyDistanceAckAndNack() {
+        val ack = assertIs<Event.EmptyDistanceResult>(
+            ProtocolCodec.decode(
+                "ACK:EMPTY op=GET supported=1 status=SET distance_mm=112.56 tolerance_mm=0.10 backend=LASER_485",
+            ),
+        )
+        assertEquals("GET", ack.operation)
+        assertEquals(true, ack.success)
+        assertEquals(true, ack.supported)
+        assertEquals("SET", ack.status)
+        assertEquals(112.56f, ack.distanceMm)
+        assertEquals("LASER_485", ack.backend)
+
+        val nack = assertIs<Event.EmptyDistanceResult>(
+            ProtocolCodec.decode("NACK:EMPTY op=SET supported=1 reason=RUNNING"),
+        )
+        assertEquals(false, nack.success)
+        assertEquals("RUNNING", nack.reason)
+    }
+
+    @Test
+    fun decodeWeightModelClearAck() {
+        val event = assertIs<Event.WeightModelClearResult>(
+            ProtocolCodec.decode("ACK:CAL_CLEAR_WEIGHT_MODEL ready=0"),
+        )
+        assertEquals(true, event.success)
+        assertEquals(false, event.ready)
     }
 
     @Test
@@ -264,6 +298,20 @@ class ProtocolCodecTest {
         assertEquals(false, streamEvt.valid)
         assertEquals(false, streamEvt.ma12Ready)
         assertEquals("READ_FAIL", streamEvt.reason)
+    }
+
+    @Test
+    fun decodeDistanceOnlyEvtStreamKeepsDistanceValidWhenWeightIsMissing() {
+        val event = assertIs<Event.StreamSample>(
+            ProtocolCodec.decode(
+                "EVT:STREAM seq=44 ts_ms=1280 valid=0 distance_valid=1 weight_valid=0 ma12_ready=0 distance_mm=112.56 distance_reason=NONE weight_reason=WEIGHT_MODEL_UNAVAILABLE backend=LASER_485",
+            ),
+        )
+        assertEquals(112.56f, event.distance)
+        assertEquals(true, event.distanceValid)
+        assertEquals(false, event.weightValid)
+        assertEquals("WEIGHT_MODEL_UNAVAILABLE", event.weightReason)
+        assertEquals("LASER_485", event.sensorBackend)
     }
 
     @Test

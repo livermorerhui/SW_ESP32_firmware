@@ -109,6 +109,25 @@ class CalibrationComparisonEngineTest {
         assertFalse(twoPoints.quadratic.isAvailable)
     }
 
+    @Test
+    fun explicitEmptyDistanceAllowsFitWithoutZeroWeightSample() {
+        val result = CalibrationComparisonEngine.compare(
+            samples = listOf(
+                sample(distanceRuntime = 1.5f, weightKg = 2.0f),
+                sample(distanceRuntime = 2.0f, weightKg = 4.0f),
+                sample(distanceRuntime = 2.5f, weightKg = 6.0f),
+            ),
+            emptyDistanceMm = 100.0f,
+        )
+
+        val linear = result.linear
+        assertTrue(linear.isAvailable)
+        val coefficients = assertNotNull(linear.coefficients)
+        assertNear(1.0f, coefficients.referenceDistance)
+        assertNear(0.0f, coefficients.c0)
+        assertNear(4.0f, coefficients.c1)
+    }
+
     private fun sample(distanceRuntime: Float, weightKg: Float): CalibrationFitSample {
         return CalibrationFitSample(
             distanceMm = distanceRuntime * CALIBRATION_DISTANCE_RUNTIME_DIVISOR,

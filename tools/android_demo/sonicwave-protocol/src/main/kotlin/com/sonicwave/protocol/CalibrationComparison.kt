@@ -158,14 +158,23 @@ object CalibrationComparisonEngine {
         requestedDistanceMm: Float?,
         toleranceMm: Float,
     ): AnchorResolution {
-        if (requestedDistanceMm != null &&
-            (!requestedDistanceMm.isFinite() || requestedDistanceMm <= 0.0f)
-        ) {
+        if (requestedDistanceMm != null && !requestedDistanceMm.isFinite()) {
+            // The APP uses a non-finite sentinel to explicitly say that no
+            // device-confirmed D_e exists. Do not fall back to a captured 0 kg
+            // point in that mode.
+            return AnchorResolution(null, "MISSING_EMPTY_ANCHOR")
+        }
+        if (requestedDistanceMm != null && requestedDistanceMm <= 0.0f) {
             return AnchorResolution(null, "INVALID_EMPTY_DISTANCE")
         }
 
         val zeroSamples = samples.filter {
             abs(it.referenceWeightKg) <= CALIBRATION_EMPTY_WEIGHT_EPSILON_KG
+        }
+        if (requestedDistanceMm != null && zeroSamples.isEmpty()) {
+            // A separately confirmed D_e is sufficient. A 0 kg point is
+            // useful for cross-checking, but is not required to fit a model.
+            return AnchorResolution(requestedDistanceMm, null)
         }
         if (zeroSamples.isEmpty()) {
             return AnchorResolution(null, "MISSING_EMPTY_ANCHOR")

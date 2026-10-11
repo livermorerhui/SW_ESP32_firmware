@@ -19,6 +19,12 @@ sealed class Command {
     ) : Command()
     data class CalibrationCapture(val referenceWeightKg: Float) : Command()
     data object CalibrationGetModel : Command()
+    /** Independent empty-distance owner; does not touch the weight model. */
+    data object EmptyDistanceGet : Command()
+    data class EmptyDistanceSet(val distanceMm: Float) : Command()
+    data object EmptyDistanceClear : Command()
+    /** Clears only the weight model a/b/c; the independent empty-distance anchor is preserved. */
+    data object CalibrationClearWeightModel : Command()
     data class CalibrationSetModel(
         val type: CalibrationModelType,
         val referenceDistance: Float,
@@ -202,6 +208,24 @@ sealed class Event {
     ) : Event()
     data class CalibrationZeroResult(
         val success: Boolean,
+        val reason: String?,
+        val raw: String,
+    ) : Event()
+    data class EmptyDistanceResult(
+        val operation: String?,
+        val success: Boolean,
+        val supported: Boolean,
+        val status: String?,
+        val distanceMm: Float?,
+        val toleranceMm: Float?,
+        val backend: String?,
+        val reason: String?,
+        val raw: String,
+    ) : Event()
+    data class WeightModelClearResult(
+        val success: Boolean,
+        val supported: Boolean,
+        val ready: Boolean?,
         val reason: String?,
         val raw: String,
     ) : Event()
