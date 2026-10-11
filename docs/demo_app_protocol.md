@@ -61,16 +61,20 @@
 #### 2.5 测重与校准
 - 归零: `SCALE:ZERO`
 - 校准: `SCALE:CAL z=<zeroDistance>,k=<scaleFactor>`
-- 参数归零/清模: `CAL:ZERO`
+- 参数归零/清除体重模型: `CAL:CLEAR_WEIGHT_MODEL`
+- 空载距离读取/设置/清除: `EMPTY:GET` / `EMPTY:SET distance_mm=<finite>` / `EMPTY:CLEAR`
 - 记录校准点: `CAL:CAPTURE w=<referenceWeightKg>`
 - 读取模型: `CAL:GET_MODEL`
 - 写入模型: `CAL:SET_MODEL type=<LINEAR|QUADRATIC>,ref=<runtimeDistance>,c0=<...>,c1=<...>,c2=<...>`
 
 说明：
 
-- `CAL:ZERO` 只清空 ESP32 已保存模型、正式空载引用和运行时状态，不采样当前距离；空载 0kg 定点必须随后单独用 `CAL:CAPTURE w=0` 记录。
-- `CAL:CAPTURE w=0` 在激光后端只要求距离稳定；非零重量还要求有人基线稳定。
+- `CAL:CLEAR_WEIGHT_MODEL` 只清空 ESP32 已保存的体重模型 `a/b/c`，保留型号页独立设置的空载距离 `D_e`。
+- `EMPTY:SET` 只写入用户确认的空载距离；设置后 APP 必须再发 `EMPTY:GET`，只有设备回读一致才显示“已设置”。
+- `EMPTY:CLEAR` 清除 `D_e`，并使依赖该 `D_e` 的已部署体重模型失效；它不等同于体重模型归零。需要保留 `D_e` 时使用 `CAL:CLEAR_WEIGHT_MODEL`。
+- `CAL:CAPTURE w=0` 在激光后端只要求距离稳定，是体重拟合样本，不会隐式修改 `D_e`；非零重量还要求有人基线稳定。
 - `CAL:SET_MODEL` 成功后 Demo APP 必须继续发送 `CAL:GET_MODEL`，收到 `ACK:CAL_MODEL ... ready=1` 且参数逐项一致后，才显示模型已经部署。
+- `CAL:SET_MODEL` 不会隐式设置空载距离；必须先完成型号页 `EMPTY:SET` 和 `EMPTY:GET` 回读。
 
 ### 3. Legacy 兼容协议
 

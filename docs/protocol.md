@@ -110,19 +110,36 @@
 ### 2.9 激光校准模型命令
 
 - `CAL:ZERO`
-  - 作用：清空 ESP32 已保存的正式体重模型、空载引用和运行时状态。
+  - 兼容入口：清空体重模型和运行时体重状态；独立空载距离 `D_e` 不受影响。
   - 不读取当前距离，也不自动生成 0kg 定点。
-  - 成功响应：`ACK:CAL_ZERO`。
+  - 新 Demo APP 的“参数归零”使用 `CAL:CLEAR_WEIGHT_MODEL`，以便明确表达只清除 `a/b/c`。
 - `CAL:CAPTURE w=<referenceWeightKg>`
   - 作用：由 ESP32 返回当前稳定的物理距离快照。
-  - `w=0` 时只要求距离稳定，用于建立本台设备的空载定点；非零重量还要求有人基线稳定。
+  - `w=0` 时只要求距离稳定，作为体重拟合样本；独立空载距离由 `EMPTY:SET` 设置，不由录点隐式写入。
   - 成功响应：`ACK:CAL_POINT idx=<n> ts=<ms> d_mm=<physicalMm> ref_kg=<kg> pred_kg=<kg> stable=1 valid=1`。
 - `CAL:GET_MODEL`
   - 成功响应：`ACK:CAL_MODEL type=<LINEAR|QUADRATIC> ref=<runtimeDistance> c0=<...> c1=<...> c2=<...> ready=<0|1>`。
 - `CAL:SET_MODEL type=<LINEAR|QUADRATIC>,ref=<runtimeDistance>,c0=<...>,c1=<...>,c2=<...>`
   - 固件重复校验有限值、`c2=0` 和选定传感器范围内的单调性。
+  - 必须先由型号页 `EMPTY:SET` 设置并回读独立 `D_e`；`ref` 只用于校验模型坐标，不会反向创建空载距离。
   - 成功响应：`ACK:CAL_SET_MODEL ... ready=1`；失败响应：`NACK:CAL_SET_MODEL ... reason=<...>`。
   - Demo APP 收到成功响应后必须再发 `CAL:GET_MODEL`，逐项比对后才显示模型部署成功。
+
+### 2.10 独立空载距离与体重模型清除
+
+- `EMPTY:GET`
+  - 读取独立空载距离、容差和传感器后端。
+  - 示例：`ACK:EMPTY op=GET supported=1 status=SET distance_mm=112.56 tolerance_mm=0.10 backend=LASER_485`。
+- `EMPTY:SET distance_mm=<finite>`
+  - 把用户确认的当前真实距离写入 `D_e`；运行中拒绝。
+  - 成功后必须再用 `EMPTY:GET` 回读确认。
+- `EMPTY:CLEAR`
+  - 清除 `D_e` 及其运行时引用，并使依赖该 `D_e` 的已部署体重模型失效；不清除其他 BLE/波形状态，运行中拒绝。需要保留 `D_e` 时，应使用 `CAL:CLEAR_WEIGHT_MODEL`。
+- `CAL:CLEAR_WEIGHT_MODEL`
+  - 只清除体重模型 `a/b/c`，保留 `D_e`。
+  - 成功响应：`ACK:CAL_CLEAR_WEIGHT_MODEL ready=0`；不支持或失败响应为 `NACK:CAL_CLEAR_WEIGHT_MODEL ...`。
+
+没有 `D_e` 时，距离仍可作为有效测量上报和保存，但固件不应把状态链报告为已就绪；没有体重模型时，`weight_valid=0`，不应把距离改写成无效。
 
 ## 3. Legacy 协议
 
