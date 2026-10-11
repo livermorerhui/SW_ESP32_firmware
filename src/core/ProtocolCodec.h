@@ -320,6 +320,33 @@ public:
       out.type = CmdType::CAL_GET_MODEL;
       return true;
     }
+    if (s.equalsIgnoreCase("EMPTY:GET")) {
+      out.type = CmdType::EMPTY_DISTANCE_GET;
+      return true;
+    }
+    if (s.startsWith("EMPTY:SET")) {
+      out.type = CmdType::EMPTY_DISTANCE_SET;
+      String distanceStr;
+      if (!readParam("distance_mm=", distanceStr)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+      if (!parseStrictFloat(distanceStr, out.emptyDistance.distanceMm) ||
+          !isfinite(out.emptyDistance.distanceMm) ||
+          out.emptyDistance.distanceMm <= 0.0f) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+      return true;
+    }
+    if (s.equalsIgnoreCase("EMPTY:CLEAR")) {
+      out.type = CmdType::EMPTY_DISTANCE_CLEAR;
+      return true;
+    }
+    if (s.equalsIgnoreCase("CAL:CLEAR_WEIGHT_MODEL")) {
+      out.type = CmdType::CAL_CLEAR_WEIGHT_MODEL;
+      return true;
+    }
     if (s.startsWith("CAL:SET_MODEL")) {
       out.type = CmdType::CAL_SET_MODEL;
 

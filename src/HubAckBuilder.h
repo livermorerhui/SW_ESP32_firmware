@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <math.h>
 #include "core/PlatformSnapshot.h"
 #include "core/ProtocolCodec.h"
 #include "modules/laser/CalibrationModelStore.h"
@@ -190,6 +191,51 @@ inline String calibrationSetModelRejected(CalibrationModelType type, const Strin
   out.reserve(96);
   appendKeyValue(out, "NACK:CAL_SET_MODEL type=", calibrationModelTypeName(type));
   appendKeyValue(out, " reason=", reason.c_str());
+  return out;
+}
+
+inline String emptyDistance(
+    const char* operation,
+    bool supported,
+    const char* status,
+    float distanceMm,
+    float toleranceMm,
+    const char* backend) {
+  String out;
+  out.reserve(128);
+  appendKeyValue(out, "ACK:EMPTY op=", operation ? operation : "UNKNOWN");
+  appendKeyIntValue(out, " supported=", supported ? 1 : 0);
+  appendKeyValue(out, " status=", status ? status : "UNKNOWN");
+  if (isfinite(distanceMm)) appendKeyFloatValue(out, " distance_mm=", distanceMm, 2);
+  if (isfinite(toleranceMm)) appendKeyFloatValue(out, " tolerance_mm=", toleranceMm, 2);
+  appendKeyValue(out, " backend=", backend ? backend : "UNKNOWN");
+  return out;
+}
+
+inline String emptyDistanceRejected(
+    const char* operation,
+    const String& reason,
+    bool supported = true) {
+  String out;
+  out.reserve(80);
+  appendKeyValue(out, "NACK:EMPTY op=", operation ? operation : "UNKNOWN");
+  appendKeyIntValue(out, " supported=", supported ? 1 : 0);
+  appendKeyValue(out, " reason=", "");
+  out += reason;
+  return out;
+}
+
+inline String weightModelClear(bool ready) {
+  String out = "ACK:CAL_CLEAR_WEIGHT_MODEL ready=";
+  out += ready ? "1" : "0";
+  return out;
+}
+
+inline String weightModelClearRejected(const String& reason, bool supported = true) {
+  String out = "NACK:CAL_CLEAR_WEIGHT_MODEL supported=";
+  out += supported ? "1" : "0";
+  out += " reason=";
+  out += reason;
   return out;
 }
 

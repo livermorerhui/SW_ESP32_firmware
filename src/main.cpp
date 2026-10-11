@@ -2,6 +2,7 @@
 #include <esp_heap_caps.h>
 #include <esp_system.h>
 #include <esp_log.h>
+#include <string.h>
 #include "config/GlobalConfig.h"
 #include "core/EventBus.h"
 #include "core/CommandBus.h"
@@ -349,6 +350,67 @@ public:
             model.coefficients[1],
             model.coefficients[2]);
         outAck = HubAckBuilder::calibrationSetModel(model, true);
+        return true;
+      }
+
+      case CmdType::EMPTY_DISTANCE_GET: {
+        EmptyDistanceRecord record{};
+        const bool supported = l->laserInstalled() &&
+            (strcmp(l->sensorBackendName(), "LASER_485") == 0 ||
+             strcmp(l->sensorBackendName(), "CYD3S1612_IIC") == 0);
+        const bool ready = supported && l->getEmptyDistance(record);
+        outAck = HubAckBuilder::emptyDistance(
+            "GET",
+            supported,
+            ready ? "SET" : (supported ? "UNSET" : "UNSUPPORTED"),
+            ready ? record.distanceRuntime * LASER_DISTANCE_RUNTIME_DIVISOR : NAN,
+            ready ? record.toleranceRuntime * LASER_DISTANCE_RUNTIME_DIVISOR : NAN,
+            l->sensorBackendName());
+        return true;
+      }
+
+      case CmdType::EMPTY_DISTANCE_SET: {
+        String reason;
+        if (!l->setEmptyDistance(c.emptyDistance.distanceMm, reason)) {
+          const bool supported = l->laserInstalled() &&
+              (strcmp(l->sensorBackendName(), "LASER_485") == 0 ||
+               strcmp(l->sensorBackendName(), "CYD3S1612_IIC") == 0);
+          outAck = HubAckBuilder::emptyDistanceRejected("SET", reason, supported);
+          return false;
+        }
+        EmptyDistanceRecord record{};
+        l->getEmptyDistance(record);
+        outAck = HubAckBuilder::emptyDistance(
+            "SET",
+            true,
+            "SET",
+            record.distanceRuntime * LASER_DISTANCE_RUNTIME_DIVISOR,
+            record.toleranceRuntime * LASER_DISTANCE_RUNTIME_DIVISOR,
+            l->sensorBackendName());
+        return true;
+      }
+
+      case CmdType::EMPTY_DISTANCE_CLEAR: {
+        String reason;
+        if (!l->clearEmptyDistance(reason)) {
+          const bool supported = l->laserInstalled() &&
+              (strcmp(l->sensorBackendName(), "LASER_485") == 0 ||
+               strcmp(l->sensorBackendName(), "CYD3S1612_IIC") == 0);
+          outAck = HubAckBuilder::emptyDistanceRejected("CLEAR", reason, supported);
+          return false;
+        }
+        outAck = HubAckBuilder::emptyDistance(
+            "CLEAR", true, "UNSET", NAN, NAN, l->sensorBackendName());
+        return true;
+      }
+
+      case CmdType::CAL_CLEAR_WEIGHT_MODEL: {
+        String reason;
+        if (!l->clearWeightModel(reason)) {
+          outAck = HubAckBuilder::weightModelClearRejected(reason, reason != "UNSUPPORTED");
+          return false;
+        }
+        outAck = HubAckBuilder::weightModelClear(false);
         return true;
       }
 

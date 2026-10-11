@@ -19,18 +19,33 @@ struct LegacyScaleParams {
   float scaleFactor = 1.0f;
 };
 
+// Independent physical empty-distance record. The value is kept in the
+// firmware's runtime distance unit (millimetres / 100) so state-chain and
+// calibration validation use one representation; the BLE contract exposes
+// physical millimetres.
+struct EmptyDistanceRecord {
+  float distanceRuntime = NAN;
+  float toleranceRuntime = NAN;
+  uint8_t backend = 0;
+};
+
 class CalibrationModelStore {
 public:
   LegacyScaleParams loadLegacyParams(Preferences& preferences) const;
-  void saveLegacyParams(Preferences& preferences, float zeroDistance, float scaleFactor) const;
+  bool saveLegacyParams(Preferences& preferences, float zeroDistance, float scaleFactor) const;
   CalibrationModel loadModel(
       Preferences& preferences,
       float defaultZeroDistance,
       float defaultScaleFactor) const;
-  void saveModel(Preferences& preferences, const CalibrationModel& model) const;
-  void clearModel(Preferences& preferences) const;
+  bool saveModel(Preferences& preferences, const CalibrationModel& model) const;
+  bool clearModel(Preferences& preferences) const;
   bool hasStoredModel(Preferences& preferences) const;
   bool hasLegacyParams(Preferences& preferences) const;
+  bool loadEmptyDistance(Preferences& preferences, EmptyDistanceRecord& out) const;
+  bool saveEmptyDistance(
+      Preferences& preferences,
+      const EmptyDistanceRecord& record) const;
+  bool clearEmptyDistance(Preferences& preferences) const;
   bool isModelFinite(const CalibrationModel& model) const;
   bool isModelMonotonic(const CalibrationModel& model) const;
   bool isModelMonotonic(
@@ -80,4 +95,38 @@ private:
   void removeRecord(Preferences& preferences, const ModelRecordKeys& keys) const;
 
   uint32_t modelCrc(const CalibrationModel& model, uint32_t generation) const;
+  uint32_t emptyDistanceCrc(const EmptyDistanceRecord& record, uint32_t generation) const;
+
+  struct EmptyDistanceRecordKeys {
+    const char* distance;
+    const char* tolerance;
+    const char* backend;
+    const char* schema;
+    const char* generation;
+    const char* commit;
+    const char* crc;
+  };
+  static const EmptyDistanceRecordKeys& primaryEmptyRecordKeys();
+  static const EmptyDistanceRecordKeys& backupEmptyRecordKeys();
+  bool hasValidEmptyRecord(
+      Preferences& preferences,
+      const EmptyDistanceRecordKeys& keys,
+      EmptyDistanceRecord& out) const;
+  bool saveEmptyRecord(
+      Preferences& preferences,
+      const EmptyDistanceRecordKeys& keys,
+      const EmptyDistanceRecord& record,
+      uint32_t generation) const;
+  void removeEmptyRecord(
+      Preferences& preferences,
+      const EmptyDistanceRecordKeys& keys) const;
+
+  static constexpr const char* kEmptyDistanceKey = "emp_mm";
+  static constexpr const char* kEmptyToleranceKey = "emp_tol";
+  static constexpr const char* kEmptyBackendKey = "emp_bk";
+  static constexpr const char* kEmptySchemaKey = "emp_ver";
+  static constexpr const char* kEmptyGenerationKey = "emp_gen";
+  static constexpr const char* kEmptyCommitKey = "emp_ok";
+  static constexpr const char* kEmptyCrcKey = "emp_crc";
+  static constexpr uint8_t kEmptySchemaVersion = 1;
 };

@@ -67,11 +67,14 @@ DistanceStateChainResult DistanceStateChain::update(
   }
 
   if (!hasEmptyReference_) {
-    // A missing calibration must not invent a user weight. It may establish a
-    // temporary empty reference for the distance-only chain; CAL:SET_MODEL
-    // replaces it with the explicit APP-provided point.
-    hasEmptyReference_ = true;
-    emptyReference_ = distance;
+    // A valid sample is still available to the telemetry plane, but it is not
+    // enough to establish the platform's empty-load reference. Until the
+    // device-specific D_e is explicitly stored, no presence/stability gate is
+    // allowed to become ready.
+    result.valid = true;
+    result.reason = "empty_reference_missing";
+    last_ = result;
+    return result;
   }
   result.valid = true;
   result.emptyReference = emptyReference_;

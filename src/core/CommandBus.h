@@ -19,6 +19,10 @@ enum class CmdType : uint8_t {
   CAL_CAPTURE,
   CAL_GET_MODEL,
   CAL_SET_MODEL,
+  EMPTY_DISTANCE_GET,
+  EMPTY_DISTANCE_SET,
+  EMPTY_DISTANCE_CLEAR,
+  CAL_CLEAR_WEIGHT_MODEL,
   FALL_STOP_SET,
   LEAVE_PROTECTION_SET,
   MOTION_SAMPLING_MODE_SET,
@@ -56,6 +60,10 @@ struct CalibrationModelCommand {
   float coefficients[3] = {0.0f, 1.0f, 0.0f};
 };
 
+struct EmptyDistanceCommand {
+  float distanceMm = NAN;
+};
+
 struct MotionSamplingModeCommand {
   bool enabled = false;
 };
@@ -90,6 +98,7 @@ struct Command {
   float p2 = 0; // factor
   CalibrationCaptureRequest capture{};
   CalibrationModelCommand model{};
+  EmptyDistanceCommand emptyDistance{};
   FallStopCommand fallStop{};
   LeaveProtectionCommand leaveProtection{};
   MotionSamplingModeCommand motionSamplingMode{};

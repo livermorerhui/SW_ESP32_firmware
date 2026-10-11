@@ -91,6 +91,11 @@ public:
   bool setDeviceConfig(PlatformModel platformModel, bool laserInstalled, String& reason);
   bool getCalibrationModel(CalibrationModel& out) const;
   bool setCalibrationModel(const CalibrationModel& model, String& reason);
+  bool getEmptyDistance(EmptyDistanceRecord& out) const;
+  bool setEmptyDistance(float distanceMm, String& reason);
+  bool clearEmptyDistance(String& reason);
+  bool clearWeightModel(String& reason);
+  const char* sensorBackendName() const;
   bool captureCalibrationPoint(float referenceWeightKg, CalibrationCapture& out, String& reason);
   bool setStreamSubscription(bool enabled, uint8_t rateHz, String& reason);
   void resetStreamSubscription(const char* reason);
@@ -127,6 +132,7 @@ private:
   void saveDeviceConfig();
   void applyDeviceConfigRuntimeEffects(const char* source);
   void loadCalibrationModel();
+  void loadEmptyDistance();
   void saveCalibrationModel();
   void syncLegacyParamsFromModel();
   bool applyCalibrationModel(const CalibrationModel& model, bool persist, const char* source, String& reason);
@@ -247,9 +253,11 @@ private:
   float zeroDistance = 0.0f;
   float scaleFactor = 1.0f;
   CalibrationModel calibrationModel{};
+  EmptyDistanceRecord emptyDistanceRecord{};
   // A cleared or never-written model must not be silently treated as a valid
   // weight calibration. Distance state can still run without it.
   bool calibrationModelReady = false;
+  bool emptyDistanceReady = false;
   DualZeroState dualZero{};
 
   float weightBuffer[WINDOW_N]{};

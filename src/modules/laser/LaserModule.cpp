@@ -11,6 +11,13 @@ constexpr uint32_t kLaserLoopIntervalNoLaserMs = 200UL;
 constexpr uint32_t kLaserLoopIntervalUnavailableIdleMs = 250UL;
 constexpr uint32_t kLaserUnavailableIdleReadBackoffMs = 3000UL;
 constexpr uint32_t kLaserRuntimeReadFailBackoffMs = 0UL;
+// J100's empty reference is entered in the physical unit shown by the Demo
+// APP. The record keeps the runtime-unit equivalent for the state chain.
+constexpr float kJ100EmptyDistanceToleranceMm = 0.10f;
+// Provisional CYD tolerance for the independent anchor only. CYD state
+// thresholds remain out of scope until sensor data is collected.
+constexpr float kCydEmptyDistanceToleranceMm = 1.0f;
+constexpr float kModelReferenceEpsilonRuntime = 0.00001f;
 
 }  // namespace
 
@@ -63,6 +70,7 @@ void LaserModule::begin(EventBus* eb, SystemStateMachine* fsm, WaveModule* waveM
   scaleFactor  = legacyParams.scaleFactor;
   // Probe first so model-range validation uses the selected physical backend.
   measurementReader.begin();
+  loadEmptyDistance();
   loadCalibrationModel();
 
   SW_VERBOSE_SERIAL_PRINTF("\n=== LaserModule boot ===\nZero=%.2f K=%.4f\n", zeroDistance, scaleFactor);
@@ -91,8 +99,8 @@ void LaserModule::begin(EventBus* eb, SystemStateMachine* fsm, WaveModule* waveM
   distanceStateChain.configure(distanceConfig);
   distanceStateChain.reset("boot");
   distanceStateChain.setEmptyReference(
-      calibrationModel.referenceDistance,
-      calibrationModelReady && isfinite(calibrationModel.referenceDistance));
+      emptyDistanceRecord.distanceRuntime,
+      emptyDistanceReady && isfinite(emptyDistanceRecord.distanceRuntime));
 
   needSendParams = true;
   rhythmStateJudge.configure(phase2Thresholds.rhythm);
@@ -246,6 +254,195 @@ bool LaserModule::setDeviceConfig(
 bool LaserModule::getCalibrationModel(CalibrationModel& out) const {
   out = calibrationModel;
   return calibrationModelReady;
+}
+
+const char* LaserModule::sensorBackendName() const {
+  return laserMeasurementBackendName(measurementReader.backend());
+}
+
+bool LaserModule::getEmptyDistance(EmptyDistanceRecord& out) const {
+  if (!emptyDistanceReady ||
+      !isfinite(emptyDistanceRecord.distanceRuntime) ||
+      !isfinite(emptyDistanceRecord.toleranceRuntime)) {
+    out = EmptyDistanceRecord{};
+    return false;
+  }
+  out = emptyDistanceRecord;
+  return true;
+}
+
+bool LaserModule::setEmptyDistance(float distanceMm, String& reason) {
+  if (!deviceConfig.laserInstalled) {
+    reason = "UNSUPPORTED";
+    return false;
+  }
+  if (sm && sm->state() == TopState::RUNNING) {
+    reason = "RUNNING";
+    return false;
+  }
+  const LaserMeasurementBackend backend = measurementReader.backend();
+  if (backend != LaserMeasurementBackend::LASER_485 &&
+      backend != LaserMeasurementBackend::CYD3S1612_IIC) {
+    reason = (backend == LaserMeasurementBackend::SENSOR_CONFLICT)
+        ? "SENSOR_CONFLICT"
+        : "SENSOR_UNAVAILABLE";
+    return false;
+  }
+  if (!isfinite(distanceMm) || distanceMm <= 0.0f) {
+    reason = "INVALID_DISTANCE";
+    return false;
+  }
+
+  const float runtimeDistance = distanceMm * LASER_DISTANCE_MM_TO_RUNTIME_UNITS;
+  const float minRuntime = backend == LaserMeasurementBackend::LASER_485
+      ? LASER_WANG_VALID_RUNTIME_DISTANCE_MIN
+      : LASER_VALID_RUNTIME_DISTANCE_MIN;
+  const float maxRuntime = backend == LaserMeasurementBackend::LASER_485
+      ? LASER_WANG_VALID_RUNTIME_DISTANCE_MAX
+      : LASER_VALID_RUNTIME_DISTANCE_MAX;
+  if (!isfinite(runtimeDistance) || runtimeDistance < minRuntime || runtimeDistance > maxRuntime) {
+    reason = "DISTANCE_OUT_OF_RANGE";
+    return false;
+  }
+
+  const bool modelReferenceChanged = calibrationModelReady &&
+      fabsf(calibrationModel.referenceDistance - runtimeDistance) >
+          kModelReferenceEpsilonRuntime;
+  EmptyDistanceRecord record{};
+  record.distanceRuntime = runtimeDistance;
+  const float emptyToleranceMm = backend == LaserMeasurementBackend::CYD3S1612_IIC
+      ? kCydEmptyDistanceToleranceMm
+      : kJ100EmptyDistanceToleranceMm;
+  record.toleranceRuntime = emptyToleranceMm *
+      LASER_DISTANCE_MM_TO_RUNTIME_UNITS;
+  record.backend = static_cast<uint8_t>(backend);
+  if (!calibrationModelStore.saveEmptyDistance(preferences, record)) {
+    reason = "NVS_WRITE_FAILED";
+    SW_VERBOSE_SERIAL_PRINTLN("[EMPTY_DISTANCE] action=set result=failed reason=NVS_WRITE_FAILED");
+    return false;
+  }
+
+  // A weight model is defined in the coordinate system whose origin is D_e.
+  // Changing D_e invalidates the old model; clear only that model and keep
+  // the newly stored empty-distance record.
+  if (modelReferenceChanged) {
+    if (!calibrationModelStore.clearModel(preferences)) {
+      reason = "NVS_WRITE_FAILED";
+      SW_VERBOSE_SERIAL_PRINTLN("[EMPTY_DISTANCE] action=set result=failed reason=NVS_WRITE_FAILED model_clear=1");
+      return false;
+    }
+  }
+  emptyDistanceRecord = record;
+  emptyDistanceReady = true;
+  if (modelReferenceChanged) {
+    calibrationModelReady = false;
+    calibrationModel = CalibrationModel{};
+    calibrationModel.referenceDistance = runtimeDistance;
+    calibrationModel.coefficients[0] = 0.0f;
+    calibrationModel.coefficients[1] = 1.0f;
+    calibrationModel.coefficients[2] = 0.0f;
+    zeroDistance = runtimeDistance;
+    scaleFactor = 1.0f;
+  }
+  dualZero.calibrationZeroDistance = runtimeDistance;
+  refreshEffectiveZero();
+
+  distanceStateChain.reset("empty_distance_set");
+  distanceStateChain.setEmptyReference(runtimeDistance, true);
+  resetRuntimeZero("empty_distance_set");
+  resetStableTracking("empty_distance_set", true);
+  resetMeasurementPlane("empty_distance_set", true);
+  rhythmStateJudge.reset("empty_distance_set");
+  clearStableContractBridge("empty_distance_set");
+  if (sm) {
+    sm->setRuntimeReady(false);
+    sm->setStartReadiness(false, 0.0f);
+  }
+  SW_VERBOSE_SERIAL_PRINTF(
+      "[EMPTY_DISTANCE] action=set distance_mm=%.2f tolerance_mm=%.2f backend=%s model_cleared=%d\n",
+      distanceMm,
+      record.toleranceRuntime * LASER_DISTANCE_RUNTIME_DIVISOR,
+      sensorBackendName(),
+      modelReferenceChanged ? 1 : 0);
+  return true;
+}
+
+bool LaserModule::clearEmptyDistance(String& reason) {
+  if (sm && sm->state() == TopState::RUNNING) {
+    reason = "RUNNING";
+    return false;
+  }
+  // Complete both persistent clears before mutating the in-memory contract.
+  // A failed NVS operation must reach the command handler as a NACK.
+  if (!calibrationModelStore.clearModel(preferences)) {
+    reason = "NVS_WRITE_FAILED";
+    return false;
+  }
+  if (!calibrationModelStore.clearEmptyDistance(preferences)) {
+    reason = "NVS_WRITE_FAILED";
+    return false;
+  }
+  emptyDistanceRecord = EmptyDistanceRecord{};
+  emptyDistanceReady = false;
+  calibrationModelReady = false;
+  calibrationModel = CalibrationModel{};
+  zeroDistance = 0.0f;
+  scaleFactor = 1.0f;
+  dualZero.calibrationZeroDistance = 0.0f;
+  refreshEffectiveZero();
+  distanceStateChain.reset("empty_distance_clear");
+  distanceStateChain.clearEmptyReference();
+  resetRuntimeZero("empty_distance_clear");
+  resetStableTracking("empty_distance_clear", true);
+  resetMeasurementPlane("empty_distance_clear", true);
+  rhythmStateJudge.reset("empty_distance_clear");
+  clearStableContractBridge("empty_distance_clear");
+  if (sm) {
+    sm->setRuntimeReady(false);
+    sm->setStartReadiness(false, 0.0f);
+  }
+  SW_VERBOSE_SERIAL_PRINTLN("[EMPTY_DISTANCE] action=clear result=success");
+  return true;
+}
+
+bool LaserModule::clearWeightModel(String& reason) {
+  if (sm && sm->state() == TopState::RUNNING) {
+    reason = "RUNNING";
+    return false;
+  }
+  if (!calibrationModelStore.clearModel(preferences)) {
+    reason = "NVS_WRITE_FAILED";
+    return false;
+  }
+  calibrationModelReady = false;
+  calibrationModel = CalibrationModel{};
+  calibrationModel.referenceDistance = emptyDistanceReady
+      ? emptyDistanceRecord.distanceRuntime
+      : 0.0f;
+  calibrationModel.coefficients[0] = 0.0f;
+  calibrationModel.coefficients[1] = 1.0f;
+  calibrationModel.coefficients[2] = 0.0f;
+  zeroDistance = calibrationModel.referenceDistance;
+  scaleFactor = 1.0f;
+  dualZero.calibrationZeroDistance = calibrationModel.referenceDistance;
+  refreshEffectiveZero();
+  distanceStateChain.reset("weight_model_clear");
+  distanceStateChain.setEmptyReference(
+      emptyDistanceRecord.distanceRuntime,
+      emptyDistanceReady && isfinite(emptyDistanceRecord.distanceRuntime));
+  resetRuntimeZero("weight_model_clear");
+  resetStableTracking("weight_model_clear", true);
+  resetMeasurementPlane("weight_model_clear", true);
+  rhythmStateJudge.reset("weight_model_clear");
+  clearStableContractBridge("weight_model_clear");
+  if (sm) {
+    sm->setRuntimeReady(false);
+    sm->setStartReadiness(false, 0.0f);
+  }
+  SW_VERBOSE_SERIAL_PRINTF(
+      "[CAL] CLEAR_WEIGHT_MODEL result=success empty_distance_ready=%d\n",
+      emptyDistanceReady ? 1 : 0);
+  return true;
 }
 
 bool LaserModule::setCalibrationModel(const CalibrationModel& model, String& reason) {
@@ -543,6 +740,53 @@ void LaserModule::saveDeviceConfig() {
   deviceConfigStore.save(preferences, deviceConfig);
 }
 
+void LaserModule::loadEmptyDistance() {
+  EmptyDistanceRecord loaded{};
+  if (!calibrationModelStore.loadEmptyDistance(preferences, loaded)) {
+    emptyDistanceRecord = EmptyDistanceRecord{};
+    emptyDistanceReady = false;
+    return;
+  }
+
+  const LaserMeasurementBackend backend = measurementReader.backend();
+  const bool backendKnown =
+      backend == LaserMeasurementBackend::LASER_485 ||
+      backend == LaserMeasurementBackend::CYD3S1612_IIC;
+  const bool backendMatches =
+      loaded.backend == static_cast<uint8_t>(backend);
+  if (backendKnown && !backendMatches) {
+    // A saved anchor belongs to the sensor backend that produced it. Do not
+    // silently reuse a J100 value after a CYD switch (or vice versa).
+    calibrationModelStore.clearEmptyDistance(preferences);
+    emptyDistanceRecord = EmptyDistanceRecord{};
+    emptyDistanceReady = false;
+    SW_VERBOSE_SERIAL_PRINTF(
+        "[EMPTY_DISTANCE] boot result=cleared reason=BACKEND_MISMATCH stored=%u active=%s\n",
+        static_cast<unsigned>(loaded.backend),
+        sensorBackendName());
+    return;
+  }
+  if (loaded.backend > static_cast<uint8_t>(LaserMeasurementBackend::LASER_485)) {
+    calibrationModelStore.clearEmptyDistance(preferences);
+    emptyDistanceRecord = EmptyDistanceRecord{};
+    emptyDistanceReady = false;
+    SW_VERBOSE_SERIAL_PRINTLN("[EMPTY_DISTANCE] boot result=cleared reason=INVALID_BACKEND");
+    return;
+  }
+
+  emptyDistanceRecord = loaded;
+  // If unified probing did not identify a backend, retain the record for
+  // diagnostics but keep the state chain disabled until a matching backend is
+  // available. This avoids losing a valid anchor on a transient sensor boot.
+  emptyDistanceReady = backendKnown && backendMatches;
+  SW_VERBOSE_SERIAL_PRINTF(
+      "[EMPTY_DISTANCE] boot status=%s distance_mm=%.2f tolerance_mm=%.2f backend=%s\n",
+      emptyDistanceReady ? "SET" : "WAITING_BACKEND",
+      loaded.distanceRuntime * LASER_DISTANCE_RUNTIME_DIVISOR,
+      loaded.toleranceRuntime * LASER_DISTANCE_RUNTIME_DIVISOR,
+      laserMeasurementBackendName(static_cast<LaserMeasurementBackend>(loaded.backend)));
+}
+
 void LaserModule::applyDeviceConfigRuntimeEffects(const char* source) {
   releaseOccupiedCycle(source, millis());
   resetStableTracking(source, true);
@@ -579,8 +823,10 @@ void LaserModule::applyDeviceConfigRuntimeEffects(const char* source) {
 }
 
 void LaserModule::loadCalibrationModel() {
-  const bool hasPersistedModel = calibrationModelStore.hasStoredModel(preferences) ||
-      calibrationModelStore.hasLegacyParams(preferences);
+  // Only the versioned, CRC-checked model record is active. Legacy zero/factor
+  // keys remain readable for the old command path but cannot silently make a
+  // new weight model or empty-distance anchor appear calibrated.
+  const bool hasPersistedModel = calibrationModelStore.hasStoredModel(preferences);
   calibrationModelReady = hasPersistedModel;
   CalibrationModel model = calibrationModelStore.loadModel(preferences, zeroDistance, scaleFactor);
 
@@ -596,15 +842,11 @@ void LaserModule::loadCalibrationModel() {
     String unusedReason;
     applyCalibrationModel(fallback, false, "boot_fallback", unusedReason);
     calibrationModelReady = false;
-    distanceStateChain.clearEmptyReference();
   } else {
     // applyCalibrationModel() is also used by explicit CAL:SET_MODEL and
     // marks a model ready. Boot restores readiness from the persisted-record
     // check so a finite placeholder cannot become a weight source.
     calibrationModelReady = hasPersistedModel;
-    if (!calibrationModelReady) {
-      distanceStateChain.clearEmptyReference();
-    }
   }
 }
 
@@ -653,17 +895,39 @@ bool LaserModule::applyCalibrationModel(
     return false;
   }
 
+  if (emptyDistanceReady && isfinite(emptyDistanceRecord.distanceRuntime)) {
+    if (fabsf(model.referenceDistance - emptyDistanceRecord.distanceRuntime) >
+        (emptyDistanceRecord.toleranceRuntime + kModelReferenceEpsilonRuntime)) {
+      reason = "EMPTY_DISTANCE_MISMATCH";
+      return false;
+    }
+  } else {
+    // D_e is an explicit型号页 setting. A CAL:SET_MODEL reference is never
+    // promoted to D_e, including for legacy callers; this keeps the weight
+    // model and the distance-state anchor independent.
+    reason = "EMPTY_DISTANCE_REQUIRED";
+    return false;
+  }
+
+  if (persist) {
+    const float persistedZeroDistance = model.referenceDistance;
+    const float persistedScaleFactor =
+        model.type == CalibrationModelType::LINEAR ? model.coefficients[1] : 0.0f;
+    if (!calibrationModelStore.saveModel(preferences, model) ||
+        !calibrationModelStore.saveLegacyParams(
+            preferences, persistedZeroDistance, persistedScaleFactor)) {
+      reason = "NVS_WRITE_FAILED";
+      return false;
+    }
+  }
   calibrationModel = model;
   calibrationModelReady = true;
   syncLegacyParamsFromModel();
   distanceStateChain.reset(source ? source : "model_apply");
-  distanceStateChain.setEmptyReference(model.referenceDistance, true);
+  distanceStateChain.setEmptyReference(
+      emptyDistanceRecord.distanceRuntime,
+      emptyDistanceReady && isfinite(emptyDistanceRecord.distanceRuntime));
   resetRuntimeZero(source);
-
-  if (persist) {
-    calibrationModelStore.saveLegacyParams(preferences, zeroDistance, scaleFactor);
-    saveCalibrationModel();
-  }
 
   SW_VERBOSE_SERIAL_PRINTF("[CAL] MODEL APPLY source=%s type=%s ref=%.2f c0=%.6f c1=%.6f c2=%.6f\n",
       source ? source : "unknown",
@@ -1953,13 +2217,17 @@ void LaserModule::taskLoop() {
       zeroDistance = 0.0f;
       scaleFactor = 1.0f;
       calibrationModel = CalibrationModel{};
-      calibrationModel.referenceDistance = 0.0f;
+      calibrationModel.referenceDistance = emptyDistanceReady
+          ? emptyDistanceRecord.distanceRuntime
+          : 0.0f;
       calibrationModel.coefficients[0] = 0.0f;
       calibrationModel.coefficients[1] = 1.0f;
       calibrationModel.coefficients[2] = 0.0f;
-      dualZero.calibrationZeroDistance = 0.0f;
+      dualZero.calibrationZeroDistance = calibrationModel.referenceDistance;
       distanceStateChain.reset("calibration_reset");
-      distanceStateChain.clearEmptyReference();
+      distanceStateChain.setEmptyReference(
+          emptyDistanceRecord.distanceRuntime,
+          emptyDistanceReady && isfinite(emptyDistanceRecord.distanceRuntime));
       releaseOccupiedCycle("calibration_reset", now);
       resetRuntimeZero("calibration_reset");
       resetStableTracking("zero", true);
@@ -2029,9 +2297,22 @@ void LaserModule::taskLoop() {
               weightValid ? weight : 0.0f,
               now);
         }
+      } else if (stableContract.userPresent &&
+                 !distanceState.baselineReady &&
+                 sm && sm->state() != TopState::RUNNING) {
+        // DistanceStateChain invalidates its baseline when the user shifts
+        // beyond baselineExitDelta. Do not leave the owner-side latch alive,
+        // otherwise StartGateContractEvaluator could keep start_ready=true
+        // from a stale baseline.
+        stableContract.baselineReadyLatched = false;
+        stableContract.baselineReadyWeightKg = 0.0f;
+        stableContract.baselineReadyDistance = 0.0f;
+        stableBaselineDistance = 0.0f;
+        stableBaselineDistanceMm = 0.0f;
       }
       if (!distanceState.userPresent && !distanceState.baselineReady) {
         stableContract.baselineReadyLatched = false;
+        stableContract.baselineReadyWeightKg = 0.0f;
         stableContract.baselineReadyDistance = 0.0f;
       }
     }

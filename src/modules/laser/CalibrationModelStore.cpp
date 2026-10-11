@@ -37,6 +37,19 @@ const CalibrationModelStore::ModelRecordKeys& CalibrationModelStore::backupRecor
   return keys;
 }
 
+const CalibrationModelStore::EmptyDistanceRecordKeys& CalibrationModelStore::primaryEmptyRecordKeys() {
+  static const EmptyDistanceRecordKeys keys{
+      kEmptyDistanceKey, kEmptyToleranceKey, kEmptyBackendKey,
+      kEmptySchemaKey, kEmptyGenerationKey, kEmptyCommitKey, kEmptyCrcKey};
+  return keys;
+}
+
+const CalibrationModelStore::EmptyDistanceRecordKeys& CalibrationModelStore::backupEmptyRecordKeys() {
+  static const EmptyDistanceRecordKeys keys{
+      "e_b_mm", "e_b_tol", "e_b_bk", "e_b_ver", "e_b_gen", "e_b_ok", "e_b_crc"};
+  return keys;
+}
+
 LegacyScaleParams CalibrationModelStore::loadLegacyParams(Preferences& preferences) const {
   LegacyScaleParams params{};
   params.zeroDistance = preferences.getFloat(kLegacyZeroKey, -22.0f);
@@ -44,12 +57,16 @@ LegacyScaleParams CalibrationModelStore::loadLegacyParams(Preferences& preferenc
   return params;
 }
 
-void CalibrationModelStore::saveLegacyParams(
+bool CalibrationModelStore::saveLegacyParams(
     Preferences& preferences,
     float zeroDistance,
     float scaleFactor) const {
   preferences.putFloat(kLegacyZeroKey, zeroDistance);
   preferences.putFloat(kLegacyFactorKey, scaleFactor);
+  return isfinite(preferences.getFloat(kLegacyZeroKey, NAN)) &&
+      isfinite(preferences.getFloat(kLegacyFactorKey, NAN)) &&
+      fabsf(preferences.getFloat(kLegacyZeroKey, NAN) - zeroDistance) < 0.0001f &&
+      fabsf(preferences.getFloat(kLegacyFactorKey, NAN) - scaleFactor) < 0.0001f;
 }
 
 CalibrationModel CalibrationModelStore::loadModel(
@@ -76,7 +93,8 @@ CalibrationModel CalibrationModelStore::loadModel(
   return fallback;
 }
 
-void CalibrationModelStore::saveModel(Preferences& preferences, const CalibrationModel& model) const {
+bool CalibrationModelStore::saveModel(Preferences& preferences, const CalibrationModel& model) const {
+  if (!isModelFinite(model)) return false;
   const ModelRecordKeys& primary = primaryRecordKeys();
   const ModelRecordKeys& backup = backupRecordKeys();
   uint32_t previousGeneration = 0;
@@ -93,13 +111,15 @@ void CalibrationModelStore::saveModel(Preferences& preferences, const Calibratio
   // The commit marker is written last. The previous committed model is also
   // kept in a backup record, so a torn primary write can be rolled back.
   saveRecord(preferences, primary, model, generation);
+  return hasValidRecord(preferences, primary);
 }
 
-void CalibrationModelStore::clearModel(Preferences& preferences) const {
+bool CalibrationModelStore::clearModel(Preferences& preferences) const {
   removeRecord(preferences, primaryRecordKeys());
   removeRecord(preferences, backupRecordKeys());
   preferences.remove(kLegacyZeroKey);
   preferences.remove(kLegacyFactorKey);
+  return !hasStoredModel(preferences) && !hasLegacyParams(preferences);
 }
 
 bool CalibrationModelStore::hasStoredModel(Preferences& preferences) const {
@@ -109,6 +129,122 @@ bool CalibrationModelStore::hasStoredModel(Preferences& preferences) const {
 
 bool CalibrationModelStore::hasLegacyParams(Preferences& preferences) const {
   return preferences.isKey(kLegacyZeroKey) || preferences.isKey(kLegacyFactorKey);
+}
+
+bool CalibrationModelStore::loadEmptyDistance(
+    Preferences& preferences,
+    EmptyDistanceRecord& out) const {
+  EmptyDistanceRecord primary{};
+  EmptyDistanceRecord backup{};
+  const bool primaryValid = hasValidEmptyRecord(
+      preferences, primaryEmptyRecordKeys(), primary);
+  const bool backupValid = hasValidEmptyRecord(
+      preferences, backupEmptyRecordKeys(), backup);
+  if (!primaryValid && !backupValid) {
+    out = EmptyDistanceRecord{};
+    return false;
+  }
+  // A backup may be newer after a power loss during primary replacement.
+  const uint32_t primaryGeneration = preferences.getUInt(
+      primaryEmptyRecordKeys().generation, 0);
+  const uint32_t backupGeneration = preferences.getUInt(
+      backupEmptyRecordKeys().generation, 0);
+  out = backupValid && (!primaryValid || backupGeneration > primaryGeneration)
+      ? backup : primary;
+  return true;
+}
+
+bool CalibrationModelStore::saveEmptyDistance(
+    Preferences& preferences,
+    const EmptyDistanceRecord& record) const {
+  if (!isfinite(record.distanceRuntime) || record.distanceRuntime <= 0.0f ||
+      !isfinite(record.toleranceRuntime) || record.toleranceRuntime < 0.0f) {
+    return false;
+  }
+  EmptyDistanceRecord primaryRecord{};
+  EmptyDistanceRecord backupRecord{};
+  const bool havePrimary = hasValidEmptyRecord(
+      preferences, primaryEmptyRecordKeys(), primaryRecord);
+  const bool haveBackup = hasValidEmptyRecord(
+      preferences, backupEmptyRecordKeys(), backupRecord);
+  const uint32_t primaryGeneration = preferences.getUInt(
+      primaryEmptyRecordKeys().generation, 0);
+  const uint32_t backupGeneration = preferences.getUInt(
+      backupEmptyRecordKeys().generation, 0);
+  const uint32_t previous = (havePrimary || haveBackup)
+      ? (primaryGeneration > backupGeneration ? primaryGeneration : backupGeneration)
+      : 0;
+  const uint32_t generation = previous == 0 ? 1 : previous + 1;
+  if (havePrimary) {
+    const uint32_t oldGeneration = primaryGeneration;
+    if (!saveEmptyRecord(preferences, backupEmptyRecordKeys(), primaryRecord, oldGeneration)) {
+      return false;
+    }
+  }
+  if (!saveEmptyRecord(preferences, primaryEmptyRecordKeys(), record, generation)) {
+    return false;
+  }
+  EmptyDistanceRecord verified{};
+  if (!loadEmptyDistance(preferences, verified)) return false;
+  return fabsf(verified.distanceRuntime - record.distanceRuntime) < 0.0001f &&
+      fabsf(verified.toleranceRuntime - record.toleranceRuntime) < 0.0001f &&
+      verified.backend == record.backend;
+}
+
+bool CalibrationModelStore::clearEmptyDistance(Preferences& preferences) const {
+  removeEmptyRecord(preferences, primaryEmptyRecordKeys());
+  removeEmptyRecord(preferences, backupEmptyRecordKeys());
+  EmptyDistanceRecord verified{};
+  return !loadEmptyDistance(preferences, verified);
+}
+
+bool CalibrationModelStore::hasValidEmptyRecord(
+    Preferences& preferences,
+    const EmptyDistanceRecordKeys& keys,
+    EmptyDistanceRecord& out) const {
+  out = EmptyDistanceRecord{};
+  if (preferences.getUChar(keys.schema, 0) != kEmptySchemaVersion ||
+      preferences.getUChar(keys.commit, 0) != 1) return false;
+  const uint32_t generation = preferences.getUInt(keys.generation, 0);
+  if (generation == 0) return false;
+  out.distanceRuntime = preferences.getFloat(keys.distance, NAN);
+  out.toleranceRuntime = preferences.getFloat(keys.tolerance, NAN);
+  out.backend = preferences.getUChar(keys.backend, 0);
+  if (!isfinite(out.distanceRuntime) || out.distanceRuntime <= 0.0f ||
+      !isfinite(out.toleranceRuntime) || out.toleranceRuntime < 0.0f) return false;
+  return emptyDistanceCrc(out, generation) == preferences.getUInt(keys.crc, 0);
+}
+
+bool CalibrationModelStore::saveEmptyRecord(
+    Preferences& preferences,
+    const EmptyDistanceRecordKeys& keys,
+    const EmptyDistanceRecord& record,
+    uint32_t generation) const {
+  preferences.putUChar(keys.commit, 0);
+  preferences.putFloat(keys.distance, record.distanceRuntime);
+  preferences.putFloat(keys.tolerance, record.toleranceRuntime);
+  preferences.putUChar(keys.backend, record.backend);
+  preferences.putUChar(keys.schema, kEmptySchemaVersion);
+  preferences.putUInt(keys.generation, generation);
+  preferences.putUInt(keys.crc, emptyDistanceCrc(record, generation));
+  preferences.putUChar(keys.commit, 1);
+  EmptyDistanceRecord verify{};
+  return hasValidEmptyRecord(preferences, keys, verify) &&
+      fabsf(verify.distanceRuntime - record.distanceRuntime) < 0.0001f &&
+      fabsf(verify.toleranceRuntime - record.toleranceRuntime) < 0.0001f &&
+      verify.backend == record.backend;
+}
+
+void CalibrationModelStore::removeEmptyRecord(
+    Preferences& preferences,
+    const EmptyDistanceRecordKeys& keys) const {
+  preferences.putUChar(keys.commit, 0);
+  preferences.remove(keys.distance);
+  preferences.remove(keys.tolerance);
+  preferences.remove(keys.backend);
+  preferences.remove(keys.schema);
+  preferences.remove(keys.generation);
+  preferences.remove(keys.crc);
 }
 
 bool CalibrationModelStore::hasValidRecord(
@@ -195,6 +331,23 @@ uint32_t CalibrationModelStore::modelCrc(
   uint32_t hash = 2166136261UL;
   const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&model);
   for (size_t i = 0; i < sizeof(model); ++i) {
+    hash ^= bytes[i];
+    hash *= 16777619UL;
+  }
+  const uint8_t* generationBytes = reinterpret_cast<const uint8_t*>(&generation);
+  for (size_t i = 0; i < sizeof(generation); ++i) {
+    hash ^= generationBytes[i];
+    hash *= 16777619UL;
+  }
+  return hash;
+}
+
+uint32_t CalibrationModelStore::emptyDistanceCrc(
+    const EmptyDistanceRecord& record,
+    uint32_t generation) const {
+  uint32_t hash = 2166136261UL;
+  const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&record);
+  for (size_t i = 0; i < sizeof(record); ++i) {
     hash ^= bytes[i];
     hash *= 16777619UL;
   }
