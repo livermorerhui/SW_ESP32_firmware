@@ -101,8 +101,9 @@ internal class MotionSamplingSessionStore {
             liveWeightKg = weight,
             ma12WeightKg = sample.ma12.takeIf { sample.ma12Ready },
             stableWeightKg = if (state.stableWeightActive) state.stableWeight else null,
-            measurementValid = sample.valid && distanceValid && sample.weightValid &&
-                distance.isFinite() && weight?.isFinite() == true,
+            // Distance is the primary sampling signal. Weight remains an
+            // optional reference column and must not suppress a distance row.
+            measurementValid = distanceValid && distance.isFinite(),
             distanceValid = distanceValid,
             weightValid = sample.weightValid && weight != null,
             distanceReason = sample.distanceReason,

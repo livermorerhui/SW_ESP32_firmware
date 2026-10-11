@@ -155,7 +155,7 @@ class TestSessionExporter(private val context: Context) {
                         if (sample.measurementValid) "1" else "0",
                         if (sample.baselineReady) "1" else "0",
                         sample.stableWeight?.let(::formatMetricValue),
-                        formatMetricValue(sample.weight),
+                        sample.weight?.let(::formatMetricValue),
                         sample.distance?.let(::formatMetricValue),
                         sample.ma12?.let(::formatMetricValue),
                         sample.ma3?.let(::formatMetricValue),
@@ -217,7 +217,7 @@ class TestSessionExporter(private val context: Context) {
                     .put("measurement_valid", sample.measurementValid)
                     .put("baseline_ready", sample.baselineReady)
                     .put("stable_weight", sample.stableWeight?.let(::roundMetricValue) ?: JSONObject.NULL)
-                    .put("weight", roundMetricValue(sample.weight))
+                    .put("weight", sample.weight?.let(::roundMetricValue) ?: JSONObject.NULL)
                     .put("distance", sample.distance?.let(::roundMetricValue) ?: JSONObject.NULL)
                     .put("ma12", sample.ma12?.let(::roundMetricValue) ?: JSONObject.NULL)
                     .put("ma3", sample.ma3?.let(::roundMetricValue) ?: JSONObject.NULL)

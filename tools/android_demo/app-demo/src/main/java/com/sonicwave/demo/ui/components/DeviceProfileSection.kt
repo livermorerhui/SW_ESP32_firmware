@@ -5,10 +5,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -21,9 +25,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.sonicwave.demo.R
+import com.sonicwave.demo.EmptyDistanceStatusUi
 import com.sonicwave.demo.UiState
+import com.sonicwave.protocol.DeviceState
 import com.sonicwave.protocol.PlatformModel
 import com.sonicwave.protocol.ProtocolMode
+import java.util.Locale
 
 @Composable
 fun DeviceProfileSection(
@@ -58,11 +65,17 @@ fun DeviceProfileSection(
                 fontWeight = FontWeight.SemiBold,
             )
 
-            Text(stringResource(R.string.device_profile_select_model), fontWeight = FontWeight.SemiBold)
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+                Text(
+                    text = stringResource(R.string.device_profile_select_model),
+                    modifier = Modifier.padding(top = 12.dp),
+                    fontWeight = FontWeight.SemiBold,
+                )
                 listOf(
                     PlatformModel.BASE,
                     PlatformModel.PLUS,
@@ -167,6 +180,136 @@ fun DeviceProfileSection(
         }
     }
 }
+
+@Composable
+fun EmptyDistanceSection(
+    uiState: UiState,
+    onSetEmptyDistance: (() -> Unit)? = null,
+    onClearEmptyDistance: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    var pendingAction by rememberSaveable { mutableStateOf<EmptyDistanceAction?>(null) }
+    val emptyState = uiState.emptyDistance
+    val verifiedDistance = emptyState.confirmedDistanceMm
+    val liveDistance = uiState.distance?.takeIf { uiState.distanceValid && it.isFinite() }
+    val hasDeviceCommand = onSetEmptyDistance != null && onClearEmptyDistance != null &&
+        uiState.emptyDistanceControlSupported == true
+    val canEdit = hasDeviceCommand && uiState.isConnected &&
+        uiState.protocolMode == ProtocolMode.PRIMARY &&
+        uiState.deviceState != DeviceState.RUNNING && !uiState.waveOutputActive &&
+        emptyState.status != EmptyDistanceStatusUi.PENDING
+
+    Card(modifier = modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.section_empty_distance),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = stringResource(
+                    R.string.empty_distance_value,
+                    verifiedDistance?.let { String.format(Locale.US, "%.2f mm", it) }
+                        ?: stringResource(R.string.empty_distance_unset),
+                ),
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = stringResource(
+                    R.string.empty_distance_live_value,
+                    liveDistance?.let { String.format(Locale.US, "%.2f mm", it) }
+                        ?: stringResource(R.string.common_not_available),
+                ),
+            )
+            if (emptyState.status != EmptyDistanceStatusUi.NOT_SET) {
+                Text(
+                    text = stringResource(
+                        when (emptyState.status) {
+                            EmptyDistanceStatusUi.NOT_SET -> R.string.empty_distance_status_unset
+                            EmptyDistanceStatusUi.PENDING -> R.string.empty_distance_status_pending
+                            EmptyDistanceStatusUi.SET -> R.string.empty_distance_status_set
+                            EmptyDistanceStatusUi.INVALID -> R.string.empty_distance_status_invalid
+                            EmptyDistanceStatusUi.READBACK_MISMATCH -> R.string.empty_distance_status_mismatch
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { pendingAction = EmptyDistanceAction.SET },
+                    enabled = canEdit && liveDistance != null,
+                ) {
+                    Text(stringResource(R.string.empty_distance_set))
+                }
+                OutlinedButton(
+                    onClick = { pendingAction = EmptyDistanceAction.CLEAR },
+                    enabled = canEdit && verifiedDistance != null,
+                ) {
+                    Text(stringResource(R.string.empty_distance_clear))
+                }
+            }
+            if (uiState.emptyDistanceControlSupported != true) {
+                Text(
+                    text = stringResource(R.string.empty_distance_protocol_pending),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+
+    pendingAction?.let { action ->
+        AlertDialog(
+            onDismissRequest = { pendingAction = null },
+            title = {
+                Text(
+                    stringResource(
+                        if (action == EmptyDistanceAction.SET) {
+                            R.string.empty_distance_set_confirm_title
+                        } else {
+                            R.string.empty_distance_clear_confirm_title
+                        },
+                    ),
+                )
+            },
+            text = {
+                Text(
+                    if (action == EmptyDistanceAction.SET) {
+                        stringResource(
+                            R.string.empty_distance_set_confirm_message,
+                            liveDistance?.let { String.format(Locale.US, "%.2f", it) }
+                                ?: stringResource(R.string.common_not_available),
+                        )
+                    } else {
+                        stringResource(R.string.empty_distance_clear_confirm_message)
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingAction = null
+                        if (action == EmptyDistanceAction.SET) onSetEmptyDistance?.invoke()
+                        else onClearEmptyDistance?.invoke()
+                    },
+                ) {
+                    Text(stringResource(R.string.action_write_to_device))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingAction = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
+}
+
+private enum class EmptyDistanceAction { SET, CLEAR }
 
 private fun modelLabel(model: PlatformModel): String {
     return when (model) {

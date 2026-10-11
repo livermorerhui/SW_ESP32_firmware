@@ -66,6 +66,10 @@ data class TelemetryPointUi(
     val weightReason: String? = null,
     val sensorBackend: String? = null,
     val ma12: Float? = null,
+    val maDistance3: Float? = null,
+    val maDistance5: Float? = null,
+    val maDistance7: Float? = null,
+    val maDistance12: Float? = null,
     val stableWeight: Float? = null,
     val ma3: Float? = null,
     val ma5: Float? = null,
@@ -86,6 +90,7 @@ data class MeasurementDisplayUiState(
     val distance: Float? = null,
     val weight: Float? = null,
     val ma12: Float? = null,
+    val maDistance12: Float? = null,
     val measurementValid: Boolean = false,
     val distanceValid: Boolean = false,
     val weightValid: Boolean = false,
@@ -95,6 +100,71 @@ data class MeasurementDisplayUiState(
     val lastMeasurementSequence: Long? = null,
     val telemetryPoints: List<TelemetryPointUi> = emptyList(),
 )
+
+enum class EmptyDistanceStatusUi {
+    NOT_SET,
+    PENDING,
+    SET,
+    INVALID,
+    READBACK_MISMATCH,
+}
+
+enum class EmptyDistanceSourceUi {
+    DEVICE_READBACK,
+    USER_SET,
+    LOCAL_ONLY,
+}
+
+/** Only a device readback can establish the distance used by the calibration fit. */
+data class EmptyDistanceState(
+    val status: EmptyDistanceStatusUi = EmptyDistanceStatusUi.NOT_SET,
+    val distanceMm: Float? = null,
+    val toleranceMm: Float? = null,
+    val backend: String? = null,
+    val source: EmptyDistanceSourceUi? = null,
+    val updatedAtMs: Long? = null,
+) {
+    val confirmedDistanceMm: Float?
+        get() = distanceMm?.takeIf {
+            status == EmptyDistanceStatusUi.SET &&
+                source == EmptyDistanceSourceUi.DEVICE_READBACK &&
+                it.isFinite() && it > 0.0f
+        }
+
+    /** A stored value is only a local cache until the ESP32 answers GET again. */
+    fun withoutDeviceConfirmation(): EmptyDistanceState = copy(
+        status = EmptyDistanceStatusUi.NOT_SET,
+        source = distanceMm?.let { EmptyDistanceSourceUi.LOCAL_ONLY },
+    )
+}
+
+enum class WeightModelStatusUi {
+    NOT_SET,
+    PENDING,
+    SET,
+    INVALID,
+    READBACK_MISMATCH,
+}
+
+data class WeightModelState(
+    val status: WeightModelStatusUi = WeightModelStatusUi.NOT_SET,
+    val type: CalibrationModelType? = null,
+    val a: Float? = null,
+    val b: Float? = null,
+    val c: Float? = null,
+    val updatedAtMs: Long? = null,
+) {
+    val c0: Float? get() = a
+    val c1: Float? get() = b
+    val c2: Float? get() = c
+
+    val isDeviceConfirmed: Boolean
+        get() = status == WeightModelStatusUi.SET && type != null &&
+            a?.isFinite() == true && b?.isFinite() == true && c?.isFinite() == true
+
+    /** Prepared coefficients and last known device coefficients are not current device truth. */
+    fun withoutDeviceConfirmation(): WeightModelState = copy(status = WeightModelStatusUi.NOT_SET)
+}
 
 data class RawConsoleUiState(
     val rawLogLines: List<String> = emptyList(),

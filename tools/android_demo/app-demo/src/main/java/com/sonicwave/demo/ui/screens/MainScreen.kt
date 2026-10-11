@@ -53,6 +53,7 @@ import com.sonicwave.demo.ui.components.CalibrationToolsSection
 import com.sonicwave.demo.ui.components.CalibrationToolsActions
 import com.sonicwave.demo.ui.components.DeviceToolsActions
 import com.sonicwave.demo.ui.components.DeviceProfileSection
+import com.sonicwave.demo.ui.components.EmptyDistanceSection
 import com.sonicwave.demo.ui.components.FallStopProtectionSection
 import com.sonicwave.demo.ui.components.MotionSamplingActions
 import com.sonicwave.demo.ui.components.MotionSamplingSection
@@ -94,11 +95,10 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
     }
     val calibrationActions = buildCalibrationToolsActions(
         viewModel = viewModel,
-        // The visible calibration action is the product-level parameter reset.
-        // SCALE:ZERO is a separate low-level device-baseline operation and must
-        // never be reached through the button labelled “参数归零”.
-        onZero = { pendingCalibrationDeviceWrite = PendingCalibrationDeviceWrite.CAL_ZERO },
-        onCalibrationZero = { pendingCalibrationDeviceWrite = PendingCalibrationDeviceWrite.CAL_ZERO },
+        // The visible calibration action is the product-level parameter reset;
+        // it clears only the weight model and never the independent D_e.
+        onZero = { pendingCalibrationDeviceWrite = PendingCalibrationDeviceWrite.CLEAR_WEIGHT_MODEL },
+        onCalibrationZero = { pendingCalibrationDeviceWrite = PendingCalibrationDeviceWrite.CLEAR_WEIGHT_MODEL },
     )
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions(),
@@ -240,7 +240,7 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
                         pendingCalibrationDeviceWrite = null
                         when (pending) {
                             PendingCalibrationDeviceWrite.SCALE_ZERO -> viewModel.sendZero()
-                            PendingCalibrationDeviceWrite.CAL_ZERO -> viewModel.sendCalibrationZero()
+                            PendingCalibrationDeviceWrite.CLEAR_WEIGHT_MODEL -> viewModel.sendCalibrationClearWeightModel()
                         }
                     },
                 ) {
@@ -272,7 +272,7 @@ private enum class PendingCalibrationDeviceWrite(
         titleRes = R.string.confirm_scale_zero_title,
         messageRes = R.string.confirm_scale_zero_message,
     ),
-    CAL_ZERO(
+    CLEAR_WEIGHT_MODEL(
         titleRes = R.string.confirm_cal_zero_title,
         messageRes = R.string.confirm_cal_zero_message,
     ),
@@ -327,6 +327,11 @@ private fun DeviceToolsContent(
         onPlatformModelSelected = actions.onPlatformModelSelected,
         onWriteDeviceConfig = actions.onWriteDeviceConfig,
     )
+    EmptyDistanceSection(
+        uiState = uiState,
+        onSetEmptyDistance = actions.onSetEmptyDistance,
+        onClearEmptyDistance = actions.onClearEmptyDistance,
+    )
     FallStopProtectionSection(
         uiState = uiState,
         onToggleEnabled = actions.onToggleFallStopEnabled,
@@ -338,6 +343,8 @@ private fun buildDeviceToolsActions(viewModel: DemoViewModel): DeviceToolsAction
     return DeviceToolsActions(
         onPlatformModelSelected = viewModel::updateSelectedPlatformModel,
         onWriteDeviceConfig = viewModel::sendDeviceConfig,
+        onSetEmptyDistance = viewModel::sendEmptyDistanceSet,
+        onClearEmptyDistance = viewModel::sendEmptyDistanceClear,
         onToggleFallStopEnabled = viewModel::setFallStopProtectionEnabled,
         onToggleLeaveProtectionEnabled = viewModel::setLeaveProtectionEnabled,
     )

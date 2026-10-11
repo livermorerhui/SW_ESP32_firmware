@@ -14,11 +14,13 @@ internal class MeasurementDisplayStore(
     private val telemetryWindowMs: Long,
 ) {
     private val telemetryPoints = ArrayDeque<TelemetryPointUi>()
+    private val recentDistances = ArrayDeque<Float>()
     private val recentWeights = ArrayDeque<Float>()
     private var state = MeasurementDisplayUiState()
 
     fun reset(): MeasurementDisplaySnapshot {
         telemetryPoints.clear()
+        recentDistances.clear()
         recentWeights.clear()
         state = MeasurementDisplayUiState()
         return currentSnapshot()
@@ -83,6 +85,7 @@ internal class MeasurementDisplayStore(
         if (distance == null) {
             return applyInvalid(sample)
         }
+        rememberRecentDistance(distance)
         if (weight != null) {
             rememberRecentWeight(weight)
         } else {
@@ -105,10 +108,14 @@ internal class MeasurementDisplayStore(
             weightReason = sample.weightReason ?: sample.reason.takeIf { !weightValid },
             sensorBackend = sample.sensorBackend,
             ma12 = sample.ma12.takeIf { sample.ma12Ready && weightValid },
+            maDistance3 = recentMovingAverage(recentDistances, 3),
+            maDistance5 = recentMovingAverage(recentDistances, 5),
+            maDistance7 = recentMovingAverage(recentDistances, 7),
+            maDistance12 = recentMovingAverage(recentDistances, 12),
             stableWeight = stableWeight.takeIf { stableWeightActive && weightValid },
-            ma3 = recentMovingAverage(3).takeIf { weightValid },
-            ma5 = recentMovingAverage(5).takeIf { weightValid },
-            ma7 = recentMovingAverage(7).takeIf { weightValid },
+            ma3 = recentMovingAverage(recentWeights, 3).takeIf { weightValid },
+            ma5 = recentMovingAverage(recentWeights, 5).takeIf { weightValid },
+            ma7 = recentMovingAverage(recentWeights, 7).takeIf { weightValid },
             stableFlag = stableWeightActive && weightValid,
         )
         appendTelemetryPoint(point)
@@ -116,6 +123,7 @@ internal class MeasurementDisplayStore(
             distance = distance,
             weight = weight,
             ma12 = sample.ma12.takeIf { sample.ma12Ready && weightValid },
+            maDistance12 = recentMovingAverage(recentDistances, 12),
             measurementValid = distanceValid && weightValid,
             distanceValid = distanceValid,
             weightValid = weightValid,
@@ -129,6 +137,7 @@ internal class MeasurementDisplayStore(
     }
 
     fun applyInvalid(sample: Event.StreamSample): MeasurementDisplaySnapshot {
+        recentDistances.clear()
         recentWeights.clear()
         val distanceValid = sample.distanceValid && sample.distance?.isFinite() == true
         val weightValid = sample.weightValid && sample.weight?.isFinite() == true
@@ -136,6 +145,7 @@ internal class MeasurementDisplayStore(
             distance = sample.distance.takeIf { distanceValid },
             weight = sample.weight.takeIf { weightValid },
             ma12 = sample.ma12.takeIf { sample.ma12Ready && weightValid },
+            maDistance12 = null,
             measurementValid = false,
             distanceValid = distanceValid,
             weightValid = weightValid,
@@ -169,12 +179,20 @@ internal class MeasurementDisplayStore(
         }
     }
 
-    private fun recentMovingAverage(windowSize: Int): Float? {
-        if (recentWeights.size < windowSize) return null
-        return recentWeights.toList().takeLast(windowSize).average().toFloat()
+    private fun rememberRecentDistance(distance: Float) {
+        recentDistances.addLast(distance)
+        while (recentDistances.size > RECENT_DISTANCE_WINDOW_MAX) {
+            recentDistances.removeFirst()
+        }
+    }
+
+    private fun recentMovingAverage(values: ArrayDeque<Float>, windowSize: Int): Float? {
+        if (values.size < windowSize) return null
+        return values.toList().takeLast(windowSize).average().toFloat()
     }
 
     private companion object {
+        private const val RECENT_DISTANCE_WINDOW_MAX = 12
         private const val RECENT_WEIGHT_WINDOW_MAX = 7
     }
 }

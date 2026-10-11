@@ -90,6 +90,25 @@
     <string name="device_config_status_timeout">Timed out waiting for device profile confirmation. Try again.</string>
     <string name="device_config_status_conflict">Unsupported model/laser selection. BASE cannot be laser-installed, and PLUS/PRO/ULTRA require laser_installed=1.</string>
     <string name="device_config_status_requires_primary">Device profile write requires a primary-protocol connection.</string>
+    <string name="section_empty_distance">Empty distance</string>
+    <string name="empty_distance_value">Empty distance: %1$s</string>
+    <string name="empty_distance_unset">not set</string>
+    <string name="empty_distance_live_value">Live distance: %1$s</string>
+    <string name="empty_distance_set">Set</string>
+    <string name="empty_distance_clear">Clear</string>
+    <string name="empty_distance_protocol_pending">The device has not confirmed empty-distance control yet. The controls stay disabled until a supported device is read back.</string>
+    <string name="empty_distance_status_unset">No device-confirmed empty distance.</string>
+    <string name="empty_distance_status_pending">Waiting for device confirmation…</string>
+    <string name="empty_distance_status_set">Device-confirmed value</string>
+    <string name="empty_distance_status_invalid">The value is invalid.</string>
+    <string name="empty_distance_status_mismatch">Device readback did not match the requested value.</string>
+    <string name="empty_distance_status_timeout">The device did not confirm the empty-distance change in time.</string>
+    <string name="empty_distance_requires_live_value">A valid live distance is required.</string>
+    <string name="empty_distance_requires_primary">Connect to a primary protocol device first.</string>
+    <string name="empty_distance_set_confirm_title">Set empty distance?</string>
+    <string name="empty_distance_clear_confirm_title">Clear empty distance?</string>
+    <string name="empty_distance_set_confirm_message">Use the current live distance (%1$s) as the empty reference. The device must confirm it before the value is shown as set.</string>
+    <string name="empty_distance_clear_confirm_message">Clear the device-confirmed empty distance. The device must confirm the change.</string>
     <string name="degraded_start_dialog_title">Laser chain requires service</string>
     <string name="degraded_start_dialog_message">The PLUS laser or MAX485 path is unavailable. Repair is recommended. Confirm to allow degraded start while measurement remains unavailable.</string>
     <string name="degraded_start_confirm_action">Confirm and continue</string>
@@ -185,6 +204,11 @@
     <string name="legend_ma3">MA3</string>
     <string name="legend_ma5">MA5</string>
     <string name="legend_ma7">MA7</string>
+    <string name="legend_distance_ma12">Distance MA12</string>
+    <string name="legend_distance_ma3">Distance MA3</string>
+    <string name="legend_distance_ma5">Distance MA5</string>
+    <string name="legend_distance_ma7">Distance MA7</string>
+    <string name="legend_weight_reference">Weight reference</string>
     <string name="chart_waiting_data">Waiting for formal measurement plane samples…</string>
     <string name="section_test_session">Current Test Session</string>
     <string name="label_test_session_hint">START only sends the request. The app creates and buffers the current test session only after the device truly enters RUNNING, and keeps it available for clear/export after STOP or auto-stop.</string>
@@ -323,10 +347,24 @@
     <string name="field_zero">Z</string>
     <string name="field_factor">K</string>
     <string name="section_calibration_tools">Calibration Tools</string>
+    <string name="section_weight_calibration">Weight calibration</string>
+    <string name="weight_calibration_supported_sensor">Applicable sensor: WANG WTX-J100-485</string>
+    <string name="weight_model_status">Weight model status: %1$s</string>
+    <string name="weight_model_status_unset">not calibrated</string>
+    <string name="weight_model_status_pending">pending device confirmation</string>
+    <string name="weight_model_status_set">calibrated and confirmed</string>
+    <string name="weight_model_status_invalid">invalid</string>
+    <string name="weight_model_status_mismatch">readback mismatch</string>
+    <string name="weight_model_type">Model type: %1$s</string>
+    <string name="weight_model_coefficients">a=%1$s, b=%2$s, c=%3$s</string>
+    <string name="weight_model_updated_at">Last updated: %1$s</string>
+    <string name="weight_model_unavailable_hint">Weight is unavailable without a device-confirmed model. Distance and ESP32 state remain usable.</string>
+    <string name="weight_model_clear_protocol_pending">Waiting for device confirmation of weight-model-only reset. Empty distance is kept separate.</string>
+    <string name="weight_model_status_timeout">The device did not confirm the weight-model reset in time.</string>
     <string name="label_calibration_hint">Use this area to observe current distance, weight, and stable weight first, then capture samples or compare models.</string>
     <string name="label_capture_hint">Capture a point only after the live values are stable enough to trust the sample.</string>
     <string name="label_calibration_workflow">Suggested Workflow</string>
-    <string name="label_calibration_workflow_steps">1. Clear parameters  2. Wait for an empty stable distance  3. Record the 0 kg anchor and loaded points  4. Review points and fitted curves  5. Select a model  6. Write the prepared model  7. Use recording separately when you need a telemetry file</string>
+    <string name="label_calibration_workflow_steps">1. Set empty distance on the Model page  2. Start weight calibration  3. Clear the old weight model when needed  4. Record loaded points  5. Review points and fitted curves  6. Select a model  7. Write the prepared model</string>
     <string name="label_calibration_step_zero">Step 1: Clear parameters</string>
     <string name="label_calibration_step_recording">Step 2: Start Recording</string>
     <string name="label_calibration_step_capture">Step 3: Capture Calibration Point</string>
@@ -351,18 +389,18 @@
     <string name="calibration_info_start_title">Start Calibration</string>
     <string name="calibration_info_start_message">Start Calibration only enters the local calibration state and enables point recording. It does not write parameters to the ESP32. Clear Parameters is used when starting a new calibration set.</string>
     <string name="calibration_info_device_zero_title">Clear Parameters</string>
-    <string name="calibration_info_device_zero_message">This clears the persisted weight model and runtime-zero state on the ESP32. It does not sample the current distance and does not create the 0 kg anchor automatically. After the success response, leave the platform unloaded, enter reference weight 0, and press Record Calibration Point; that recorded distance becomes the required empty anchor for this device.</string>
+    <string name="calibration_info_device_zero_message">The weight-model reset is separate from empty distance. It only clears a/b/c. Set or clear empty distance on the Model page; do not use a 0 kg point as a substitute.</string>
     <string name="calibration_info_record_title">Record</string>
     <string name="calibration_info_record_message">Record saves the current reference-weight input and live distance snapshot as a local calibration point. Stable weight is only a quality hint, not a hard gate.</string>
     <string name="calibration_info_prediction_title">Current Prediction</string>
     <string name="calibration_info_prediction_message">Current prediction in the table is the prediction from the app/device model at capture time, not the prediction from the newly fitted model.</string>
     <string name="calibration_info_write_title">Write Device</string>
     <string name="calibration_info_write_message">Only Write Model deploys the selected linear or quadratic model to the ESP32 through CAL:SET_MODEL. Recorded points and fitted curves remain local until then.</string>
-    <string name="label_zero_explanation">Clear the old parameters first when starting a new calibration. The unloaded distance becomes the model anchor only when you record a point with reference weight 0 kg.</string>
+    <string name="label_zero_explanation">Parameter reset only clears the weight model a/b/c. Set the device-specific empty distance on the Model page before fitting.</string>
     <string name="confirm_scale_zero_title">Write zero to device?</string>
     <string name="confirm_scale_zero_message">ZERO sends SCALE:ZERO to the ESP32 immediately and refreshes the device-side baseline. Cancel does not send anything. There is no automatic undo after writing.</string>
     <string name="confirm_cal_zero_title">Clear calibration parameters?</string>
-    <string name="confirm_cal_zero_message">CAL:ZERO clears the persisted model and runtime-zero state on the ESP32. It does not measure the current distance or set the 0 kg anchor. Cancel does not send anything.</string>
+    <string name="confirm_cal_zero_message">Clear only the device weight model (a/b/c). The independent empty distance remains unchanged.</string>
     <string name="label_recording_state_active">Recording state: active, calibration-point capture is enabled.</string>
     <string name="label_recording_state_inactive">Telemetry recording is inactive. Calibration-point capture remains available when the live distance is valid.</string>
     <string name="label_stop_recording_recommended_hint">Once sampling is complete, stop recording before moving into model selection and deployment.</string>
@@ -384,6 +422,7 @@
     <string name="label_capture_condition_connected">Device connected</string>
     <string name="label_capture_condition_reference">Reference weight valid</string>
     <string name="label_capture_condition_live_distance">Live distance snapshot available</string>
+    <string name="label_capture_condition_j100">J100-485 sensor selected</string>
     <string name="label_capture_condition_stable_advisory">Stable weight visible</string>
     <string name="label_capture_condition_live_sample_advisory">Live sample quality looks good</string>
     <string name="value_check_ok">OK</string>
@@ -441,13 +480,13 @@
     <string name="label_get_model_explanation">GET MODEL: read the currently deployed model parameters from the device.</string>
     <string name="label_set_model_explanation">SET MODEL: write the current ref/c0/c1/c2 inputs to the device for runtime weight calculation.</string>
     <string name="label_set_model_primary_explanation">Write Model deploys the currently selected/prepared model. This is the primary final action in the normal calibration flow.</string>
-    <string name="label_cal_zero_explanation">CAL:ZERO: clear the persisted model and runtime-zero state. Record a separate 0 kg point to define the device-specific empty anchor.</string>
+    <string name="label_cal_zero_explanation">The old CAL:ZERO path is kept for engineering compatibility. Empty distance is set separately on the Model page.</string>
     <string name="label_calibrate_explanation">CALIBRATE: apply the current Z/K values through SCALE:CAL. This is the legacy linear calibration path, not an automatic commit of the comparison result.</string>
     <string name="label_legacy_calibration_title">Legacy Z/K Calibration Path</string>
     <string name="label_model_reference_explanation">Model Reference: runtime ref distance. The comparison fit uses the same runtime distance unit internally.</string>
     <string name="label_model_c0_explanation">Model c0: quadratic coefficient. It is normally 0 for linear models.</string>
     <string name="label_model_c1_explanation">Model c1: linear coefficient, the main slope term.</string>
-    <string name="label_model_c2_explanation">Model c2: constant coefficient. It must be 0 so the model passes through the recorded 0 kg anchor.</string>
+    <string name="label_model_c2_explanation">Model c2: constant coefficient. With the separately configured empty distance as u=0, it should be 0 at the empty point.</string>
     <string name="label_manual_override_hint">Advanced override: editing ref/c0/c1/c2 manually replaces the auto-prepared model until you select a model again.</string>
     <string name="label_verbose_stream_logs_chip">Verbose Stream Logs</string>
     <string name="label_verbose_stream_logs_enabled_hint">Verbose measurement logging is enabled: high-frequency EVT:STREAM and RX-RAW lines will be shown for deep debugging.</string>
@@ -463,7 +502,7 @@
     <string name="label_fit_status_pass">Fit passed</string>
     <string name="label_fit_status_fail">Fit failed</string>
     <string name="label_fit_status_insufficient">Need points</string>
-    <string name="label_fit_status_missing_empty_anchor">Record a 0 kg empty anchor</string>
+    <string name="label_fit_status_missing_empty_anchor">Set empty distance on the Model page first</string>
     <string name="label_fit_status_empty_anchor_conflict">0 kg anchor distances conflict</string>
     <string name="label_fit_status_distance_out_of_range">Distance is outside this sensor range</string>
     <string name="label_fit_status_non_monotonic">Fit is not monotonic</string>
@@ -519,7 +558,7 @@
     <string name="message_invalid_model_values">Invalid calibration model values</string>
     <string name="message_model_requires_primary">Model deployment requires a connected primary device.</string>
     <string name="message_model_write_pending">A model deployment is already in progress.</string>
-    <string name="message_model_not_deployable">The model is not deployable: record a valid 0 kg anchor and pass the selected fit gates first.</string>
+    <string name="message_model_not_deployable">The model is not deployable: set a valid empty distance and pass the selected fit gates first.</string>
     <string name="message_invalid_wave_parameters">Invalid wave parameters</string>
     <string name="message_wave_range">Wave range: f=5..50, i=0..120</string>
     <string name="message_nack">NACK: %1$s</string>

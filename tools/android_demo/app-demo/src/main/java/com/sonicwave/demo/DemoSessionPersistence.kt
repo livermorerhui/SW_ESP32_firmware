@@ -11,6 +11,8 @@ internal data class DemoSessionSnapshot(
     val preparedModel: PreparedCalibrationModelUi? = null,
     val selectedModel: CalibrationModelType = CalibrationModelType.LINEAR,
     val samplingSession: MotionSamplingSessionUi? = null,
+    val emptyDistance: EmptyDistanceState = EmptyDistanceState(),
+    val weightModel: WeightModelState = WeightModelState(),
 )
 
 /**
@@ -31,6 +33,8 @@ internal class DemoSessionPersistence(context: Context) {
             })
         snapshot.preparedModel?.let { root.put("preparedModel", modelToJson(it)) }
         snapshot.samplingSession?.let { root.put("samplingSession", samplingToJson(it)) }
+        root.put("emptyDistance", emptyDistanceToJson(snapshot.emptyDistance))
+        root.put("weightModel", weightModelToJson(snapshot.weightModel))
         file.parentFile?.mkdirs()
         file.writeText(root.toString())
     }
@@ -40,7 +44,7 @@ internal class DemoSessionPersistence(context: Context) {
         if (!file.exists()) return null
         return runCatching {
             val root = JSONObject(file.readText())
-            if (root.optString("schema") != SCHEMA) return null
+            if (root.optString("schema") !in setOf(SCHEMA, LEGACY_SCHEMA)) return null
             val points = root.optJSONArray("calibrationPoints")?.let { array ->
                 (0 until array.length()).mapNotNull { pointFromJson(array.optJSONObject(it)) }
             }.orEmpty()
@@ -53,6 +57,11 @@ internal class DemoSessionPersistence(context: Context) {
                 preparedModel = prepared,
                 selectedModel = selected,
                 samplingSession = samplingFromJson(root.optJSONObject("samplingSession")),
+                // Device truth always requires a fresh GET after reconnect or process restart.
+                emptyDistance = emptyDistanceFromJson(root.optJSONObject("emptyDistance"))
+                    .withoutDeviceConfirmation(),
+                weightModel = weightModelFromJson(root.optJSONObject("weightModel"))
+                    .withoutDeviceConfirmation(),
             )
         }.getOrNull()
     }
@@ -61,6 +70,53 @@ internal class DemoSessionPersistence(context: Context) {
     fun clear() {
         file.delete()
     }
+
+    private fun emptyDistanceToJson(value: EmptyDistanceState) = JSONObject().apply {
+        put("status", value.status.name)
+        putNullable("distanceMm", value.distanceMm?.takeIf { it.isFinite() && it > 0f })
+        putNullable("toleranceMm", value.toleranceMm?.takeIf { it.isFinite() && it >= 0f })
+        putNullable("backend", value.backend)
+        putNullable("source", value.source?.name)
+        putNullable("updatedAtMs", value.updatedAtMs)
+    }
+
+    private fun emptyDistanceFromJson(json: JSONObject?): EmptyDistanceState {
+        if (json == null) return EmptyDistanceState()
+        return EmptyDistanceState(
+            status = enumOrDefault(json.optString("status"), EmptyDistanceStatusUi.NOT_SET),
+            distanceMm = floatOrNull(json, "distanceMm")?.takeIf { it.isFinite() && it > 0f },
+            toleranceMm = floatOrNull(json, "toleranceMm")?.takeIf { it.isFinite() && it >= 0f },
+            backend = stringOrNull(json, "backend"),
+            source = stringOrNull(json, "source")?.let {
+                enumOrDefault(it, EmptyDistanceSourceUi.LOCAL_ONLY)
+            },
+            updatedAtMs = longOrNull(json, "updatedAtMs"),
+        )
+    }
+
+    private fun weightModelToJson(value: WeightModelState) = JSONObject().apply {
+        put("status", value.status.name)
+        putNullable("type", value.type?.name)
+        putNullable("a", value.a?.takeIf { it.isFinite() })
+        putNullable("b", value.b?.takeIf { it.isFinite() })
+        putNullable("c", value.c?.takeIf { it.isFinite() })
+        putNullable("updatedAtMs", value.updatedAtMs)
+    }
+
+    private fun weightModelFromJson(json: JSONObject?): WeightModelState {
+        if (json == null) return WeightModelState()
+        return WeightModelState(
+            status = enumOrDefault(json.optString("status"), WeightModelStatusUi.NOT_SET),
+            type = stringOrNull(json, "type")?.let { runCatching { CalibrationModelType.valueOf(it) }.getOrNull() },
+            a = floatOrNull(json, "a")?.takeIf { it.isFinite() },
+            b = floatOrNull(json, "b")?.takeIf { it.isFinite() },
+            c = floatOrNull(json, "c")?.takeIf { it.isFinite() },
+            updatedAtMs = longOrNull(json, "updatedAtMs"),
+        )
+    }
+
+    private inline fun <reified T : Enum<T>> enumOrDefault(raw: String, fallback: T): T =
+        runCatching { enumValueOf<T>(raw) }.getOrDefault(fallback)
 
     private fun pointToJson(point: CalibrationPointUi) = JSONObject().apply {
         putNullable("index", point.index)
@@ -179,5 +235,9 @@ internal class DemoSessionPersistence(context: Context) {
     private fun intOrNull(json: JSONObject, key: String) = if (json.isNull(key) || !json.has(key)) null else json.optInt(key)
     private fun booleanOrNull(json: JSONObject, key: String) = if (json.isNull(key) || !json.has(key)) null else json.optBoolean(key)
 
-    private companion object { const val FILE_NAME = "demo_session_state.json"; const val SCHEMA = "demo_session_v1" }
+    private companion object {
+        const val FILE_NAME = "demo_session_state.json"
+        const val SCHEMA = "demo_session_v2"
+        const val LEGACY_SCHEMA = "demo_session_v1"
+    }
 }

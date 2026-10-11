@@ -183,7 +183,6 @@ internal class TestSessionBridge(
         signals: SessionCaptureSignals,
     ): TestSessionSampleUi? {
         if (session?.status != TestSessionStatusUi.RECORDING) return null
-        val weight = telemetryPoint.weight ?: return null
         return TestSessionSampleUi(
             measurementSeq = telemetryPoint.measurementSeq,
             deviceTimestampMs = telemetryPoint.deviceTimestampMs,
@@ -191,7 +190,7 @@ internal class TestSessionBridge(
             measurementValid = telemetryPoint.measurementValid,
             baselineReady = signals.baselineReady,
             stableWeight = signals.stableWeight,
-            weight = weight,
+            weight = telemetryPoint.weight,
             distance = telemetryPoint.distance,
             ma12 = telemetryPoint.ma12,
             ma3 = telemetryPoint.ma3,

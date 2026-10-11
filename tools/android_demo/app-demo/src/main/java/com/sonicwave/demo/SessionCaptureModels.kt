@@ -23,7 +23,8 @@ data class TestSessionSampleUi(
     val measurementValid: Boolean,
     val baselineReady: Boolean,
     val stableWeight: Float?,
-    val weight: Float,
+    /** Optional reference value; distance is the primary session signal. */
+    val weight: Float?,
     val distance: Float?,
     val ma12: Float?,
     val ma3: Float?,
@@ -493,7 +494,7 @@ class TestSessionManager {
             },
             baselineReady = current.baselineReady ?: samples.lastOrNull()?.baselineReady,
             stableWeight = current.stableWeight ?: samples.mapNotNull { it.stableWeight }.lastOrNull(),
-            weightRange = samples.rangeOf { it.weight },
+            weightRange = samples.rangeOfNotNull { it.weight },
             mainMa12Range = samples.rangeOfNotNull { it.mainMa12 },
             ratioMax = samples.maxOfOrNull { it.ratio ?: Float.NEGATIVE_INFINITY }
                 ?.takeIf { it.isFinite() },
@@ -502,12 +503,6 @@ class TestSessionManager {
             finalDangerDurationMs = current.finalDangerDurationMs ?: samples.lastOrNull()?.dangerDurationMs,
             sampleCount = samples.size,
         )
-    }
-
-    private fun List<TestSessionSampleUi>.rangeOf(selector: (TestSessionSampleUi) -> Float): SessionValueRangeUi? {
-        if (isEmpty()) return null
-        val values = map(selector)
-        return SessionValueRangeUi(min = values.min(), max = values.max())
     }
 
     private fun List<TestSessionSampleUi>.rangeOfNotNull(

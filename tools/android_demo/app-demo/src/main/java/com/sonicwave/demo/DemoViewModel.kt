@@ -85,6 +85,11 @@ data class UiState(
     val distanceInvalidReason: String? = null,
     val weightInvalidReason: String? = null,
     val sensorBackend: String? = null,
+    val emptyDistance: EmptyDistanceState = EmptyDistanceState(),
+    /** Null means the command has not been probed; false is a device truth. */
+    val emptyDistanceControlSupported: Boolean? = null,
+    val weightModel: WeightModelState = WeightModelState(),
+    val weightModelClearSupported: Boolean? = null,
     val lastMeasurementSequence: Long? = null,
     val telemetryPoints: List<TelemetryPointUi> = emptyList(),
     val stableWeight: Float? = null,
@@ -213,6 +218,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private var calibrationZeroTimeoutJob: Job? = null
     private var modelWriteTimeoutJob: Job? = null
     private var modelReadbackTimeoutJob: Job? = null
+    private var emptyDistanceTimeoutJob: Job? = null
+    private var weightModelClearTimeoutJob: Job? = null
+    /** Confirmed D_e before the current SET/CLEAR transaction, if any. */
+    private var pendingEmptyDistancePreviousConfirmedMm: Float? = null
     private var persistenceWriteJob: Job? = null
     private var pendingWriteModelType: CalibrationModelType? = null
     private var pendingModelReadback: PreparedCalibrationModelUi? = null
@@ -251,6 +260,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         selectedComparisonModel = snapshot.selectedModel,
                         modelType = snapshot.selectedModel,
                         preparedModel = snapshot.preparedModel,
+                        emptyDistance = snapshot.emptyDistance,
+                        weightModel = snapshot.weightModel,
                         motionSamplingSession = snapshot.samplingSession,
                         isMotionSamplingActive = false,
                     ),
@@ -271,6 +282,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 preparedModel = state.preparedModel,
                 selectedModel = state.selectedComparisonModel,
                 samplingSession = motionSamplingSessionStore,
+                emptyDistance = state.emptyDistance,
+                weightModel = state.weightModel,
             )
             withContext(Dispatchers.IO) {
                 runCatching { demoSessionPersistence.save(snapshot) }
@@ -349,6 +362,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         awaitingModelReadback = false
         modelReadbackTimeoutJob?.cancel()
         modelReadbackTimeoutJob = null
+        emptyDistanceTimeoutJob?.cancel()
+        emptyDistanceTimeoutJob = null
+        pendingEmptyDistancePreviousConfirmedMm = null
+        weightModelClearTimeoutJob?.cancel()
+        weightModelClearTimeoutJob = null
         clearPendingDeviceConfigWriteState()
         pendingWriteModelType = null
         pendingModelReadback = null
@@ -394,6 +412,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         notifyError = null,
                         streamWarning = null,
                         measurementValid = false,
+                        emptyDistance = EmptyDistanceState(),
+                        emptyDistanceControlSupported = null,
+                        weightModel = WeightModelState(),
+                        weightModelClearSupported = null,
                         lastMeasurementSequence = null,
                         ma12 = null,
                         telemetryPoints = emptyList(),
@@ -493,6 +515,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 if (nextProtocolMode == ProtocolMode.PRIMARY) {
                     appendSystemLog(text(R.string.log_canonical_protocol_confirmed))
+                    // These reads are also capability probes. Older firmware may
+                    // answer UNKNOWN_CMD; the UI then stays explicitly unset.
+                    sendEmptyDistanceGet()
+                    sendCalibrationGetModel()
                 }
                 if (shouldAttemptPrimarySnapshotRefresh(nextProtocolMode)) {
                     requestSnapshotRefresh()
@@ -537,6 +563,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         awaitingModelReadback = false
         modelReadbackTimeoutJob?.cancel()
         modelReadbackTimeoutJob = null
+        emptyDistanceTimeoutJob?.cancel()
+        emptyDistanceTimeoutJob = null
+        pendingEmptyDistancePreviousConfirmedMm = null
+        weightModelClearTimeoutJob?.cancel()
+        weightModelClearTimeoutJob = null
         clearPendingDeviceConfigWriteState()
         pendingWriteModelType = null
         pendingModelReadback = null
@@ -607,6 +638,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         motionSamplingModeEnabled = false,
                         stableWeight = null,
                         stableWeightActive = false,
+                        emptyDistance = EmptyDistanceState(),
+                        emptyDistanceControlSupported = null,
+                        weightModel = WeightModelState(),
+                        weightModelClearSupported = null,
                         measurementValid = false,
                         lastMeasurementSequence = null,
                         ma12 = null,
@@ -1139,6 +1174,173 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         sendCommand(Command.CalibrationGetModel, "CAL:GET_MODEL")
     }
 
+    /** Probe/read the device-owned empty-distance record. Local cache is never promoted to SET. */
+    fun sendEmptyDistanceGet() {
+        if (!_uiState.value.isConnected || _uiState.value.protocolMode != ProtocolMode.PRIMARY) return
+        appendSystemLog("[EMPTY_DISTANCE_UI] request EMPTY:GET")
+        viewModelScope.launch {
+            runCatching { client.send(Command.EmptyDistanceGet) }
+                .onFailure { error ->
+                    appendSystemLog("[EMPTY_DISTANCE_UI] get_send_failed reason=${error.message ?: "UNKNOWN"}")
+                }
+        }
+    }
+
+    fun sendEmptyDistanceSet() {
+        val state = _uiState.value
+        val distanceMm = state.distance?.takeIf { state.distanceValid && it.isFinite() && it > 0f }
+        if (distanceMm == null) {
+            _uiState.update { it.copy(lastAckOrError = text(R.string.empty_distance_requires_live_value)) }
+            return
+        }
+        if (!state.isConnected || state.protocolMode != ProtocolMode.PRIMARY) {
+            _uiState.update { it.copy(lastAckOrError = text(R.string.empty_distance_requires_primary)) }
+            return
+        }
+        val now = System.currentTimeMillis()
+        pendingEmptyDistancePreviousConfirmedMm = state.emptyDistance.confirmedDistanceMm
+        _uiState.update {
+            calibrationSessionStore.markEmptyDistancePending(
+                state = it,
+                distanceMm = distanceMm,
+                backend = it.sensorBackend,
+                toleranceMm = it.emptyDistance.toleranceMm,
+                nowMs = now,
+            ).copy(lastAckOrError = text(R.string.empty_distance_status_pending))
+        }
+        emptyDistanceTimeoutJob?.cancel()
+        emptyDistanceTimeoutJob = viewModelScope.launch {
+            delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+            if (_uiState.value.emptyDistance.status != EmptyDistanceStatusUi.PENDING) return@launch
+            appendSystemLog("[EMPTY_DISTANCE_UI] set timeout after ${CALIBRATION_REQUEST_TIMEOUT_MS}ms")
+            _uiState.update {
+                it.copy(
+                    emptyDistance = it.emptyDistance.copy(status = EmptyDistanceStatusUi.INVALID),
+                    lastAckOrError = text(R.string.empty_distance_status_timeout),
+                )
+            }
+        }
+        appendSystemLog("[EMPTY_DISTANCE_UI] setRequested distance_mm=$distanceMm")
+        viewModelScope.launch {
+            runCatching { client.send(Command.EmptyDistanceSet(distanceMm)) }
+                .onSuccess { _uiState.update { it.copy(lastAckOrError = text(R.string.message_sent, "EMPTY:SET")) } }
+                .onFailure { error ->
+                    emptyDistanceTimeoutJob?.cancel()
+                    emptyDistanceTimeoutJob = null
+                    pendingEmptyDistancePreviousConfirmedMm = null
+                    _uiState.update {
+                        it.copy(
+                            emptyDistance = it.emptyDistance.copy(status = EmptyDistanceStatusUi.INVALID),
+                            lastAckOrError = text(
+                                R.string.message_send_failed,
+                                "EMPTY:SET",
+                                error.message ?: text(R.string.common_not_available),
+                            ),
+                        )
+                    }
+                }
+        }
+    }
+
+    fun sendEmptyDistanceClear() {
+        val state = _uiState.value
+        if (!state.isConnected || state.protocolMode != ProtocolMode.PRIMARY) {
+            _uiState.update { it.copy(lastAckOrError = text(R.string.empty_distance_requires_primary)) }
+            return
+        }
+        pendingEmptyDistancePreviousConfirmedMm = state.emptyDistance.confirmedDistanceMm
+        _uiState.update {
+            it.copy(
+                emptyDistance = it.emptyDistance.copy(
+                    status = EmptyDistanceStatusUi.PENDING,
+                    source = EmptyDistanceSourceUi.USER_SET,
+                    updatedAtMs = System.currentTimeMillis(),
+                ),
+                lastAckOrError = text(R.string.empty_distance_status_pending),
+            )
+        }
+        emptyDistanceTimeoutJob?.cancel()
+        emptyDistanceTimeoutJob = viewModelScope.launch {
+            delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+            if (_uiState.value.emptyDistance.status != EmptyDistanceStatusUi.PENDING) return@launch
+            appendSystemLog("[EMPTY_DISTANCE_UI] clear timeout after ${CALIBRATION_REQUEST_TIMEOUT_MS}ms")
+            _uiState.update {
+                it.copy(
+                    emptyDistance = it.emptyDistance.copy(status = EmptyDistanceStatusUi.INVALID),
+                    lastAckOrError = text(R.string.empty_distance_status_timeout),
+                )
+            }
+        }
+        appendSystemLog("[EMPTY_DISTANCE_UI] clearRequested")
+        viewModelScope.launch {
+            runCatching { client.send(Command.EmptyDistanceClear) }
+                .onSuccess { _uiState.update { it.copy(lastAckOrError = text(R.string.message_sent, "EMPTY:CLEAR")) } }
+                .onFailure { error ->
+                    emptyDistanceTimeoutJob?.cancel()
+                    emptyDistanceTimeoutJob = null
+                    pendingEmptyDistancePreviousConfirmedMm = null
+                    _uiState.update {
+                        it.copy(
+                            emptyDistance = it.emptyDistance.copy(status = EmptyDistanceStatusUi.INVALID),
+                            lastAckOrError = text(
+                                R.string.message_send_failed,
+                                "EMPTY:CLEAR",
+                                error.message ?: text(R.string.common_not_available),
+                            ),
+                        )
+                    }
+                }
+        }
+    }
+
+    fun sendCalibrationClearWeightModel() {
+        val state = _uiState.value
+        if (!state.isConnected || state.protocolMode != ProtocolMode.PRIMARY) {
+            _uiState.update { it.copy(lastAckOrError = text(R.string.message_model_requires_primary)) }
+            return
+        }
+        _uiState.update {
+            it.copy(
+                weightModel = it.weightModel.copy(
+                    status = WeightModelStatusUi.PENDING,
+                    updatedAtMs = System.currentTimeMillis(),
+                ),
+                lastAckOrError = text(R.string.weight_model_status_pending),
+            )
+        }
+        weightModelClearTimeoutJob?.cancel()
+        weightModelClearTimeoutJob = viewModelScope.launch {
+            delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+            if (_uiState.value.weightModel.status != WeightModelStatusUi.PENDING) return@launch
+            appendSystemLog("[CAL_UI] clearWeightModel timeout after ${CALIBRATION_REQUEST_TIMEOUT_MS}ms")
+            _uiState.update {
+                it.copy(
+                    weightModel = it.weightModel.copy(status = WeightModelStatusUi.INVALID),
+                    lastAckOrError = text(R.string.weight_model_status_timeout),
+                )
+            }
+        }
+        appendSystemLog("[CAL_UI] clearWeightModelRequested")
+        viewModelScope.launch {
+            runCatching { client.send(Command.CalibrationClearWeightModel) }
+                .onSuccess { _uiState.update { it.copy(lastAckOrError = text(R.string.message_sent, "CAL:CLEAR_WEIGHT_MODEL")) } }
+                .onFailure { error ->
+                    weightModelClearTimeoutJob?.cancel()
+                    weightModelClearTimeoutJob = null
+                    _uiState.update {
+                        it.copy(
+                            weightModel = it.weightModel.copy(status = WeightModelStatusUi.INVALID),
+                            lastAckOrError = text(
+                                R.string.message_send_failed,
+                                "CAL:CLEAR_WEIGHT_MODEL",
+                                error.message ?: text(R.string.common_not_available),
+                            ),
+                        )
+                    }
+                }
+        }
+    }
+
     private fun modelReadbackMatches(
         expected: PreparedCalibrationModelUi,
         actual: Event.CalibrationModel,
@@ -1278,7 +1480,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         pendingWriteModelType = prepared.type
         pendingModelReadback = prepared
         _uiState.update {
-            it.copy(
+            calibrationSessionStore.markWeightModelPending(
+                state = it,
+                model = prepared,
+                nowMs = System.currentTimeMillis(),
+            ).copy(
                 writeModelStatus = writeModelFeedback(
                     kind = WriteModelFeedbackKind.PENDING,
                     message = text(
@@ -2119,6 +2325,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                     showDegradedStartDialog = false,
                                     captureStatus = null,
                                     writeModelStatus = null,
+                                    emptyDistance = EmptyDistanceState(),
+                                    emptyDistanceControlSupported = null,
+                                    weightModel = WeightModelState(),
+                                    weightModelClearSupported = null,
                                     deviceConfigStatus = null,
                                     isDeviceConfigWritePending = false,
                                     fallStopEnabled = true,
@@ -2547,6 +2757,151 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
 
+                    is Event.EmptyDistanceResult -> {
+                        if (!event.supported) {
+                            emptyDistanceTimeoutJob?.cancel()
+                            emptyDistanceTimeoutJob = null
+                            _uiState.update {
+                                it.copy(
+                                    emptyDistance = EmptyDistanceState(),
+                                    emptyDistanceControlSupported = false,
+                                    lastAckOrError = event.raw,
+                                )
+                            }
+                            appendSystemLog("[EMPTY_DISTANCE_UI] unsupported raw=${event.raw}")
+                        } else if (!event.success) {
+                            emptyDistanceTimeoutJob?.cancel()
+                            emptyDistanceTimeoutJob = null
+                            _uiState.update {
+                                it.copy(
+                                    emptyDistance = it.emptyDistance.copy(
+                                        status = EmptyDistanceStatusUi.READBACK_MISMATCH,
+                                        updatedAtMs = System.currentTimeMillis(),
+                                    ),
+                                    emptyDistanceControlSupported = true,
+                                    lastAckOrError = formatNackMessage(event.reason ?: "UNKNOWN"),
+                                )
+                            }
+                            appendSystemLog("[EMPTY_DISTANCE_UI] failure op=${event.operation ?: "UNKNOWN"} reason=${event.reason ?: "UNKNOWN"}")
+                        } else {
+                            val status = event.status?.uppercase()
+                            val operation = event.operation?.uppercase()
+                            val isFinalReadback = operation == "GET"
+                            if (!isFinalReadback) {
+                                // SET/CLEAR ACK confirms command acceptance only.
+                                // The device record is authoritative after a
+                                // second EMPTY:GET readback.
+                                _uiState.update {
+                                    it.copy(
+                                        emptyDistance = it.emptyDistance.copy(
+                                            status = EmptyDistanceStatusUi.PENDING,
+                                            updatedAtMs = System.currentTimeMillis(),
+                                        ),
+                                        emptyDistanceControlSupported = true,
+                                        lastAckOrError = event.raw,
+                                    )
+                                }
+                                appendSystemLog(
+                                    "[EMPTY_DISTANCE_UI] commandAck op=${operation ?: "UNKNOWN"}; requesting GET readback",
+                                )
+                                sendEmptyDistanceGet()
+                            } else {
+                                emptyDistanceTimeoutJob?.cancel()
+                                emptyDistanceTimeoutJob = null
+                                val current = _uiState.value.emptyDistance
+                                val previousConfirmedDistanceMm = pendingEmptyDistancePreviousConfirmedMm
+                                pendingEmptyDistancePreviousConfirmedMm = null
+                                val expected = current.distanceMm
+                                val readbackDistanceMm = event.distanceMm
+                                val matchesPendingSet = status == "SET" &&
+                                    current.status == EmptyDistanceStatusUi.PENDING &&
+                                    expected != null && readbackDistanceMm != null &&
+                                    kotlin.math.abs(expected - readbackDistanceMm) <=
+                                        (event.toleranceMm ?: current.toleranceMm ?: 0.10f)
+                                val nextState = when {
+                                    status == "SET" && current.source == EmptyDistanceSourceUi.USER_SET &&
+                                        expected != null && !matchesPendingSet -> current.copy(
+                                            status = EmptyDistanceStatusUi.READBACK_MISMATCH,
+                                            updatedAtMs = System.currentTimeMillis(),
+                                        )
+                                    status == "SET" -> calibrationSessionStore.markEmptyDistanceReadback(
+                                        state = _uiState.value,
+                                        distanceMm = event.distanceMm,
+                                        backend = event.backend,
+                                        toleranceMm = event.toleranceMm,
+                                        nowMs = System.currentTimeMillis(),
+                                    ).emptyDistance
+                                    status == "UNSET" || status == "CLEARED" ||
+                                        status == "NOT_SET" || status == "LEGACY" -> EmptyDistanceState()
+                                    else -> EmptyDistanceState()
+                                }
+                                val emptyDistanceChanged = when {
+                                    status == "UNSET" || status == "CLEARED" || status == "NOT_SET" ->
+                                        previousConfirmedDistanceMm != null
+                                    status == "SET" && previousConfirmedDistanceMm != null && readbackDistanceMm != null ->
+                                        kotlin.math.abs(previousConfirmedDistanceMm - readbackDistanceMm) >
+                                            (event.toleranceMm ?: current.toleranceMm ?: 0.10f)
+                                    else -> false
+                                }
+                                _uiState.update { state ->
+                                    var updated = state.copy(
+                                        emptyDistance = nextState,
+                                        emptyDistanceControlSupported = true,
+                                        lastAckOrError = event.raw,
+                                    )
+                                    if (emptyDistanceChanged) {
+                                        // Firmware invalidates a weight model when D_e
+                                        // changes or is cleared. Mirror that fact in
+                                        // the APP before rebuilding the fit UI.
+                                        updated = calibrationSessionStore.rebuildComparison(
+                                            updated.copy(
+                                                latestModel = null,
+                                                weightModel = WeightModelState(),
+                                                preparedModel = null,
+                                                writeModelStatus = null,
+                                            ),
+                                        )
+                                    }
+                                    updated
+                                }
+                                persistSessions()
+                                appendSystemLog(
+                                    "[EMPTY_DISTANCE_UI] readback op=GET status=${status ?: "UNKNOWN"} distance_mm=${event.distanceMm ?: "-"}",
+                                )
+                            }
+                        }
+                    }
+
+                    is Event.WeightModelClearResult -> {
+                        if (event.success) {
+                            weightModelClearTimeoutJob?.cancel()
+                            weightModelClearTimeoutJob = null
+                            _uiState.update {
+                                it.copy(
+                                    weightModel = WeightModelState(),
+                                    latestModel = null,
+                                    weightModelClearSupported = true,
+                                    writeModelStatus = null,
+                                    lastAckOrError = event.raw,
+                                )
+                            }
+                            appendSystemLog("[CAL_UI] clearWeightModelResult=SUCCESS emptyDistancePreserved=true")
+                            persistSessions()
+                            sendCalibrationGetModel()
+                        } else {
+                            weightModelClearTimeoutJob?.cancel()
+                            weightModelClearTimeoutJob = null
+                            _uiState.update {
+                                it.copy(
+                                    weightModel = it.weightModel.copy(status = WeightModelStatusUi.INVALID),
+                                    weightModelClearSupported = event.supported,
+                                    lastAckOrError = formatNackMessage(event.reason ?: "UNKNOWN"),
+                                )
+                            }
+                            appendSystemLog("[CAL_UI] clearWeightModelResult=FAILURE reason=${event.reason ?: "UNKNOWN"}")
+                        }
+                    }
+
                     is Event.CalibrationModel -> {
                         val type = event.type ?: CalibrationModelType.LINEAR
                         val latestModel = CalibrationModelUi(
@@ -2561,6 +2916,40 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         val pending = pendingModelReadback
                         val isReadback = awaitingModelReadback && pending != null
                         val readbackMatches = isReadback && modelReadbackMatches(pending!!, event)
+                        val deviceWeightModel = if (isReadback && !readbackMatches) {
+                            WeightModelState(
+                                status = WeightModelStatusUi.READBACK_MISMATCH,
+                                type = event.type,
+                                a = event.c0,
+                                b = event.c1,
+                                c = event.c2,
+                                updatedAtMs = System.currentTimeMillis(),
+                            )
+                        } else if (
+                            event.ready == true &&
+                            event.type != null &&
+                            event.c0?.isFinite() == true &&
+                            event.c1?.isFinite() == true &&
+                            event.c2?.isFinite() == true
+                        ) {
+                            WeightModelState(
+                                status = WeightModelStatusUi.SET,
+                                type = event.type,
+                                a = event.c0,
+                                b = event.c1,
+                                c = event.c2,
+                                updatedAtMs = System.currentTimeMillis(),
+                            )
+                        } else {
+                            WeightModelState(
+                                status = WeightModelStatusUi.NOT_SET,
+                                type = event.type,
+                                a = event.c0,
+                                b = event.c1,
+                                c = event.c2,
+                                updatedAtMs = System.currentTimeMillis(),
+                            )
+                        }
                         if (isReadback) {
                             awaitingModelReadback = false
                             modelReadbackTimeoutJob?.cancel()
@@ -2601,6 +2990,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             calibrationSessionStore.synchronizeModelSelectionUi(
                                 state.copy(
                                     latestModel = latestModel,
+                                    weightModel = deviceWeightModel,
+                                    weightModelClearSupported = true,
                                     lastAckOrError = event.raw,
                                     writeModelStatus = readbackStatus ?: state.writeModelStatus,
                                 ),
@@ -2762,6 +3153,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         if (event.success) {
                             _uiState.update { state ->
                                 calibrationSessionStore.reset(state).copy(
+                                    // Legacy CAL:ZERO may still be emitted by an
+                                    // older operator tool. Preserve independent
+                                    // D_e while clearing the local weight truth.
+                                    weightModel = WeightModelState(),
+                                    latestModel = null,
                                     lastAckOrError = event.raw,
                                     captureStatus = captureFeedback(
                                         kind = CaptureFeedbackKind.SUCCESS,
@@ -3046,11 +3442,48 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         } else {
                             null
                         }
+                        val unknownCommand = event.reason.contains("UNKNOWN", ignoreCase = true) ||
+                            event.reason.contains("UNSUPPORTED", ignoreCase = true)
+                        val emptyDistanceUnsupported = unknownCommand &&
+                            _uiState.value.emptyDistanceControlSupported == null
+                        val weightModelClearUnsupported = unknownCommand &&
+                            _uiState.value.weightModel.status == WeightModelStatusUi.PENDING
+                        if (emptyDistanceUnsupported ||
+                            _uiState.value.emptyDistance.status == EmptyDistanceStatusUi.PENDING
+                        ) {
+                            emptyDistanceTimeoutJob?.cancel()
+                            emptyDistanceTimeoutJob = null
+                        }
+                        if (weightModelClearUnsupported ||
+                            _uiState.value.weightModel.status == WeightModelStatusUi.PENDING
+                        ) {
+                            weightModelClearTimeoutJob?.cancel()
+                            weightModelClearTimeoutJob = null
+                        }
+                        val emptyDistancePending =
+                            _uiState.value.emptyDistance.status == EmptyDistanceStatusUi.PENDING
+                        val weightModelClearPending =
+                            _uiState.value.weightModel.status == WeightModelStatusUi.PENDING
+                        if (emptyDistancePending) {
+                            pendingEmptyDistancePreviousConfirmedMm = null
+                        }
                         _uiState.update {
                             it.copy(
                                 lastAckOrError = text(R.string.message_error, event.reason),
                                 captureStatus = captureStatus ?: it.captureStatus,
                                 writeModelStatus = writeModelStatus ?: it.writeModelStatus,
+                                emptyDistance = when {
+                                    emptyDistanceUnsupported -> EmptyDistanceState()
+                                    emptyDistancePending -> it.emptyDistance.copy(status = EmptyDistanceStatusUi.INVALID)
+                                    else -> it.emptyDistance
+                                },
+                                emptyDistanceControlSupported = if (emptyDistanceUnsupported) false else it.emptyDistanceControlSupported,
+                                weightModel = when {
+                                    weightModelClearUnsupported -> WeightModelState()
+                                    weightModelClearPending -> it.weightModel.copy(status = WeightModelStatusUi.INVALID)
+                                    else -> it.weightModel
+                                },
+                                weightModelClearSupported = if (weightModelClearUnsupported) false else it.weightModelClearSupported,
                                 deviceConfigStatus = deviceConfigStatus ?: it.deviceConfigStatus,
                                 isDeviceConfigWritePending = deviceConfigWriteTracker.isPending,
                             )
@@ -3110,21 +3543,38 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val displayState = measurementDisplayStore.currentSnapshot().state
 
         _measurementDisplayState.value = displayState
-        _uiState.update {
-            calibrationSessionStore.withCaptureAvailability(
-                it.copy(
-                    distance = displayState.distance,
-                    weight = displayState.weight,
-                    ma12 = displayState.ma12,
-                    measurementValid = displayState.measurementValid,
-                    distanceValid = displayState.distanceValid,
-                    weightValid = displayState.weightValid,
-                    distanceInvalidReason = displayState.distanceReason,
-                    weightInvalidReason = displayState.weightReason,
-                    sensorBackend = displayState.sensorBackend,
-                    lastMeasurementSequence = displayState.lastMeasurementSequence,
-                ),
+        _uiState.update { current ->
+            val backendChanged = !current.sensorBackend.isNullOrBlank() &&
+                !displayState.sensorBackend.isNullOrBlank() &&
+                !current.sensorBackend.equals(displayState.sensorBackend, ignoreCase = true)
+            var next = current.copy(
+                distance = displayState.distance,
+                weight = displayState.weight,
+                ma12 = displayState.ma12,
+                measurementValid = displayState.measurementValid,
+                distanceValid = displayState.distanceValid,
+                weightValid = displayState.weightValid,
+                distanceInvalidReason = displayState.distanceReason,
+                weightInvalidReason = displayState.weightReason,
+                sensorBackend = displayState.sensorBackend,
+                lastMeasurementSequence = displayState.lastMeasurementSequence,
             )
+            if (backendChanged) {
+                next = calibrationSessionStore.invalidateEmptyDistanceForBackend(next, displayState.sensorBackend)
+                // A backend switch invalidates the device-owned D_e and any
+                // deployed weight model tied to that coordinate system. Keep
+                // recorded points for later review, but do not show the old
+                // model as current-device truth.
+                next = calibrationSessionStore.rebuildComparison(
+                    next.copy(
+                        latestModel = null,
+                        weightModel = WeightModelState(),
+                        preparedModel = null,
+                        writeModelStatus = null,
+                    ),
+                )
+            }
+            calibrationSessionStore.withCaptureAvailability(next)
         }
     }
 
@@ -3359,7 +3809,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         val trackTestSessions = shouldTrackTestSessionAutomation(currentState)
-        val testSessionSample = if (trackTestSessions && completeSample && weight != null) {
+        val testSessionSample = if (trackTestSessions) {
             buildTestSessionSample(
                 telemetryPoint = point,
                 signals = currentSignals,
@@ -4217,7 +4667,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val distance = state.distance
         return distance != null &&
             distance.isFinite() &&
-            state.measurementValid
+            state.distanceValid
     }
 
     private fun hasVisibleCaptureQuality(state: UiState): Boolean {

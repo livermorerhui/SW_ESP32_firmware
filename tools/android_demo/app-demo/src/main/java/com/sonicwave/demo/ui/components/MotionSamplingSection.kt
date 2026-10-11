@@ -776,17 +776,12 @@ private fun MotionSamplingChart(
     rows: List<MotionSamplingRowUi>,
     appliedMaPoints: Int,
     distanceAverageSeries: List<MotionChartPoint>,
-    liveWeightAverageSeries: List<MotionChartPoint>,
+    @Suppress("UNUSED_PARAMETER") liveWeightAverageSeries: List<MotionChartPoint>,
 ) {
     val distanceColor = Color(0xFF0284C7)
-    val weightColor = Color(0xFFC2410C)
     val gridColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
     val distanceRawSeries = rows.map { MotionChartPoint(elapsedMs = it.elapsedMs, value = it.distanceMm) }
-    val liveWeightRawSeries = rows.mapNotNull {
-        it.liveWeightKg?.let { weight -> MotionChartPoint(elapsedMs = it.elapsedMs, value = weight) }
-    }
     val distanceRange = motionValueRange((distanceRawSeries + distanceAverageSeries).map { it.value })
-    val weightRange = motionValueRange((liveWeightRawSeries + liveWeightAverageSeries).map { it.value })
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -794,12 +789,6 @@ private fun MotionSamplingChart(
                 label = stringResource(R.string.legend_distance),
                 detail = formatRange(distanceRange.first, distanceRange.second),
                 color = distanceColor,
-                modifier = Modifier.weight(1f),
-            )
-            MotionLegendChip(
-                label = stringResource(R.string.legend_weight),
-                detail = formatRange(weightRange.first, weightRange.second),
-                color = weightColor,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -863,31 +852,6 @@ private fun MotionSamplingChart(
                         style = Stroke(width = 4f),
                     )
 
-                    drawPath(
-                        path = buildMotionPath(
-                            points = liveWeightRawSeries,
-                            width = width,
-                            height = height,
-                            maxElapsed = lastElapsed,
-                            minValue = weightRange.first,
-                            maxValue = weightRange.second,
-                        ),
-                        color = weightColor.copy(alpha = 0.42f),
-                        style = Stroke(width = 2f),
-                    )
-
-                    drawPath(
-                        path = buildMotionPath(
-                            points = liveWeightAverageSeries,
-                            width = width,
-                            height = height,
-                            maxElapsed = lastElapsed,
-                            minValue = weightRange.first,
-                            maxValue = weightRange.second,
-                        ),
-                        color = weightColor,
-                        style = Stroke(width = 4f),
-                    )
                 }
             }
         }
