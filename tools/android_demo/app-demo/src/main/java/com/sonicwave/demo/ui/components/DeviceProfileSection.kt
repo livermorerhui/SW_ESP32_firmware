@@ -27,6 +27,8 @@ import androidx.compose.ui.unit.dp
 import com.sonicwave.demo.R
 import com.sonicwave.demo.EmptyDistanceStatusUi
 import com.sonicwave.demo.UiState
+import com.sonicwave.demo.WriteModelFeedbackKind
+import com.sonicwave.demo.WeightModelStatusUi
 import com.sonicwave.protocol.DeviceState
 import com.sonicwave.protocol.PlatformModel
 import com.sonicwave.protocol.ProtocolMode
@@ -91,6 +93,11 @@ fun DeviceProfileSection(
                     confirmedDevice &&
                     !uiState.waveOutputActive &&
                     !uiState.isDeviceConfigWritePending &&
+                    !uiState.profileRuntimeRefreshPending &&
+                    uiState.emptyDistance.status != EmptyDistanceStatusUi.PENDING &&
+                    uiState.weightModel.status != WeightModelStatusUi.PENDING &&
+                    !uiState.emptyModelReadbackPending &&
+                    uiState.writeModelStatus?.kind != WriteModelFeedbackKind.PENDING &&
                     (uiState.selectedPlatformModel != uiState.devicePlatformModel ||
                         uiState.selectedPlatformModel == PlatformModel.BASE),
             ) {
@@ -162,6 +169,11 @@ fun SensorProfileSection(
                     uiState.devicePlatformModel == PlatformModel.PLUS &&
                     !uiState.waveOutputActive &&
                     !uiState.isDeviceConfigWritePending &&
+                    !uiState.profileRuntimeRefreshPending &&
+                    uiState.emptyDistance.status != EmptyDistanceStatusUi.PENDING &&
+                    uiState.weightModel.status != WeightModelStatusUi.PENDING &&
+                    !uiState.emptyModelReadbackPending &&
+                    uiState.writeModelStatus?.kind != WriteModelFeedbackKind.PENDING &&
                     uiState.selectedSensorProfile != current,
             ) {
                 Text(
@@ -210,6 +222,10 @@ fun EmptyDistanceSection(
         uiState.deviceSensorProfile != null && uiState.deviceSensorProfile != SensorProfile.NONE &&
         uiState.deviceState != DeviceState.RUNNING && !uiState.waveOutputActive &&
         !uiState.isDeviceConfigWritePending &&
+        !uiState.profileRuntimeRefreshPending &&
+        uiState.writeModelStatus?.kind != WriteModelFeedbackKind.PENDING &&
+        uiState.weightModel.status != WeightModelStatusUi.PENDING &&
+        !uiState.emptyModelReadbackPending &&
         emptyState.status != EmptyDistanceStatusUi.PENDING
 
     Card(modifier = modifier.fillMaxWidth()) {

@@ -576,6 +576,8 @@
     <string name="message_invalid_model_values">校准模型参数无效</string>
     <string name="message_model_requires_primary">模型写入需要已连接且能力确认完成的 primary 设备。</string>
     <string name="message_model_write_pending">已有模型写入正在处理中，请等待结果。</string>
+    <string name="message_model_wait_empty_readback">正在核对空载距离修改后的体重模型；若一直未完成，请重新连接设备。</string>
+    <string name="message_model_empty_readback_reconnect">空载距离修改后的体重模型未能核对；请重新连接设备，重新读取后再写入模型。</string>
     <string name="message_model_not_deployable">模型暂不可写入：请先设置有效空载距离，并通过所选拟合的全部门槛。</string>
     <string name="message_invalid_wave_parameters">波形参数无效</string>
     <string name="message_wave_range">参数范围：频率 5..50，强度 0..120</string>

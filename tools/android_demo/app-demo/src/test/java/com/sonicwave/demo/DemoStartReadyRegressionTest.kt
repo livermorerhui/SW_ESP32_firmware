@@ -13,6 +13,19 @@ import kotlin.test.assertTrue
 
 class DemoStartReadyRegressionTest {
     @Test
+    fun modelMutationsWaitForProfileAndEmptyDistanceTransactions() {
+        val ready = UiState()
+        assertFalse(ready.calibrationModelMutationBlocked())
+        assertTrue(ready.copy(profileRuntimeRefreshPending = true).calibrationModelMutationBlocked())
+        assertTrue(ready.copy(isDeviceConfigWritePending = true).calibrationModelMutationBlocked())
+        assertTrue(ready.copy(emptyDistance = EmptyDistanceState(status = EmptyDistanceStatusUi.PENDING))
+            .calibrationModelMutationBlocked())
+        assertTrue(ready.copy(emptyModelReadbackPending = true).calibrationModelMutationBlocked())
+        assertTrue(ready.copy(weightModel = WeightModelState(status = WeightModelStatusUi.PENDING))
+            .calibrationModelMutationBlocked())
+    }
+
+    @Test
     fun lifecycleRefreshPreservesKnownReadyOnFalseSnapshot() {
         assertEquals(
             expected = true,
@@ -85,6 +98,19 @@ class DemoStartReadyRegressionTest {
         )
 
         assertTrue(state.canStartWave())
+    }
+
+    @Test
+    fun profileWriteAndPostWriteSnapshotBothBlockOldStartReady() {
+        val ready = UiState(
+            isConnected = true,
+            devicePlatformModel = PlatformModel.PLUS,
+            deviceStartReady = true,
+        )
+        assertTrue(ready.canStartWave())
+        assertFalse(ready.copy(isDeviceConfigWritePending = true).canStartWave())
+        assertFalse(ready.copy(profileRuntimeRefreshPending = true).canStartWave())
+        assertTrue(ready.copy(profileRuntimeRefreshPending = false).canStartWave())
     }
 
     @Test

@@ -469,6 +469,7 @@ fun UiState.waveStartAvailability(): WaveStartAvailabilityUi {
         isWaveStopPending -> WaveStartAvailabilityUi.STOP_PENDING
         isWaveStartPending -> WaveStartAvailabilityUi.START_PENDING
         waveOutputActive -> WaveStartAvailabilityUi.RUNNING
+        isDeviceConfigWritePending || profileRuntimeRefreshPending -> WaveStartAvailabilityUi.NOT_READY
         !hasValidWaveInputs() -> WaveStartAvailabilityUi.INVALID_PARAMETERS
         leftPlatformBlocked -> WaveStartAvailabilityUi.LEFT_PLATFORM_BLOCKED
         abnormalStopBlocked -> WaveStartAvailabilityUi.ABNORMAL_STOP_BLOCKED
@@ -479,6 +480,13 @@ fun UiState.waveStartAvailability(): WaveStartAvailabilityUi {
 }
 
 fun UiState.canStartWave(): Boolean = waveStartAvailability() == WaveStartAvailabilityUi.READY
+
+/** Device model writes and clears must wait for profile and empty-distance truth. */
+fun UiState.calibrationModelMutationBlocked(): Boolean =
+    isDeviceConfigWritePending || profileRuntimeRefreshPending ||
+        emptyDistance.status == EmptyDistanceStatusUi.PENDING || emptyModelReadbackPending ||
+        weightModel.status == WeightModelStatusUi.PENDING ||
+        writeModelStatus?.kind == WriteModelFeedbackKind.PENDING
 
 internal fun isBaseDeliveryProfile(state: UiState): Boolean {
     return state.devicePlatformModel == PlatformModel.BASE

@@ -12,6 +12,18 @@ class CalibrationSessionStoreTest {
     private val store = CalibrationSessionStore()
 
     @Test
+    fun failedEmptyReadbackRequiresReconnectInsteadOfWaitingForever() {
+        val failed = store.markEmptyVerificationNeedsReconnect(UiState(
+            emptyDistance = EmptyDistanceState(status = EmptyDistanceStatusUi.INVALID),
+            weightModel = WeightModelState(status = WeightModelStatusUi.SET),
+        ))
+
+        assertTrue(failed.emptyModelReadbackPending)
+        assertTrue(failed.emptyModelReadbackNeedsReconnect)
+        assertFalse(failed.weightModel.isDeviceConfirmed)
+    }
+
+    @Test
     fun captureAvailabilityRequiresConnectionRecordingReferenceAndDistance() {
         val unavailable = store.withCaptureAvailability(
             UiState(
@@ -218,6 +230,59 @@ class CalibrationSessionStoreTest {
     }
 
     @Test
+    fun resettingEmptyDistanceToTheSameValueRevokesThePreviouslyConfirmedModel() {
+        val before = stateWithConfirmedEmptyAndModel()
+        val pending = store.markModelUnverifiedForEmptyMutation(
+            store.markEmptyDistancePending(before, 112.33f, "LASER_485", 0.10f, 10L),
+        )
+        assertFalse(pending.weightModel.isDeviceConfirmed)
+        assertEquals(WeightModelStatusUi.INVALID, pending.weightModel.status)
+        assertNull(pending.latestModel)
+        assertFalse(pending.canDeployCalibrationModel)
+
+        val failedReadback = store.markModelUnverifiedForEmptyMutation(pending.copy(
+            emptyDistance = pending.emptyDistance.copy(status = EmptyDistanceStatusUi.INVALID),
+        ))
+        assertEquals(WeightModelStatusUi.INVALID, failedReadback.weightModel.status)
+
+        val confirmed = store.applyProfileEmptyReadback(
+            pending,
+            confirmedEmptyDistance(112.33f),
+            revision = 5L,
+            raw = "ACK:EMPTY op=GET status=SET empty_revision=5",
+            modelInvalidated = true,
+        )
+        assertEquals(112.33f, confirmed.emptyDistance.confirmedDistanceMm)
+        assertEquals(5L, confirmed.deviceEmptyRevision)
+        assertEquals(WeightModelStatusUi.NOT_SET, confirmed.weightModel.status)
+        assertNull(confirmed.latestModel)
+        assertTrue(confirmed.emptyModelReadbackPending)
+        assertFalse(confirmed.emptyModelReadbackNeedsReconnect)
+    }
+
+    @Test
+    fun clearingEmptyDistanceRevokesThePreviouslyConfirmedModel() {
+        val before = stateWithConfirmedEmptyAndModel()
+        val pending = store.markModelUnverifiedForEmptyMutation(
+            before.copy(emptyDistance = before.emptyDistance.copy(status = EmptyDistanceStatusUi.PENDING)),
+        )
+        val confirmed = store.applyProfileEmptyReadback(
+            pending,
+            EmptyDistanceState(),
+            revision = 5L,
+            raw = "ACK:EMPTY op=GET status=UNSET empty_revision=5",
+            modelInvalidated = true,
+        )
+
+        assertNull(confirmed.emptyDistance.confirmedDistanceMm)
+        assertEquals(WeightModelStatusUi.NOT_SET, confirmed.weightModel.status)
+        assertNull(confirmed.latestModel)
+        assertFalse(confirmed.canDeployCalibrationModel)
+        assertTrue(confirmed.emptyModelReadbackPending)
+        assertFalse(confirmed.emptyModelReadbackNeedsReconnect)
+    }
+
+    @Test
     fun emptyDistanceStateRequiresDeviceReadbackBeforeFitUsesIt() {
         val pending = store.markEmptyDistancePending(
             state = UiState(),
@@ -281,6 +346,27 @@ class CalibrationSessionStoreTest {
         distanceMm = distanceMm,
         backend = "LASER_485",
         source = EmptyDistanceSourceUi.DEVICE_READBACK,
+    )
+
+    private fun stateWithConfirmedEmptyAndModel() = UiState(
+        deviceEmptyRevision = 4L,
+        emptyDistance = confirmedEmptyDistance(112.33f),
+        canDeployCalibrationModel = true,
+        latestModel = CalibrationModelUi(
+            type = CalibrationModelType.LINEAR,
+            referenceDistance = 1.1233f,
+            c0 = 0f,
+            c1 = 25f,
+            c2 = 0f,
+            ready = true,
+        ),
+        weightModel = WeightModelState(
+            status = WeightModelStatusUi.SET,
+            type = CalibrationModelType.LINEAR,
+            a = 0f,
+            b = 25f,
+            c = 0f,
+        ),
     )
 
     private fun point(

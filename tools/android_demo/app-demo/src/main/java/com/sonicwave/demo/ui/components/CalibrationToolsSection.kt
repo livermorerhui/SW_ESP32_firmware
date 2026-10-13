@@ -48,6 +48,7 @@ import com.sonicwave.demo.R
 import com.sonicwave.demo.UiState
 import com.sonicwave.demo.WriteModelFeedbackKind
 import com.sonicwave.demo.WriteModelFeedbackUi
+import com.sonicwave.demo.calibrationModelMutationBlocked
 import com.sonicwave.protocol.CalibrationComparisonResult
 import com.sonicwave.protocol.CalibrationCurvePoint
 import com.sonicwave.protocol.CalibrationFitResult
@@ -111,7 +112,7 @@ fun CalibrationToolsSection(
                     enabled = uiState.isConnected &&
                         uiState.protocolMode == com.sonicwave.protocol.ProtocolMode.PRIMARY &&
                         uiState.weightModelClearSupported == true &&
-                        uiState.weightModel.status != WeightModelStatusUi.PENDING,
+                        !uiState.calibrationModelMutationBlocked(),
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(stringResource(R.string.action_device_zero))
@@ -249,7 +250,7 @@ fun CalibrationToolsSection(
                 enabled = uiState.isConnected &&
                     uiState.protocolMode == com.sonicwave.protocol.ProtocolMode.PRIMARY &&
                     uiState.canDeployCalibrationModel &&
-                    uiState.writeModelStatus?.kind != WriteModelFeedbackKind.PENDING,
+                    !uiState.calibrationModelMutationBlocked(),
                 colors = writeButtonColors,
                 modifier = Modifier.fillMaxWidth(),
             ) {
@@ -258,6 +259,16 @@ fun CalibrationToolsSection(
                         WriteModelFeedbackKind.PENDING -> stringResource(R.string.action_set_model_pending)
                         else -> stringResource(R.string.action_set_model)
                     },
+                )
+            }
+            if (uiState.emptyModelReadbackPending) {
+                Text(
+                    text = stringResource(
+                        if (uiState.emptyModelReadbackNeedsReconnect) R.string.message_model_empty_readback_reconnect
+                        else R.string.message_model_wait_empty_readback,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 

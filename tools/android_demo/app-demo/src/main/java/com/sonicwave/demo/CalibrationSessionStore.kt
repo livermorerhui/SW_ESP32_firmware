@@ -50,6 +50,55 @@ internal class CalibrationSessionStore {
         )
     }
 
+    /** A requested EMPTY mutation may have reached the ESP32 even if its reply is lost. */
+    fun markModelUnverifiedForEmptyMutation(state: UiState): UiState = state.copy(
+        latestModel = null,
+        weightModel = if (state.weightModel.isDeviceConfirmed ||
+            state.weightModel.status == WeightModelStatusUi.INVALID
+        ) {
+            state.weightModel.copy(status = WeightModelStatusUi.INVALID)
+        } else {
+            WeightModelState()
+        },
+        preparedModel = null,
+        canDeployCalibrationModel = false,
+        writeModelStatus = null,
+        emptyModelReadbackPending = true,
+        emptyModelReadbackNeedsReconnect = false,
+    )
+
+    /** EMPTY:GET failed, so no model reply can establish this link's new empty revision. */
+    fun markEmptyVerificationNeedsReconnect(state: UiState): UiState =
+        markModelUnverifiedForEmptyMutation(state).copy(emptyModelReadbackNeedsReconnect = true)
+
+    /** A matched SET_CURRENT/CLEAR readback revokes the old model, even for the same D_e. */
+    fun applyProfileEmptyReadback(
+        state: UiState,
+        emptyDistance: EmptyDistanceState,
+        revision: Long,
+        raw: String,
+        modelInvalidated: Boolean,
+    ): UiState {
+        val readback = state.copy(
+            emptyDistance = emptyDistance,
+            deviceEmptyRevision = revision,
+            emptyDistanceControlSupported = true,
+            lastAckOrError = raw,
+        )
+        return if (modelInvalidated) {
+            rebuildComparison(readback.copy(
+                latestModel = null,
+                weightModel = WeightModelState(),
+                preparedModel = null,
+                writeModelStatus = null,
+                emptyModelReadbackPending = true,
+                emptyModelReadbackNeedsReconnect = false,
+            ))
+        } else {
+            readback
+        }
+    }
+
     fun clearEmptyDistance(state: UiState): UiState = state.copy(
         emptyDistance = EmptyDistanceState(),
     )

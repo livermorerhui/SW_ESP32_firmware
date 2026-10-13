@@ -15,6 +15,7 @@ internal class ProfileConfigTransaction {
     private data class Pending(
         val deviceId: String,
         val connectionEpoch: Long,
+        val requestSerial: Long,
         val model: PlatformModel,
         val profile: SensorProfile,
         val previousGeneration: Long,
@@ -23,6 +24,7 @@ internal class ProfileConfigTransaction {
     )
 
     private var pending: Pending? = null
+    private var nextRequestSerial = 0L
     val isPending: Boolean get() = pending != null
 
     fun start(
@@ -32,9 +34,23 @@ internal class ProfileConfigTransaction {
         profile: SensorProfile,
         previousGeneration: Long,
         allowSameGeneration: Boolean = false,
-    ) {
+    ): Long {
         require(deviceId.isNotBlank() && connectionEpoch > 0 && previousGeneration >= 0)
-        pending = Pending(deviceId, connectionEpoch, model, profile, previousGeneration, allowSameGeneration)
+        val serial = ++nextRequestSerial
+        pending = Pending(deviceId, connectionEpoch, serial, model, profile, previousGeneration, allowSameGeneration)
+        return serial
+    }
+
+    fun pendingSerialFor(connectionEpoch: Long): Long? =
+        pending?.takeIf { it.connectionEpoch == connectionEpoch }?.requestSerial
+
+    fun isPendingRequest(connectionEpoch: Long, requestSerial: Long): Boolean =
+        pending?.let { it.connectionEpoch == connectionEpoch && it.requestSerial == requestSerial } == true
+
+    fun clearIfCurrent(connectionEpoch: Long, requestSerial: Long): Boolean {
+        if (!isPendingRequest(connectionEpoch, requestSerial)) return false
+        pending = null
+        return true
     }
 
     fun onSetAck(event: Event.ProfileConfigResult, deviceId: String?, connectionEpoch: Long): Boolean {
@@ -62,6 +78,93 @@ internal class ProfileConfigTransaction {
     }
 
     fun clear() { pending = null }
+}
+
+/** A STREAM ACK from before a profile switch must not confirm the new profile's stream. */
+internal class ProfileStreamSubscriptionGate {
+    private data class Pending(val connectionEpoch: Long, val requestSerial: Long)
+
+    private var nextRequestSerial = 0L
+    private var pending: Pending? = null
+
+    fun isPendingFor(connectionEpoch: Long): Boolean = pending?.connectionEpoch == connectionEpoch
+
+    fun start(connectionEpoch: Long): Long {
+        require(connectionEpoch > 0)
+        val requestSerial = ++nextRequestSerial
+        pending = Pending(connectionEpoch, requestSerial)
+        return requestSerial
+    }
+
+    fun complete(connectionEpoch: Long, requestSerial: Long): Boolean {
+        if (pending != Pending(connectionEpoch, requestSerial)) return false
+        pending = null
+        return true
+    }
+
+    fun retire() {
+        ++nextRequestSerial
+        pending = null
+    }
+}
+
+/** A profile write must wait for a SNAPSHOT requested after independent GET. */
+internal class ProfileSnapshotRefreshGate {
+    private enum class Phase { UNREQUESTED, SENDING, AWAITING_RESPONSE }
+
+    private var pendingEpoch: Long? = null
+    private var phase = Phase.UNREQUESTED
+    private var snapshotSeenDuringSend = false
+
+    fun arm(connectionEpoch: Long) {
+        require(connectionEpoch > 0)
+        pendingEpoch = connectionEpoch
+        phase = Phase.UNREQUESTED
+        snapshotSeenDuringSend = false
+    }
+
+    fun beginRequest(connectionEpoch: Long): Boolean {
+        if (!needsRequestFor(connectionEpoch)) return false
+        phase = Phase.SENDING
+        return true
+    }
+
+    fun needsRequestFor(connectionEpoch: Long): Boolean =
+        pendingEpoch == connectionEpoch && phase == Phase.UNREQUESTED
+
+    /** Returns true when the reply arrived before the GATT write returned. */
+    fun requestCompleted(connectionEpoch: Long): Boolean {
+        if (pendingEpoch != connectionEpoch || phase != Phase.SENDING) return false
+        if (snapshotSeenDuringSend) {
+            retire()
+            return true
+        }
+        phase = Phase.AWAITING_RESPONSE
+        return false
+    }
+
+    fun requestFailed(connectionEpoch: Long) {
+        if (pendingEpoch != connectionEpoch || phase != Phase.SENDING) return
+        phase = Phase.UNREQUESTED
+        snapshotSeenDuringSend = false
+    }
+
+    fun acceptSnapshot(connectionEpoch: Long): Boolean {
+        if (pendingEpoch != connectionEpoch) return false
+        if (phase == Phase.SENDING) {
+            snapshotSeenDuringSend = true
+            return false
+        }
+        if (phase != Phase.AWAITING_RESPONSE) return false
+        retire()
+        return true
+    }
+
+    fun retire() {
+        pendingEpoch = null
+        phase = Phase.UNREQUESTED
+        snapshotSeenDuringSend = false
+    }
 }
 
 internal data class ProfileEmptyConfirmation(
@@ -128,3 +231,56 @@ internal class ProfileEmptyTransaction {
 
     fun clear() { pending = null }
 }
+
+/** Model replies have no empty_revision, so a new EMPTY revision rejects old ready=1 replies. */
+internal fun shouldIgnoreModelReplyDuringEmptyRefresh(
+    refreshEpoch: Long?,
+    modelQuerySent: Boolean,
+    invalidatedEpoch: Long?,
+    replyEpoch: Long,
+    modelReady: Boolean?,
+    explicitModelWriteReadback: Boolean,
+): Boolean = (refreshEpoch == replyEpoch && !modelQuerySent) ||
+    (invalidatedEpoch == replyEpoch && modelReady == true && !explicitModelWriteReadback)
+
+/** A verified config with a new identity/generation owns a fresh model readback on this BLE link. */
+internal fun hasVerifiedProfileChanged(
+    previousModel: PlatformModel?,
+    previousProfile: SensorProfile?,
+    previousGeneration: Long?,
+    model: PlatformModel,
+    profile: SensorProfile,
+    generation: Long,
+): Boolean = previousModel != null && previousProfile != null && previousGeneration != null &&
+    (previousModel != model || previousProfile != profile || previousGeneration != generation)
+
+/** Only the still-pending request may update EMPTY UI after a GATT completion or timeout. */
+internal fun isCurrentEmptyMutation(
+    requestEpoch: Long,
+    requestSerial: Long,
+    currentEpoch: Long?,
+    currentSerial: Long,
+    pending: Boolean,
+): Boolean = pending && currentEpoch == requestEpoch && currentSerial == requestSerial
+
+/** An earlier EMPTY:GET failure cannot terminate a later mutation on the same BLE link. */
+internal fun isCurrentEmptyVerificationGet(
+    requestEpoch: Long,
+    requestSerial: Long,
+    refreshPendingAtSend: Boolean,
+    currentEpoch: Long?,
+    currentSerial: Long,
+    refreshEpoch: Long?,
+): Boolean = refreshPendingAtSend && currentEpoch == requestEpoch &&
+    currentSerial == requestSerial && refreshEpoch == requestEpoch
+
+internal fun isEmptyModelReadbackPending(refreshEpoch: Long?, currentEpoch: Long?): Boolean =
+    refreshEpoch != null && refreshEpoch == currentEpoch
+
+internal fun shouldFailEmptyModelReadbackOnTimeout(
+    refreshEpoch: Long?,
+    replyEpoch: Long,
+    currentEpoch: Long?,
+    querySent: Boolean,
+    pending: Boolean,
+): Boolean = refreshEpoch == replyEpoch && currentEpoch == replyEpoch && querySent && pending

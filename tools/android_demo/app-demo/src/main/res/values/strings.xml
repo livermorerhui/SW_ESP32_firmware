@@ -576,6 +576,8 @@
     <string name="message_invalid_model_values">Invalid calibration model values</string>
     <string name="message_model_requires_primary">Model deployment requires a connected primary device.</string>
     <string name="message_model_write_pending">A model deployment is already in progress.</string>
+    <string name="message_model_wait_empty_readback">Checking the model after the empty-distance change. Wait for the result; reconnect if it does not complete.</string>
+    <string name="message_model_empty_readback_reconnect">The model could not be verified after changing the empty distance. Reconnect to read the device again before writing a model.</string>
     <string name="message_model_not_deployable">The model is not deployable: set a valid empty distance and pass the selected fit gates first.</string>
     <string name="message_invalid_wave_parameters">Invalid wave parameters</string>
     <string name="message_wave_range">Wave range: f=5..50, i=0..120</string>
