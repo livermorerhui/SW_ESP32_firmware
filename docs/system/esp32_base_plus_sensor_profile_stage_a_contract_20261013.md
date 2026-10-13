@@ -7,7 +7,7 @@
 ## 1. 工作人员和用户实际会怎么操作
 
 1. **生产/维修人员烧录：**确认是全新空白板，烧录统一固件后看到 Base；如果是旧设备，先按设备台账核实旧型号和 NVS 记录，再普通重烧或 OTA，回读后仍是原 Base/Plus。服务器不参与。
-2. **工作人员配置 Plus：**Demo APP 连接、读取 ESP32 身份及配置能力 → 选 Plus → 选实际安装的 J100-485 或 CYD3S1612-IIC → ESP32 保存并启动对应 reader → Demo APP 自动重连并重新确认配置/订阅实时流 → 看见该传感器持续产生有效距离 → 平台空载时点“设置” → ESP32 取自己当前新鲜的距离保存为空载距离，并把实际保存值回给 APP。体重校准是可选的独立步骤。
+2. **工作人员配置 Plus：**Demo APP 连接、读取 ESP32 身份及配置能力 → 选 Plus → 选实际安装的 J100-485 或 CYD3S1612-IIC → ESP32 保存并启动对应 reader → Demo APP 在当前连接用独立 GET 核对配置、刷新运行状态并重新订阅实时流 → 看见该传感器持续产生有效距离 → 平台空载时点“设置” → ESP32 取自己当前新鲜的距离保存为空载距离，并把实际保存值回给 APP。写入成功不主动断连或隐藏型号页；体重校准是可选的独立步骤。
 3. **用户日常使用：**Base 按无激光路径运行；已验收的 J100 Plus 由 ESP32 依据距离判断状态，SW APP 只使用设备上报的状态。用户在 SW APP 中切换摔倒保护、律动离开保护；ESP32 未重启时保留开关值，重启后两项都开。健康、已配置的 Plus 两项都关时直接免站稳开始，不弹旧激光故障确认；这条无保护路径对 CYD 也列入待验收目标，不能当作 CYD 保护算法通过。CYD 的受保护运行另做实验。
 
 ## 2. 型号、身份和配置真相
@@ -55,7 +55,8 @@ ACK:DEVICE_CONFIG op=GET schema=1 platform_model=PLUS sensor_profile=CYD3S1612_I
 
 ## 5. 当前距离、空载设置与切换
 
-- Demo 仍按既有合同显式 `STREAM:SET enabled=1,rate_hz=10`，确认 `ACK:STREAM` 后才观察 `EVT:STREAM`。**profile 实际切换后，Demo 在 SET ACK/GET 一致后自动断开并重连**，重新取得同一设备 ID 与 GET 配置，再重新订阅实时流；只接受新连接的距离帧。断连、切换 profile、流超时立即撤销“传感器可用”和空载“设置”资格，清掉旧 UI 实时值；旧 BLE 后端名不能证明新 profile。同一 UART/IIC 后端的未来新型号也执行这一步，避免旧连接内没有 profile 标记的流帧混入新型号。重连失败保留已落盘的新 profile，但 APP 显示“待确认/不可设置空载”，不得退回旧 UI 数值。
+- Demo 仍按既有合同显式 `STREAM:SET enabled=1,rate_hz=10`，确认 `ACK:STREAM` 后才观察 `EVT:STREAM`。**profile 写入成功后保持当前 BLE 连接和型号页**：同一连接先收到 SET ACK，再用独立 GET 核对当前设备 ID、型号、profile 和 generation；刷新 CAP/SNAPSHOT、读取 EMPTY，并重新订阅实时流。写入开始即清旧距离、旧订阅确认和空载“设置”资格；写入前若旧订阅请求还在等待 ACK，则提示稍后操作，避免旧 ACK 被当作新订阅。新订阅 ACK 后，仍须收到与所选 profile 匹配、序号递增的连续有效新样本，才能恢复距离可用。固件切换 profile 时隔离旧 reader/测量队列并让 BLE 旧流代际失效；这与 APP 的同连接门禁共同替代原定的成功后主动重连。断连、切换 profile、流超时立即撤销“传感器可用”和空载“设置”资格，清掉旧 UI 实时值；旧 BLE 后端名不能证明新 profile。同一 UART/IIC 后端的未来新型号仍需独立验证流代际和匹配条件。GET 不一致或读取失败不得显示“设置成功”，须重新读取设备真相；无法确认时让工作人员重新连接。
+- 写入期间保留已确认型号卡片，但撤销旧配置的开始就绪、旧体重模型和曲线数据；GET 后取得本次 CAP 与 SNAPSHOT，再恢复 APP 开始按钮显示并重新查询 `CAL:GET_MODEL`。`SNAPSHOT` 没有请求 ID，当前用同连接的 GET→CAP→SNAPSHOT 收发顺序作门禁，无法从协议字节绝对辨别任意异步迟到的旧快照；固件 `WAVE:START` 门禁仍是最终执行依据。这个限制须在真机切换和异常回包场景中验证，不能把单元测试写成协议级绝对保证。
 - 固件在 profile 切换时先拒绝运行中操作，隔离并清空旧 reader、测量队列、基线/站稳和内部 sample 代际；持久化成功后启动新 reader。新鲜样本必须同时满足当前设备配置 generation、profile、内部测量代际、质量有效、有限且在物理量程、单调接收序号和 `age_ms≤T_fresh(profile)`。`T_fresh(profile)` 与 UI 所需连续新样本数/断流窗口是 **profile 参数**，必须由读取周期和真机日志定值；阶段 A 不把 J100 的 50 Hz 或 Demo 的 10 Hz 错当 CYD 保证值。
 - 空载按钮使用新命令 `EMPTY:SET_CURRENT`：ESP32 **在处理命令时**取当前 profile 的新鲜有效实测值，而不是相信 APP 屏幕缓存；无样本、过期、错误 profile/代际、正在运行、NVS 写读失败均拒绝，原 D_e 不变。成功回 `ACK:EMPTY op=SET_CURRENT status=SET distance_mm=<实际保存值> tolerance_mm=<当前profile值> sensor_profile=<ID> generation=<配置代际> empty_revision=<新修订>`；Demo 再 `EMPTY:GET` 回读相同设备、profile、generation、修订和值后显示具体数值。新解析器必须在旧 `EMPTY:SET` 前按完整命令边界匹配 `EMPTY:SET_CURRENT`。未设置/清除时回 `status=UNSET`，不伪造距离和容差。
 - 旧 `EMPTY:SET distance_mm=...` 保持既有有限值/非运行中的**旧兼容语义**，但不能作为新 profile 设备的安装流程：当设备进入新 `schema=1` profile 管理后，该旧命令返回 `NACK:EMPTY op=SET reason=USE_SET_CURRENT`，须用新 Demo。旧 Demo + 新 profile 固件不属于本轮可交付组合，需明确展示升级要求；这避免为“兼容”悄悄改旧命令的验收窗口，却让过期 APP 值写入新 profile 的 D_e。
@@ -101,7 +102,7 @@ ESP32 未重启时两开关保持；冷启动都设为开。**已发现跨端阻
 | A-P01 | 新 Demo 连旧固件，GET 返回任意 NACK/无响应；旧固件忽略新字段但回旧 ACK | 新配置入口不开放；通用/旧 ACK 不能确认 profile。|
 | A-P02 | SET ACK 丢失/迟到、GET 不一致/跨连接/跨设备、同值重发、未知 profile、Pro/Ultra | 仅身份、model/profile/generation 一致且完成 GET 才显示成功；NACK 原因可定位。|
 | A-P03 | 旧 CAP/SNAPSHOT/EVT golden，最长新配置/空载回复、低 MTU 分片，GET 命令与旧 F/I/E 解析冲突 | 旧帧字节不变；新回复可完整接收；新 GET 不被旧兼容分支吞掉。|
-| A-M01 | J100→CYD、未来同后端新 profile，旧 reader 帧和 BLE 队列迟到、自动重连失败/成功、单帧/停更/连续新样本 | SET 后同连接只作 GET 确认；新连接身份/GET/STREAM ACK 完成前不显示可用；旧帧不写成新 D_e，断流撤销设置资格。|
+| A-M01 | J100→CYD、未来同后端新 profile，旧 reader 帧和 BLE 队列迟到、订阅 ACK 延迟、单帧/停更/连续新样本 | SET 后同连接 GET 核对；新配置 GET、新订阅 ACK 和匹配的连续有效样本完成前不显示可用；旧帧不写成新 D_e，断流撤销设置资格。真实断连另走重新读取身份和配置的连接流程。|
 | A-M02 | 解析器实际分派 `EMPTY:SET_CURRENT`/旧 `EMPTY:SET`，覆盖无样本/过期/运行中/存储失败及旧 Demo 连新 profile 固件 | 新命令不被旧前缀吞掉；无效请求 NACK、原 D_e 不变；成功回复实际保存值和修订，GET 一致；旧命令在新 profile 模式明确要求升级。|
 | A-S01 | 健康 J100/CYD 双开/单关/双关、站稳/未站稳、已有故障/暂停、`PLUS+NONE`；双关开始→暂停→重新开任一保护→未站稳继续 | 单关不免站稳；健康双关直接开始无确认；重新开一项立即撤销豁免；CYD 至少一开未验收时拒绝开始；故障/未配置不被双关伪装为正常。|
 | A-S02 | 关闭摔倒保护后退出/重连、迅速点击、旧主动 ACK 与点击 ACK 交错、冷启动 | ESP32 未重启保持、重启两项开；SW 两项回显与设备一致且点击 ACK 不错配。**当前代码审计已显示此项未满足，跨端阻断。**|
