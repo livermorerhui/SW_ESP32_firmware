@@ -6,6 +6,8 @@ enum class CmdType : uint8_t {
   CAP_QUERY,
   DEVICE_IDENTITY_QUERY,
   DEVICE_SECURITY_QUERY,
+  DEVICE_GET_CONFIG,
+  DEVICE_SET_PROFILE_CONFIG,
   DEVICE_SET_CONFIG,
   DEGRADED_START_SET,
   WAVE_SET,      // set freq/intensity (not necessarily start)
@@ -20,6 +22,7 @@ enum class CmdType : uint8_t {
   CAL_GET_MODEL,
   CAL_SET_MODEL,
   EMPTY_DISTANCE_GET,
+  EMPTY_DISTANCE_SET_CURRENT,
   EMPTY_DISTANCE_SET,
   EMPTY_DISTANCE_CLEAR,
   CAL_CLEAR_WEIGHT_MODEL,
@@ -81,6 +84,14 @@ struct DeviceConfigCommand {
   bool laserInstalled = true;
 };
 
+// The profile-aware configuration command is distinct from the legacy
+// platform_model/laser_installed command. The latter must never silently
+// select a sensor when an older Demo APP writes its existing request.
+struct DeviceProfileConfigCommand {
+  PlatformModel platformModel = PlatformModel::BASE;
+  SensorProfileId sensorProfile = SensorProfileId::NONE;
+};
+
 struct DegradedStartCommand {
   bool enabled = false;
 };
@@ -103,6 +114,7 @@ struct Command {
   LeaveProtectionCommand leaveProtection{};
   MotionSamplingModeCommand motionSamplingMode{};
   DeviceConfigCommand deviceConfig{};
+  DeviceProfileConfigCommand deviceProfileConfig{};
   DegradedStartCommand degradedStart{};
   StreamSubscriptionCommand streamSubscription{};
 

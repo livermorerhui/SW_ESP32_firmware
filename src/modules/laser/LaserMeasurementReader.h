@@ -1,10 +1,12 @@
 #pragma once
 
 #include <Arduino.h>
+#include <freertos/semphr.h>
 #if !defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC) || defined(SW_DISTANCE_BACKEND_UNIFIED)
 #include <ModbusMaster.h>
 #endif
 #include "config/GlobalConfig.h"
+#include "core/DeviceConfig.h"
 #include "core/Types.h"
 #include "modules/laser/LaserSensorProfile.h"
 #if defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC) || defined(SW_DISTANCE_BACKEND_UNIFIED)
@@ -46,6 +48,10 @@ struct MeasurementReadResult {
   // migration.  It is physicalDistanceMm / 100 for the current profiles.
   float scaledDistance = NAN;
   uint32_t sampleSequence = 0;
+  // Runtime reader generation, independent from persisted config generation.
+  // A result from an earlier reader must not enter the new profile's state.
+  uint32_t readerEpoch = 0;
+  SensorProfileId sensorProfile = SensorProfileId::NONE;
   LaserMeasurementQuality quality = LaserMeasurementQuality::UNKNOWN;
   uint32_t readStartedAtMs = 0;
   uint32_t readCompletedAtMs = 0;
@@ -55,27 +61,32 @@ struct MeasurementReadResult {
 
 class LaserMeasurementReader {
 public:
-  void begin();
+  static bool supportsProfile(SensorProfileId profile);
+  // Configure exactly one selected sensor. NONE and unknown identities leave
+  // both physical transports stopped; no startup auto-detection is performed.
+  bool configure(SensorProfileId profile);
+  void stop();
   MeasurementReadResult read(
       TopState topState,
       bool laserInstalled,
       uint32_t nextReadBackoffMs);
   void clearFailureBurst(uint32_t now, bool flushSummary = true);
   LaserMeasurementBackend backend() const { return backend_; }
+  SensorProfileId selectedProfile() const { return selectedProfile_; }
+  uint32_t readerEpoch() const { return readerEpoch_; }
 
 private:
+  MeasurementReadResult readUnlocked(
+      TopState topState,
+      bool laserInstalled,
+      uint32_t nextReadBackoffMs);
+  bool ensureMutex();
+  void stopUnlocked();
+  void resetReaderState();
 #if !defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC) || defined(SW_DISTANCE_BACKEND_UNIFIED)
   uint8_t readDistanceRegister(const LaserSensorProfile& activeProfile);
 #endif
 #if defined(SW_DISTANCE_BACKEND_UNIFIED)
-  bool probeIic(
-      uint8_t& resultCode,
-      LaserMeasurementQuality& quality,
-      const char*& reason);
-  bool probe485(
-      uint8_t& resultCode,
-      LaserMeasurementQuality& quality,
-      const char*& reason);
   MeasurementReadResult readIic(
       TopState topState,
       bool laserInstalled,
@@ -109,14 +120,10 @@ private:
 #if !defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC) || defined(SW_DISTANCE_BACKEND_UNIFIED)
   ModbusMaster node;
 #endif
-  LaserMeasurementBackend backend_ =
-#if defined(SW_DISTANCE_BACKEND_UNIFIED)
-      LaserMeasurementBackend::SENSOR_UNAVAILABLE;
-#elif defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC)
-      LaserMeasurementBackend::CYD3S1612_IIC;
-#else
-      LaserMeasurementBackend::LASER_485;
-#endif
+  volatile LaserMeasurementBackend backend_ = LaserMeasurementBackend::SENSOR_UNAVAILABLE;
+  volatile SensorProfileId selectedProfile_ = SensorProfileId::NONE;
+  volatile uint32_t readerEpoch_ = 0;
+  SemaphoreHandle_t mutex_ = nullptr;
   const LaserSensorProfile* profile = &activeLaserSensorProfile();
   bool hasLoggedReadFailure = false;
   uint8_t lastReadFailureCode = 0;

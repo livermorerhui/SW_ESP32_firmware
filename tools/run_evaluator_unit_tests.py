@@ -1294,6 +1294,49 @@ void test_protocol_parse_config_and_safety_commands() {
   Command command{};
   String error;
 
+  assert(ProtocolCodec::parseCommand("DEVICE:GET_CONFIG", command, error));
+  assert(command.type == CmdType::DEVICE_GET_CONFIG);
+  assert(!ProtocolCodec::parseCommand("DEVICE:GET_CONFIG unexpected=1", command, error));
+  expect_reason(error.c_str(), "DEVICE_CONFIG op=GET reason=INVALID_PARAM");
+
+  assert(ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG platform_model=BASE,sensor_profile=NONE", command, error));
+  assert(command.type == CmdType::DEVICE_SET_PROFILE_CONFIG);
+  assert(command.deviceProfileConfig.platformModel == PlatformModel::BASE);
+  assert(command.deviceProfileConfig.sensorProfile == SensorProfileId::NONE);
+
+  assert(ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG sensor_profile=J100_485,platform_model=PLUS", command, error));
+  assert(command.type == CmdType::DEVICE_SET_PROFILE_CONFIG);
+  assert(command.deviceProfileConfig.platformModel == PlatformModel::PLUS);
+  assert(command.deviceProfileConfig.sensorProfile == SensorProfileId::J100_485);
+
+  assert(ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG platform_model=PLUS,sensor_profile=CYD3S1612_IIC", command, error));
+  assert(command.deviceProfileConfig.sensorProfile == SensorProfileId::CYD3S1612_IIC);
+
+  assert(!ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG platform_model=PRO,sensor_profile=NONE", command, error));
+  expect_reason(error.c_str(), "DEVICE_CONFIG op=SET reason=UNSUPPORTED_MODEL");
+  assert(!ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG platform_model=PLUS,sensor_profile=UNKNOWN", command, error));
+  expect_reason(error.c_str(), "DEVICE_CONFIG op=SET reason=UNSUPPORTED_PROFILE");
+  assert(!ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG platform_model=BASE,sensor_profile=J100_485", command, error));
+  expect_reason(error.c_str(), "DEVICE_CONFIG op=SET reason=INVALID_COMBINATION");
+  assert(!ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG platform_model=PLUS,sensor_profile=J100_485,laser_installed=1",
+      command, error));
+  expect_reason(error.c_str(), "DEVICE_CONFIG op=SET reason=INVALID_PARAM");
+  assert(!ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG platform_model=PLUS,sensor_profile=J100_485,sensor_profile=NONE",
+      command, error));
+  expect_reason(error.c_str(), "DEVICE_CONFIG op=SET reason=INVALID_PARAM");
+  assert(!ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG platform_model=PLUS,laser_installed=1,SENSOR_PROFILE=J100_485",
+      command, error));
+  expect_reason(error.c_str(), "DEVICE_CONFIG op=SET reason=INVALID_PARAM");
+
   assert(ProtocolCodec::parseCommand(
       "DEVICE:SET_CONFIG platform_model=PLUS,laser_installed=1",
       command,
@@ -1301,6 +1344,14 @@ void test_protocol_parse_config_and_safety_commands() {
   assert(command.type == CmdType::DEVICE_SET_CONFIG);
   assert(command.deviceConfig.platformModel == PlatformModel::PLUS);
   assert(command.deviceConfig.laserInstalled);
+
+  assert(ProtocolCodec::parseCommand("EMPTY:SET_CURRENT", command, error));
+  assert(command.type == CmdType::EMPTY_DISTANCE_SET_CURRENT);
+  assert(!ProtocolCodec::parseCommand("EMPTY:SET_CURRENT distance_mm=112.55", command, error));
+  expect_reason(error.c_str(), "INVALID_PARAM");
+  assert(ProtocolCodec::parseCommand("EMPTY:SET distance_mm=112.55", command, error));
+  assert(command.type == CmdType::EMPTY_DISTANCE_SET);
+  expect_float_close(command.emptyDistance.distanceMm, 112.55f);
 
   assert(ProtocolCodec::parseCommand("DEBUG:DEGRADED_START enabled=true", command, error));
   assert(command.type == CmdType::DEGRADED_START_SET);
@@ -1553,6 +1604,23 @@ void test_hub_ack_builder_core_contracts() {
 
   encoded = HubAckBuilder::deviceConfig(PlatformModel::PLUS, true);
   expect_reason(encoded.c_str(), "ACK:DEVICE_CONFIG platform_model=PLUS laser_installed=1");
+
+  encoded = HubAckBuilder::deviceProfileConfig(
+      "GET", PlatformModel::BASE, SensorProfileId::NONE, 0);
+  expect_reason(encoded.c_str(),
+      "ACK:DEVICE_CONFIG op=GET schema=1 platform_model=BASE sensor_profile=NONE laser_installed=0 generation=0");
+  assert(encoded.length() + 1 <= ProtocolCodec::kSingleNotifyPayloadBudget);
+
+  encoded = HubAckBuilder::deviceProfileConfig(
+      "SET", PlatformModel::PLUS, SensorProfileId::CYD3S1612_IIC, UINT32_MAX);
+  expect_reason(encoded.c_str(),
+      "ACK:DEVICE_CONFIG op=SET schema=1 platform_model=PLUS sensor_profile=CYD3S1612_IIC laser_installed=1 generation=4294967295");
+  assert(encoded.length() + 1 <= ProtocolCodec::kSingleNotifyPayloadBudget);
+
+  encoded = HubAckBuilder::deviceProfileConfigNack("SET", "INVALID_COMBINATION");
+  expect_reason(encoded.c_str(), "NACK:DEVICE_CONFIG op=SET reason=INVALID_COMBINATION");
+  encoded = HubAckBuilder::deviceProfileConfigNack("GET", "CONFIG_ERROR");
+  expect_reason(encoded.c_str(), "NACK:DEVICE_CONFIG op=GET reason=CONFIG_ERROR");
 
   PlatformSnapshot snapshot{};
   snapshot.degradedStartEnabled = true;

@@ -335,6 +335,7 @@ void BleTransport::begin(CommandBus* cb, const char* deviceName, const char* adv
   otaQueue = xQueueCreate(8, sizeof(OtaMsg));
   txControlQueue = xQueueCreate(kTxControlQueueLen, sizeof(TxMsg));
   txStreamQueue = xQueueCreate(kTxStreamQueueLen, sizeof(TxMsg));
+  streamSendMutex = xSemaphoreCreateMutex();
   txQueueSet = xQueueCreateSet(kTxControlQueueLen + kTxStreamQueueLen);
   if (txQueueSet && txControlQueue && txStreamQueue) {
     xQueueAddToSet(txControlQueue, txQueueSet);
@@ -1185,6 +1186,8 @@ bool BleTransport::enqueueStreamTxLineRaw(const char* s) {
   msg.priority = TxMsg::Priority::STREAM;
   strlcpy(msg.line, s, sizeof(msg.line));
   msg.enqueuedAtMs = millis();
+  msg.streamGeneration = streamGeneration.load(std::memory_order_acquire);
+  msg.streamSessionId = sessionId;
 
   if (uxQueueMessagesWaiting(txStreamQueue) > 0) {
     txStreamReplaceCount += 1;
@@ -1192,6 +1195,20 @@ bool BleTransport::enqueueStreamTxLineRaw(const char* s) {
   xQueueOverwrite(txStreamQueue, &msg);
   noteQueueWatermark("stream", uxQueueMessagesWaiting(txStreamQueue), txStreamHighWatermark);
   return true;
+}
+
+void BleTransport::invalidatePendingStreamFrames() {
+  if (streamSendMutex) {
+    xSemaphoreTake(streamSendMutex, portMAX_DELAY);
+  }
+  const uint32_t next = streamGeneration.fetch_add(1, std::memory_order_acq_rel) + 1;
+  SW_VERBOSE_SERIAL_PRINTF(
+      "[BLE STREAM] action=invalidate_pending generation=%lu queue_depth=%u\n",
+      static_cast<unsigned long>(next),
+      txStreamQueue ? static_cast<unsigned>(uxQueueMessagesWaiting(txStreamQueue)) : 0U);
+  if (streamSendMutex) {
+    xSemaphoreGive(streamSendMutex);
+  }
 }
 
 void BleTransport::noteQueueWatermark(const char* queueName, UBaseType_t depth, UBaseType_t& highWatermark) {
@@ -1559,6 +1576,11 @@ bool BleTransport::businessCommandBlockedByOta(const String& s) const {
       s.startsWith("SAFETY:") ||
       s.startsWith("DEVICE:SET_CONFIG") ||
       s.startsWith("CAL:") ||
+      s.startsWith("EMPTY:SET") ||
+      s.equalsIgnoreCase("EMPTY:SET_CURRENT") ||
+      s.equalsIgnoreCase("EMPTY:CLEAR") ||
+      s.equalsIgnoreCase("SCALE:ZERO") ||
+      s.startsWith("SCALE:CAL") ||
       s.startsWith("AUDIO:CUE") ||
       s.equalsIgnoreCase("ZERO") ||
       s.startsWith("SET_PS:");
@@ -1761,6 +1783,11 @@ void BleTransport::txTaskLoop() {
 
     if (xQueueReceive(txStreamQueue, &msg, 0) == pdTRUE) {
       const uint32_t nowMs = millis();
+      if (msg.streamGeneration != streamGeneration.load(std::memory_order_acquire) ||
+          msg.streamSessionId != sessionId) {
+        noteTxSendSkipped(TxFrameClass::STREAM_EVENT, "stale_profile_or_session", msg.line);
+        continue;
+      }
       if (shouldDeferStreamForControl(nowMs)) {
         noteStreamSuppressedForControl(
             txControlQueue ? uxQueueMessagesWaiting(txControlQueue) : 0U,
@@ -1770,7 +1797,18 @@ void BleTransport::txTaskLoop() {
         continue;
       }
       flushStreamSuppressionSummaryIfNeeded(nowMs);
-      sendLineNow(msg.line);
+      if (streamSendMutex) {
+        xSemaphoreTake(streamSendMutex, portMAX_DELAY);
+      }
+      if (msg.streamGeneration == streamGeneration.load(std::memory_order_acquire) &&
+          msg.streamSessionId == sessionId) {
+        sendLineNow(msg.line);
+      } else {
+        noteTxSendSkipped(TxFrameClass::STREAM_EVENT, "stale_profile_or_session", msg.line);
+      }
+      if (streamSendMutex) {
+        xSemaphoreGive(streamSendMutex);
+      }
       controlBurstSinceStream = 0;
     }
   }

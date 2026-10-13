@@ -1,7 +1,9 @@
 #pragma once
+#include <ctype.h>
 #include <errno.h>
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 #include "CommandBus.h"
 #include "EventBus.h"
 #include "PlatformSnapshot.h"
@@ -114,6 +116,23 @@ public:
     return true;
   }
 
+  static bool containsAsciiIgnoreCase(const String& text, const char* needle) {
+    if (!needle) return false;
+    const size_t needleLen = strlen(needle);
+    if (needleLen == 0 || needleLen > text.length()) return false;
+    const char* haystack = text.c_str();
+    for (size_t start = 0; start + needleLen <= text.length(); ++start) {
+      size_t matched = 0;
+      while (matched < needleLen &&
+          tolower(static_cast<unsigned char>(haystack[start + matched])) ==
+              tolower(static_cast<unsigned char>(needle[matched]))) {
+        ++matched;
+      }
+      if (matched == needleLen) return true;
+    }
+    return false;
+  }
+
   // 返回 true = 成功解析
   static bool parseCommand(const String& in, Command& out, String& err) {
     String s = in; s.trim();
@@ -163,6 +182,94 @@ public:
     }
     if (s.equalsIgnoreCase("DEVICE:SECURITY?")) {
       out.type = CmdType::DEVICE_SECURITY_QUERY;
+      return true;
+    }
+    // Keep this exact query ahead of the legacy F/I/E substring parser below:
+    // DEVICE:GET_CONFIG contains "E:" and would otherwise be mistaken for a
+    // legacy wave command.
+    if (s.equalsIgnoreCase("DEVICE:GET_CONFIG")) {
+      out.type = CmdType::DEVICE_GET_CONFIG;
+      return true;
+    }
+    if (s.startsWith("DEVICE:GET_CONFIG")) {
+      err = "DEVICE_CONFIG op=GET reason=INVALID_PARAM";
+      return false;
+    }
+    if (s.startsWith("DEVICE:SET_CONFIG ") &&
+        containsAsciiIgnoreCase(s, "sensor_profile")) {
+      // Profile-aware SET has exactly two named fields. The old SET parser
+      // intentionally remains separate so laser_installed cannot act as an
+      // implicit sensor selection. Reject duplicate/unknown fields instead of
+      // allowing a misleading ACK after ignoring part of the request.
+      const String prefix = "DEVICE:SET_CONFIG ";
+      String params = s.substring(prefix.length());
+      String modelRaw;
+      String profileRaw;
+      bool seenModel = false;
+      bool seenProfile = false;
+      int fieldCount = 0;
+
+      while (params.length() > 0) {
+        const int comma = params.indexOf(',');
+        String field = (comma < 0) ? params : params.substring(0, comma);
+        field.trim();
+        if (field.length() == 0) {
+          err = "DEVICE_CONFIG op=SET reason=INVALID_PARAM";
+          return false;
+        }
+        if (field.startsWith("platform_model=")) {
+          if (seenModel) {
+            err = "DEVICE_CONFIG op=SET reason=INVALID_PARAM";
+            return false;
+          }
+          modelRaw = field.substring(String("platform_model=").length());
+          seenModel = true;
+        } else if (field.startsWith("sensor_profile=")) {
+          if (seenProfile) {
+            err = "DEVICE_CONFIG op=SET reason=INVALID_PARAM";
+            return false;
+          }
+          profileRaw = field.substring(String("sensor_profile=").length());
+          seenProfile = true;
+        } else {
+          err = "DEVICE_CONFIG op=SET reason=INVALID_PARAM";
+          return false;
+        }
+        ++fieldCount;
+        if (comma < 0) break;
+        params = params.substring(comma + 1);
+        if (params.length() == 0) {
+          err = "DEVICE_CONFIG op=SET reason=INVALID_PARAM";
+          return false;
+        }
+      }
+
+      if (fieldCount != 2 || !seenModel || !seenProfile ||
+          modelRaw.length() == 0 || profileRaw.length() == 0) {
+        err = "DEVICE_CONFIG op=SET reason=INVALID_PARAM";
+        return false;
+      }
+
+      PlatformModel model = PlatformModel::BASE;
+      if (!parsePlatformModel(modelRaw, model) ||
+          (model != PlatformModel::BASE && model != PlatformModel::PLUS)) {
+        err = "DEVICE_CONFIG op=SET reason=UNSUPPORTED_MODEL";
+        return false;
+      }
+
+      SensorProfileId profile = SensorProfileId::NONE;
+      if (!parseSensorProfile(profileRaw, profile)) {
+        err = "DEVICE_CONFIG op=SET reason=UNSUPPORTED_PROFILE";
+        return false;
+      }
+
+      if (model == PlatformModel::BASE && profile != SensorProfileId::NONE) {
+        err = "DEVICE_CONFIG op=SET reason=INVALID_COMBINATION";
+        return false;
+      }
+      out.type = CmdType::DEVICE_SET_PROFILE_CONFIG;
+      out.deviceProfileConfig.platformModel = model;
+      out.deviceProfileConfig.sensorProfile = profile;
       return true;
     }
     if (s.startsWith("DEVICE:SET_CONFIG")) {
@@ -323,6 +430,14 @@ public:
     if (s.equalsIgnoreCase("EMPTY:GET")) {
       out.type = CmdType::EMPTY_DISTANCE_GET;
       return true;
+    }
+    if (s.equalsIgnoreCase("EMPTY:SET_CURRENT")) {
+      out.type = CmdType::EMPTY_DISTANCE_SET_CURRENT;
+      return true;
+    }
+    if (s.startsWith("EMPTY:SET_CURRENT")) {
+      err = "INVALID_PARAM";
+      return false;
     }
     if (s.startsWith("EMPTY:SET")) {
       out.type = CmdType::EMPTY_DISTANCE_SET;

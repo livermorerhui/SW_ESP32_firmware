@@ -134,6 +134,33 @@ inline String deviceConfig(PlatformModel platformModel, bool laserInstalled) {
   return out;
 }
 
+// The profile-aware reply is a separate wire contract. Keep deviceConfig()
+// above byte-for-byte compatible with the older Demo APP.
+inline String deviceProfileConfig(
+    const char* op,
+    PlatformModel platformModel,
+    SensorProfileId sensorProfile,
+    uint32_t generation) {
+  String out;
+  out.reserve(128);
+  appendKeyValue(out, "ACK:DEVICE_CONFIG op=", op);
+  appendKeyIntValue(out, " schema=", 1);
+  appendKeyValue(out, " platform_model=", platformModelName(platformModel));
+  appendKeyValue(out, " sensor_profile=", sensorProfileName(sensorProfile));
+  appendKeyIntValue(
+      out, " laser_installed=", normalizedLaserInstalledForPlatformModel(platformModel) ? 1 : 0);
+  appendKeyUnsignedLongValue(out, " generation=", static_cast<unsigned long>(generation));
+  return out;
+}
+
+inline String deviceProfileConfigNack(const char* op, const char* reason) {
+  String out;
+  out.reserve(88);
+  appendKeyValue(out, "NACK:DEVICE_CONFIG op=", op);
+  appendKeyValue(out, " reason=", reason);
+  return out;
+}
+
 inline String degradedStart(const PlatformSnapshot& snapshot) {
   String out;
   out.reserve(56);
@@ -209,6 +236,32 @@ inline String emptyDistance(
   if (isfinite(distanceMm)) appendKeyFloatValue(out, " distance_mm=", distanceMm, 2);
   if (isfinite(toleranceMm)) appendKeyFloatValue(out, " tolerance_mm=", toleranceMm, 2);
   appendKeyValue(out, " backend=", backend ? backend : "UNKNOWN");
+  return out;
+}
+
+// The profile-aware empty-distance reply is a separate contract; the older
+// emptyDistance() payload above stays unchanged for legacy clients.
+inline String profileEmptyDistance(
+    const char* operation,
+    bool isSet,
+    float distanceMm,
+    float toleranceMm,
+    SensorProfileId sensorProfile,
+    uint32_t configGeneration,
+    uint32_t emptyRevision) {
+  String out;
+  out.reserve(160);
+  appendKeyValue(out, "ACK:EMPTY op=", operation);
+  appendKeyValue(out, " status=", isSet ? "SET" : "UNSET");
+  if (isSet) {
+    appendKeyFloatValue(out, " distance_mm=", distanceMm, 2);
+    appendKeyFloatValue(out, " tolerance_mm=", toleranceMm, 2);
+  }
+  appendKeyValue(out, " sensor_profile=", sensorProfileName(sensorProfile));
+  appendKeyUnsignedLongValue(
+      out, " generation=", static_cast<unsigned long>(configGeneration));
+  appendKeyUnsignedLongValue(
+      out, " empty_revision=", static_cast<unsigned long>(emptyRevision));
   return out;
 }
 

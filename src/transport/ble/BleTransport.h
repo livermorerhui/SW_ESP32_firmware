@@ -6,7 +6,9 @@
 #include <BLE2902.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <atomic>
 #include <string>
 #include "config/GlobalConfig.h"
 #include "core/EventBus.h"
@@ -26,6 +28,9 @@ class BleTransport : public EventSink, public FirmwareOtaStatusSink {
 public:
   void begin(CommandBus* cb, const char* deviceName = nullptr, const char* advertisedModel = nullptr);
   void updateAdvertisingIdentity(const char* deviceName, const char* advertisedModel = nullptr);
+  // Fences queued and in-flight telemetry before acknowledging a sensor
+  // profile switch. Control ACKs and non-stream events are untouched.
+  void invalidatePendingStreamFrames();
   bool isConnected() const { return deviceConnected; }
   uint32_t currentSessionId() const { return sessionId; }
   void setDisconnectSink(BleDisconnectSink* s) { disconnectSink = s; }
@@ -60,6 +65,8 @@ private:
     Priority priority = Priority::CONTROL;
     char line[512]{};
     uint32_t enqueuedAtMs = 0;
+    uint32_t streamGeneration = 0;
+    uint32_t streamSessionId = 0;
   };
 
   enum class NotifySubscriptionState : uint8_t {
@@ -261,6 +268,8 @@ private:
   QueueHandle_t otaQueue = nullptr;
   QueueHandle_t txControlQueue = nullptr;
   QueueHandle_t txStreamQueue = nullptr;
+  SemaphoreHandle_t streamSendMutex = nullptr;
+  std::atomic<uint32_t> streamGeneration{1};
   QueueSetHandle_t txQueueSet = nullptr;
   TaskHandle_t controlTaskHandle = nullptr;
   TaskHandle_t otaTaskHandle = nullptr;

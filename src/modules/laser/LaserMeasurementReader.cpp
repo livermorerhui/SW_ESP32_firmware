@@ -8,105 +8,188 @@ constexpr uint32_t kReadFailureSummaryIntervalMs = 10000UL;
 constexpr uint32_t kMeasurementDiagSummaryIntervalMs = 2000UL;
 constexpr uint32_t kMeasurementDiagSlowReadWarnMs = 80UL;
 constexpr uint8_t kUnifiedProbeUnavailableCode = 0xE3;
-constexpr uint8_t kUnifiedProbeConflictCode = 0xE4;
-constexpr uint8_t kUnifiedIicProbeAttempts = 3;
-// ModbusMaster's transaction timeout is blocking. Keep the boot probe to one
-// bounded attempt so a missing 485 device cannot starve the task watchdog.
-constexpr uint8_t kUnified485ProbeAttempts = 1;
 }
 
-void LaserMeasurementReader::begin() {
-#if defined(SW_DISTANCE_BACKEND_UNIFIED)
-  profile = &activeLaserSensorProfile();
-  cydReader.begin();
-  Serial1.begin(profile->serial.baud, profile->serial.serialConfig, RX_PIN, TX_PIN);
-  node.begin(profile->modbus.slaveId, Serial1);
-  SW_VERBOSE_SERIAL_PRINTF(
-      "[LASER_SENSOR_PROFILE] active=UNIFIED iic_address=0x%02X iic_sda=%u iic_scl=%u "
-      "uart_baud=%lu uart_slave_id=%u\n",
-      static_cast<unsigned>(Cyd3s1612I2cReader::kAddress),
-      static_cast<unsigned>(Cyd3s1612I2cReader::kSdaPin),
-      static_cast<unsigned>(Cyd3s1612I2cReader::kSclPin),
-      static_cast<unsigned long>(profile->serial.baud),
-      static_cast<unsigned>(profile->modbus.slaveId));
-
-  // The module needs its documented startup grace period before a probe can
-  // distinguish a real CYD3S1612 response from a boot-time NACK.
-  delay(Cyd3s1612I2cReader::kStartupGraceMs);
-  uint8_t iicResult = 0;
-  uint8_t modbusResult = 0;
-  LaserMeasurementQuality iicQuality = LaserMeasurementQuality::UNKNOWN;
-  LaserMeasurementQuality modbusQuality = LaserMeasurementQuality::UNKNOWN;
-  const char* iicReason = nullptr;
-  const char* modbusReason = nullptr;
-  uint8_t iicAttempts = 0;
-  uint8_t modbusAttempts = 0;
-  bool iicDetected = false;
-  bool modbusDetected = false;
-  const uint32_t iicProbeStartedAtMs = millis();
-  for (; iicAttempts < kUnifiedIicProbeAttempts && !iicDetected; ++iicAttempts) {
-    iicDetected = probeIic(iicResult, iicQuality, iicReason);
-  }
-  const uint32_t iicProbeDurationMs = millis() - iicProbeStartedAtMs;
-  // Probe the two physical transports independently.  A successful IIC probe
-  // must not suppress the 485 probe; otherwise the documented dual-device
-  // conflict state can never be observed.
-  const uint32_t modbusProbeStartedAtMs = millis();
-  for (; modbusAttempts < kUnified485ProbeAttempts && !modbusDetected; ++modbusAttempts) {
-    modbusDetected = probe485(modbusResult, modbusQuality, modbusReason);
-  }
-  const uint32_t modbusProbeDurationMs = millis() - modbusProbeStartedAtMs;
-  SW_VERBOSE_SERIAL_PRINTF(
-      "[SENSOR_PROBE] backend=CYD3S1612_IIC result=%s quality=%s reason=%s wire=0x%02X attempts=%u duration_ms=%lu\n",
-      iicDetected ? "pass" : "fail",
-      laserMeasurementQualityName(iicQuality),
-      iicReason ? iicReason : (iicDetected ? "OK" : "UNKNOWN"),
-      static_cast<unsigned>(iicResult),
-      static_cast<unsigned>(iicAttempts),
-      static_cast<unsigned long>(iicProbeDurationMs));
-  SW_VERBOSE_SERIAL_PRINTF(
-      "[SENSOR_PROBE] backend=LASER_485 result=%s quality=%s reason=%s wire=0x%02X attempts=%u duration_ms=%lu\n",
-      modbusDetected ? "pass" : "fail",
-      laserMeasurementQualityName(modbusQuality),
-      modbusReason ? modbusReason : (modbusDetected ? "OK" : "UNKNOWN"),
-      static_cast<unsigned>(modbusResult),
-      static_cast<unsigned>(modbusAttempts),
-      static_cast<unsigned long>(modbusProbeDurationMs));
-  if (iicDetected && modbusDetected) {
-    backend_ = LaserMeasurementBackend::SENSOR_CONFLICT;
-  } else if (iicDetected) {
-    backend_ = LaserMeasurementBackend::CYD3S1612_IIC;
-  } else if (modbusDetected) {
-    backend_ = LaserMeasurementBackend::LASER_485;
-  } else {
-    backend_ = LaserMeasurementBackend::SENSOR_UNAVAILABLE;
-  }
-  SW_VERBOSE_SERIAL_PRINTF(
-      "[SENSOR_PROBE] selected=%s lock=1\n",
-      laserMeasurementBackendName(backend_));
-#elif defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC)
-  cydReader.begin();
-  profile = nullptr;
+bool LaserMeasurementReader::supportsProfile(SensorProfileId requested) {
+  switch (requested) {
+    case SensorProfileId::NONE:
+      return true;
+    case SensorProfileId::J100_485:
+#if defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC) && !defined(SW_DISTANCE_BACKEND_UNIFIED)
+      return false;
 #else
-  profile = &activeLaserSensorProfile();
-  Serial1.begin(profile->serial.baud, profile->serial.serialConfig, RX_PIN, TX_PIN);
-  node.begin(profile->modbus.slaveId, Serial1);
-  SW_VERBOSE_SERIAL_PRINTF(
-      "[LASER_SENSOR_PROFILE] active=%s baud=%lu slave_id=%u function=0x%02X register=0x%04X count=%u\n",
-      profile->stableName,
-      static_cast<unsigned long>(profile->serial.baud),
-      static_cast<unsigned>(profile->modbus.slaveId),
-      static_cast<unsigned>(profile->modbus.distanceReadFunction),
-      static_cast<unsigned>(profile->modbus.distanceRegister),
-      static_cast<unsigned>(profile->modbus.distanceRegisterCount));
+      return true;
 #endif
+    case SensorProfileId::CYD3S1612_IIC:
+#if defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC) || defined(SW_DISTANCE_BACKEND_UNIFIED)
+      return true;
+#else
+      return false;
+#endif
+  }
+  return false;
+}
+
+bool LaserMeasurementReader::ensureMutex() {
+  if (!mutex_) {
+    mutex_ = xSemaphoreCreateMutex();
+  }
+  return mutex_ != nullptr;
+}
+
+void LaserMeasurementReader::stopUnlocked() {
+  if (backend_ == LaserMeasurementBackend::LASER_485) {
+#if !defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC) || defined(SW_DISTANCE_BACKEND_UNIFIED)
+    Serial1.end();
+#endif
+  } else if (backend_ == LaserMeasurementBackend::CYD3S1612_IIC) {
+#if defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC) || defined(SW_DISTANCE_BACKEND_UNIFIED)
+    Wire.end();
+    cydReader = Cyd3s1612I2cReader{};
+#endif
+  }
+  backend_ = LaserMeasurementBackend::SENSOR_UNAVAILABLE;
+  selectedProfile_ = SensorProfileId::NONE;
+  profile = nullptr;
+}
+
+void LaserMeasurementReader::resetReaderState() {
+  clearFailureBurst(millis(), true);
+  hasLoggedReadFailure = false;
+  lastReadFailureCode = 0;
+  lastReadFailureLogMs = 0;
+  suppressedReadFailureCount = 0;
+  transientActive = false;
+  transientStartedAtMs = 0;
+  transientLastFailureAtMs = 0;
+  transientLastLogAtMs = 0;
+  transientConsecutiveFailures = 0;
+  transientLastCode = 0;
+  transientLastTopState = TopState::IDLE;
+  diagWindowStartedAtMs = 0;
+  diagLastLogAtMs = 0;
+  diagReadOkCount = 0;
+  diagReadFailCount = 0;
+  diagMaxReadMs = 0;
+  diagLastReadMs = 0;
+  diagLastResult = 0;
+  sampleSequence_ = 0;
+  lastPhysicalDistanceMm_ = NAN;
+  hasLastPhysicalDistance_ = false;
+}
+
+bool LaserMeasurementReader::configure(SensorProfileId nextProfile) {
+  if (!ensureMutex()) {
+    SW_VERBOSE_SERIAL_PRINTLN("[LASER_SENSOR_PROFILE] configure_failed reason=NO_MUTEX");
+    return false;
+  }
+  xSemaphoreTake(mutex_, portMAX_DELAY);
+  const bool supported = supportsProfile(nextProfile);
+  if (!supported) {
+    stopUnlocked();
+    resetReaderState();
+    readerEpoch_ += 1;
+    if (readerEpoch_ == 0) readerEpoch_ = 1;
+    selectedProfile_ = nextProfile;
+    SW_VERBOSE_SERIAL_PRINTF(
+        "[LASER_SENSOR_PROFILE] selected=%s backend=SENSOR_UNAVAILABLE reader_epoch=%lu supported=0\n",
+        sensorProfileName(nextProfile),
+        static_cast<unsigned long>(readerEpoch_));
+    xSemaphoreGive(mutex_);
+    return false;
+  }
+  if (selectedProfile_ == nextProfile &&
+      (nextProfile == SensorProfileId::NONE ||
+       backend_ == LaserMeasurementBackend::LASER_485 ||
+       backend_ == LaserMeasurementBackend::CYD3S1612_IIC)) {
+    xSemaphoreGive(mutex_);
+    return true;
+  }
+
+  stopUnlocked();
+  resetReaderState();
+  readerEpoch_ += 1;
+  if (readerEpoch_ == 0) readerEpoch_ = 1;
+  selectedProfile_ = nextProfile;
+  switch (nextProfile) {
+    case SensorProfileId::NONE:
+      break;
+    case SensorProfileId::J100_485:
+#if !defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC) || defined(SW_DISTANCE_BACKEND_UNIFIED)
+      profile = &activeLaserSensorProfile();
+      Serial1.begin(profile->serial.baud, profile->serial.serialConfig, RX_PIN, TX_PIN);
+      node.begin(profile->modbus.slaveId, Serial1);
+      backend_ = LaserMeasurementBackend::LASER_485;
+#endif
+      break;
+    case SensorProfileId::CYD3S1612_IIC:
+#if defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC) || defined(SW_DISTANCE_BACKEND_UNIFIED)
+      cydReader = Cyd3s1612I2cReader{};
+      cydReader.begin();
+      backend_ = LaserMeasurementBackend::CYD3S1612_IIC;
+#endif
+      break;
+    default:
+      break;
+  }
+  SW_VERBOSE_SERIAL_PRINTF(
+      "[LASER_SENSOR_PROFILE] selected=%s backend=%s reader_epoch=%lu supported=%d source=explicit_config\n",
+      sensorProfileName(nextProfile),
+      laserMeasurementBackendName(backend_),
+      static_cast<unsigned long>(readerEpoch_),
+      supported ? 1 : 0);
+  xSemaphoreGive(mutex_);
+  return supported;
+}
+
+void LaserMeasurementReader::stop() {
+  if (!ensureMutex()) return;
+  xSemaphoreTake(mutex_, portMAX_DELAY);
+  stopUnlocked();
+  resetReaderState();
+  readerEpoch_ += 1;
+  if (readerEpoch_ == 0) readerEpoch_ = 1;
+  xSemaphoreGive(mutex_);
 }
 
 MeasurementReadResult LaserMeasurementReader::read(
     TopState topState,
     bool laserInstalled,
     uint32_t nextReadBackoffMs) {
+  MeasurementReadResult result{};
+  if (!ensureMutex()) {
+    result.quality = LaserMeasurementQuality::SENSOR_UNAVAILABLE;
+    result.invalidReason = "READER_MUTEX_UNAVAILABLE";
+    result.readStartedAtMs = millis();
+    result.readCompletedAtMs = result.readStartedAtMs;
+    return result;
+  }
+  xSemaphoreTake(mutex_, portMAX_DELAY);
+  result = readUnlocked(topState, laserInstalled, nextReadBackoffMs);
+  result.readerEpoch = readerEpoch_;
+  result.sensorProfile = selectedProfile_;
+#if defined(SW_DISTANCE_BACKEND_CYD3S1612_IIC) || defined(SW_DISTANCE_BACKEND_UNIFIED)
+  if (backend_ == LaserMeasurementBackend::CYD3S1612_IIC && result.sampleFresh) {
+    result.sampleSequence = ++sampleSequence_;
+  }
+#endif
+  xSemaphoreGive(mutex_);
+  return result;
+}
+
+MeasurementReadResult LaserMeasurementReader::readUnlocked(
+    TopState topState,
+    bool laserInstalled,
+    uint32_t nextReadBackoffMs) {
   MeasurementReadResult out{};
+  if (backend_ == LaserMeasurementBackend::SENSOR_UNAVAILABLE) {
+    out.modbusResult = kUnifiedProbeUnavailableCode;
+    out.quality = LaserMeasurementQuality::SENSOR_UNAVAILABLE;
+    out.invalidReason = "SENSOR_UNAVAILABLE";
+    out.readStartedAtMs = millis();
+    out.readCompletedAtMs = out.readStartedAtMs;
+    return out;
+  }
 #if defined(SW_DISTANCE_BACKEND_UNIFIED)
   switch (backend_) {
     case LaserMeasurementBackend::CYD3S1612_IIC:
@@ -114,7 +197,7 @@ MeasurementReadResult LaserMeasurementReader::read(
     case LaserMeasurementBackend::LASER_485:
       return read485(topState, laserInstalled, nextReadBackoffMs);
     case LaserMeasurementBackend::SENSOR_CONFLICT:
-      out.modbusResult = kUnifiedProbeConflictCode;
+      out.modbusResult = kUnifiedProbeUnavailableCode;
       out.quality = LaserMeasurementQuality::SENSOR_CONFLICT;
       out.invalidReason = "SENSOR_CONFLICT";
       break;
@@ -225,34 +308,6 @@ uint8_t LaserMeasurementReader::readDistanceRegister(const LaserSensorProfile& a
 #endif
 
 #if defined(SW_DISTANCE_BACKEND_UNIFIED)
-bool LaserMeasurementReader::probeIic(
-    uint8_t& resultCode,
-    LaserMeasurementQuality& quality,
-    const char*& reason) {
-  const Cyd3s1612I2cReadResult result = cydReader.read();
-  resultCode = result.wireError;
-  quality = result.quality;
-  reason = result.invalidReason;
-  return result.transportOk && result.validDistance;
-}
-
-bool LaserMeasurementReader::probe485(
-    uint8_t& resultCode,
-    LaserMeasurementQuality& quality,
-    const char*& reason) {
-  resultCode = readDistanceRegister(*profile);
-  if (resultCode != node.ku8MBSuccess) {
-    quality = LaserMeasurementQuality::MODBUS_READ_FAIL;
-    reason = "READ_FAIL";
-    return false;
-  }
-  const LaserDistanceDecodeResult decoded =
-      decodeLaserDistanceRaw(*profile, node.getResponseBuffer(0));
-  quality = decoded.quality;
-  reason = decoded.invalidReason;
-  return decoded.validDistance;
-}
-
 MeasurementReadResult LaserMeasurementReader::readIic(
     TopState topState,
     bool laserInstalled,

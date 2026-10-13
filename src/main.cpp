@@ -81,6 +81,11 @@ public:
   bool handle(const Command& c, String& outAck) override {
     switch (c.type) {
       case CmdType::CAP_QUERY: {
+        if (!l->configIdentityValid()) {
+          SW_VERBOSE_SERIAL_PRINTLN("[DEVICE_CONFIG] op=CAP result=reject reason=CONFIG_ERROR");
+          outAck = "NACK:CONFIG_ERROR";
+          return false;
+        }
         const PlatformSnapshot snapshot = sm->snapshot();
         SW_VERBOSE_SERIAL_PRINTF(
             "[LAYER:CONFIG_TRUTH] source=CAP_QUERY platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d degraded_start_available=%d degraded_start_enabled=%d runtime_ready=%d start_ready=%d baseline_ready=%d top_state=%s\n",
@@ -144,6 +149,68 @@ public:
         return true;
       }
 
+      case CmdType::DEVICE_GET_CONFIG: {
+        DeviceConfigSnapshot config{};
+        String reason;
+        if (!l->getProfileConfig(config, reason)) {
+          g_ble.invalidatePendingStreamFrames();
+          SW_VERBOSE_SERIAL_PRINTF(
+              "[DEVICE_CONFIG] op=GET result=failure reason=%s\n",
+              reason.c_str());
+          outAck = HubAckBuilder::deviceProfileConfigNack(
+              "GET", reason == "UNSUPPORTED_MODEL" ? "UNSUPPORTED_MODEL" : "CONFIG_ERROR");
+          return false;
+        }
+        outAck = HubAckBuilder::deviceProfileConfig(
+            "GET", config.platformModel, config.sensorProfile, config.generation);
+        SW_VERBOSE_SERIAL_PRINTF(
+            "[DEVICE_CONFIG] op=GET result=ok model=%s profile=%s generation=%lu\n",
+            platformModelName(config.platformModel),
+            sensorProfileName(config.sensorProfile),
+            static_cast<unsigned long>(config.generation));
+        return true;
+      }
+
+      case CmdType::DEVICE_SET_PROFILE_CONFIG: {
+        const DeviceProfileConfigCommand& requested = c.deviceProfileConfig;
+        SW_VERBOSE_SERIAL_PRINTF(
+            "[DEVICE_CONFIG] op=SET requested_model=%s requested_profile=%s\n",
+            platformModelName(requested.platformModel),
+            sensorProfileName(requested.sensorProfile));
+        String reason;
+        if (!l->setProfileConfig(
+                requested.platformModel, requested.sensorProfile, reason)) {
+          g_ble.invalidatePendingStreamFrames();
+          outAck = HubAckBuilder::deviceProfileConfigNack("SET", reason.c_str());
+          SW_VERBOSE_SERIAL_PRINTF(
+              "[DEVICE_CONFIG] op=SET result=failure reason=%s\n",
+              reason.c_str());
+          return false;
+        }
+        g_ble.invalidatePendingStreamFrames();
+        DeviceConfigSnapshot applied{};
+        if (!l->getProfileConfig(applied, reason)) {
+          g_ble.invalidatePendingStreamFrames();
+          outAck = HubAckBuilder::deviceProfileConfigNack("SET", "VERIFY_FAILED");
+          SW_VERBOSE_SERIAL_PRINTF(
+              "[DEVICE_CONFIG] op=SET result=verify_failed reason=%s\n",
+              reason.c_str());
+          return false;
+        }
+        outAck = HubAckBuilder::deviceProfileConfig(
+            "SET", applied.platformModel, applied.sensorProfile, applied.generation);
+        g_bleDeviceName = buildBleDeviceName(applied.platformModel);
+        g_ble.updateAdvertisingIdentity(
+            g_bleDeviceName.c_str(),
+            platformModelName(applied.platformModel));
+        SW_VERBOSE_SERIAL_PRINTF(
+            "[DEVICE_CONFIG] op=SET result=ok model=%s profile=%s generation=%lu\n",
+            platformModelName(applied.platformModel),
+            sensorProfileName(applied.sensorProfile),
+            static_cast<unsigned long>(applied.generation));
+        return true;
+      }
+
       case CmdType::DEVICE_SET_CONFIG: {
         SW_VERBOSE_SERIAL_PRINTF(
             "[LAYER:COMMAND_DISPATCH] cmd=DEVICE_SET_CONFIG platform_model=%s laser_installed=%d owner=LaserModule::setDeviceConfig\n",
@@ -154,9 +221,12 @@ public:
                 c.deviceConfig.platformModel,
                 c.deviceConfig.laserInstalled,
                 reason)) {
+          g_ble.invalidatePendingStreamFrames();
           outAck = HubAckBuilder::simpleNack(reason);
           return false;
         }
+
+        g_ble.invalidatePendingStreamFrames();
 
         outAck = HubAckBuilder::deviceConfig(l->platformModel(), l->laserInstalled());
         g_bleDeviceName = buildBleDeviceName(l->platformModel());
@@ -287,19 +357,27 @@ public:
       }
 
       case CmdType::SCALE_ZERO:
-        l->triggerZero();
+      case CmdType::CAL_ZERO: {
+        String reason;
+        if (!l->clearCalibrationParameters(reason)) {
+          outAck = HubAckBuilder::simpleNack(reason);
+          return false;
+        }
+        outAck = c.type == CmdType::CAL_ZERO
+            ? HubAckBuilder::calibrationZero()
+            : HubAckBuilder::ok();
+        return true;
+      }
+
+      case CmdType::SCALE_CAL: {
+        String reason;
+        if (!l->setParams(c.p1, c.p2, reason)) {
+          outAck = HubAckBuilder::simpleNack(reason);
+          return false;
+        }
         outAck = HubAckBuilder::ok();
         return true;
-
-      case CmdType::CAL_ZERO:
-        l->triggerZero();
-        outAck = HubAckBuilder::calibrationZero();
-        return true;
-
-      case CmdType::SCALE_CAL:
-        l->setParams(c.p1, c.p2);
-        outAck = HubAckBuilder::ok();
-        return true;
+      }
 
       case CmdType::CAL_CAPTURE: {
         CalibrationCapture capture{};
@@ -354,6 +432,32 @@ public:
       }
 
       case CmdType::EMPTY_DISTANCE_GET: {
+        DeviceConfigSnapshot config{};
+        String configReason;
+        if (!l->getProfileConfig(config, configReason)) {
+          outAck = HubAckBuilder::emptyDistanceRejected("GET", "CONFIG_ERROR");
+          return false;
+        }
+        if (config.schema1Managed) {
+          ProfileEmptyDistanceRecord profileRecord{};
+          if (config.platformModel == PlatformModel::PLUS &&
+              config.sensorProfile != SensorProfileId::NONE) {
+            String reason;
+            if (!l->getProfileEmptyDistance(profileRecord, reason)) {
+              outAck = HubAckBuilder::emptyDistanceRejected("GET", reason);
+              return false;
+            }
+          } else {
+            profileRecord.sensorProfile = config.sensorProfile;
+            profileRecord.configGeneration = config.generation;
+          }
+          outAck = HubAckBuilder::profileEmptyDistance(
+              "GET", profileRecord.isSet,
+              profileRecord.distanceMm, profileRecord.toleranceMm,
+              profileRecord.sensorProfile, profileRecord.configGeneration,
+              profileRecord.emptyRevision);
+          return true;
+        }
         EmptyDistanceRecord record{};
         const bool supported = l->laserInstalled() &&
             (strcmp(l->sensorBackendName(), "LASER_485") == 0 ||
@@ -366,6 +470,20 @@ public:
             ready ? record.distanceRuntime * LASER_DISTANCE_RUNTIME_DIVISOR : NAN,
             ready ? record.toleranceRuntime * LASER_DISTANCE_RUNTIME_DIVISOR : NAN,
             l->sensorBackendName());
+        return true;
+      }
+
+      case CmdType::EMPTY_DISTANCE_SET_CURRENT: {
+        ProfileEmptyDistanceRecord saved{};
+        String reason;
+        if (!l->setEmptyDistanceFromCurrent(saved, reason)) {
+          outAck = "NACK:EMPTY op=SET_CURRENT reason=";
+          outAck += reason;
+          return false;
+        }
+        outAck = HubAckBuilder::profileEmptyDistance(
+            "SET_CURRENT", true, saved.distanceMm, saved.toleranceMm,
+            saved.sensorProfile, saved.configGeneration, saved.emptyRevision);
         return true;
       }
 
@@ -398,6 +516,23 @@ public:
                strcmp(l->sensorBackendName(), "CYD3S1612_IIC") == 0);
           outAck = HubAckBuilder::emptyDistanceRejected("CLEAR", reason, supported);
           return false;
+        }
+        DeviceConfigSnapshot config{};
+        String configReason;
+        if (!l->getProfileConfig(config, configReason)) {
+          outAck = HubAckBuilder::emptyDistanceRejected("CLEAR", "CONFIG_ERROR");
+          return false;
+        }
+        if (config.schema1Managed) {
+          ProfileEmptyDistanceRecord cleared{};
+          if (!l->getProfileEmptyDistance(cleared, configReason)) {
+            outAck = HubAckBuilder::emptyDistanceRejected("CLEAR", configReason);
+            return false;
+          }
+          outAck = HubAckBuilder::profileEmptyDistance(
+              "CLEAR", false, NAN, NAN, cleared.sensorProfile,
+              cleared.configGeneration, cleared.emptyRevision);
+          return true;
         }
         outAck = HubAckBuilder::emptyDistance(
             "CLEAR", true, "UNSET", NAN, NAN, l->sensorBackendName());
@@ -576,10 +711,14 @@ void setup() {
   g_ble.setDisconnectSink(&g_handler);
   g_ble.setPlatformSnapshotOwner(&g_fsm);
   waitForMeasurementStartupResolved();
-  g_bleDeviceName = buildBleDeviceName(g_laser.platformModel());
+  g_bleDeviceName = g_laser.configIdentityValid()
+      ? buildBleDeviceName(g_laser.platformModel())
+      : String("SonicWave_Service");
   g_ble.begin(&g_cmdBus,
       g_bleDeviceName.c_str(),
-      platformModelName(g_laser.platformModel()));
+      g_laser.configIdentityValid()
+          ? platformModelName(g_laser.platformModel())
+          : "SERVICE");
   g_eventBus.setSink(&g_ble);
 
   HumanReadableLog::ready();

@@ -144,11 +144,22 @@ bool SystemStateMachine::degradedStartBypassActive() const {
 }
 
 bool SystemStateMachine::effectiveRuntimeReady() const {
-  return degradedStartPolicyDecision().effectiveRuntimeReady;
+  // A missing or invalid device/profile configuration is a maintenance fault,
+  // not a measurement failure that the legacy degraded-start path may bypass.
+  return (!laser || laser->startConfigurationComplete()) &&
+      degradedStartPolicyDecision().effectiveRuntimeReady;
 }
 
 bool SystemStateMachine::effectiveStartReady() const {
-  return degradedStartPolicyDecision().effectiveStartReady;
+  // CYD's distance reader is usable for configuration, but its protected
+  // start/state policy has not been validated. Do not let the legacy
+  // measurement-fault bypass promote it to an approved protection path.
+  if (laser && !laser->protectedStartPolicyAvailable() &&
+      (fall_stop_enabled || leave_stop_enabled)) {
+    return false;
+  }
+  return (!laser || laser->startConfigurationComplete()) &&
+      degradedStartPolicyDecision().effectiveStartReady;
 }
 
 bool SystemStateMachine::effectiveLaserAvailable() const {
@@ -951,6 +962,24 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
     return false;
   }
 
+  if (laser && !laser->startConfigurationComplete()) {
+    reason = FaultCode::NOT_ARMED;
+    SW_VERBOSE_SERIAL_PRINTF(
+        "[LAYER:START_GATE] decision=reject reason=CONFIG_ERROR model=%s\n",
+        platformModelName(startSnapshot.platformModel));
+    HumanReadableLog::startDecision(false, "：设备型号或传感器配置尚未完成");
+    return false;
+  }
+
+  if (laser && !laser->protectedStartPolicyAvailable() &&
+      (fall_stop_enabled || leave_stop_enabled)) {
+    reason = FaultCode::NOT_ARMED;
+    SW_VERBOSE_SERIAL_PRINTLN(
+        "[LAYER:START_GATE] decision=reject reason=PROTECTED_POLICY_UNVALIDATED");
+    HumanReadableLog::startDecision(false, "：当前传感器的保护判断尚未验收");
+    return false;
+  }
+
   if (pause_reason_code != FaultCode::NONE) {
     reason = FaultCode::NOT_ARMED;
     SW_VERBOSE_SERIAL_PRINTF(
@@ -1023,6 +1052,15 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
   return true;
 }
 
+void SystemStateMachine::stopForConfigurationFault() {
+  // Keep the existing EVT:STOP field set and numeric code. The textual reason
+  // distinguishes this device-initiated maintenance stop from MANUAL_STOP;
+  // no fall/leave safety event is fabricated.
+  pending_stop_reason_text = "CONFIG_ERROR";
+  pending_stop_source = VerificationStopSource::NONE;
+  requestStop();
+}
+
 void SystemStateMachine::requestStop() {
   const bool wasRunning = (st == TopState::RUNNING);
   SW_VERBOSE_SERIAL_PRINTF(
@@ -1040,22 +1078,32 @@ void SystemStateMachine::requestStop() {
                   faultCodeName(blocking_fault_code));
     if (wave) wave->stopSoft();
     setState(TopState::FAULT_STOP);
+    clearPendingStopContext();
     return;
   }
 
   TopState target = canEnterArmedState() ? TopState::ARMED : TopState::IDLE;
   if (wasRunning) {
-    const FaultCode stopCode =
-        (pause_reason_code != FaultCode::NONE) ? pause_reason_code : FaultCode::NONE;
+    const bool configFaultStop = pending_stop_reason_text &&
+        strcmp(pending_stop_reason_text, "CONFIG_ERROR") == 0;
+    const FaultCode stopCode = configFaultStop
+        ? FaultCode::NONE
+        : ((pause_reason_code != FaultCode::NONE) ? pause_reason_code : FaultCode::NONE);
     const char* stopReasonText = resolvedStopReasonText(
         stopCode,
         (pause_reason_code != FaultCode::NONE) ? faultCodeName(pause_reason_code) : "MANUAL_STOP");
-    const VerificationStopSource stopSource = resolvedStopSource(
-        (pause_reason_code != FaultCode::NONE)
-            ? VerificationStopSource::FORMAL_SAFETY_OTHER
-            : VerificationStopSource::USER_MANUAL_OTHER);
+    // Existing clients classify FORMAL_SAFETY_OTHER as a real safety stop and
+    // USER_MANUAL_OTHER as a user action. A storage/configuration failure is
+    // neither, so keep its explicit reason and leave the source unclassified.
+    const VerificationStopSource stopSource = configFaultStop
+        ? VerificationStopSource::NONE
+        : resolvedStopSource(
+              (pause_reason_code != FaultCode::NONE)
+                  ? VerificationStopSource::FORMAL_SAFETY_OTHER
+                  : VerificationStopSource::USER_MANUAL_OTHER);
     const SafetySignalKind stopEffect =
-        (pause_reason_code != FaultCode::NONE) ? SafetySignalKind::RECOVERABLE_PAUSE : SafetySignalKind::NONE;
+        (!configFaultStop && pause_reason_code != FaultCode::NONE)
+            ? SafetySignalKind::RECOVERABLE_PAUSE : SafetySignalKind::NONE;
     rememberStopContext(stopReasonText, stopSource, stopEffect);
     emitStopEvent(stopCode, stopEffect, target, stopReasonText, stopSource);
   }
