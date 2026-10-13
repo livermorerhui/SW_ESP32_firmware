@@ -59,6 +59,7 @@ import com.sonicwave.demo.ui.components.MotionSamplingActions
 import com.sonicwave.demo.ui.components.MotionSamplingSection
 import com.sonicwave.demo.ui.components.RawConsoleActions
 import com.sonicwave.demo.ui.components.RawConsoleSection
+import com.sonicwave.demo.ui.components.SensorProfileSection
 import com.sonicwave.demo.ui.components.SystemStatusSection
 import com.sonicwave.demo.ui.components.TelemetryChartSection
 import com.sonicwave.demo.ui.components.TestSessionActions
@@ -66,6 +67,8 @@ import com.sonicwave.demo.ui.components.TestSessionSection
 import com.sonicwave.demo.ui.components.WaveControlActions
 import com.sonicwave.demo.ui.components.WaveControlBottomBar
 import com.sonicwave.transport.BleScanResult
+import com.sonicwave.protocol.PlatformModel
+import com.sonicwave.protocol.SensorProfile
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -159,6 +162,8 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
                 DemoMainTab.DEVICE -> DeviceToolsContent(
                     uiState = uiState,
                     actions = deviceToolsActions,
+                    onSensorProfileSelected = viewModel::updateSelectedSensorProfile,
+                    onWriteSensorProfile = viewModel::sendSensorProfileConfig,
                 )
 
                 DemoMainTab.CALIBRATION -> CalibrationToolsSection(
@@ -321,22 +326,31 @@ private fun RunDashboardContent(
 private fun DeviceToolsContent(
     uiState: UiState,
     actions: DeviceToolsActions,
+    onSensorProfileSelected: (SensorProfile) -> Unit,
+    onWriteSensorProfile: () -> Unit,
 ) {
     DeviceProfileSection(
         uiState = uiState,
         onPlatformModelSelected = actions.onPlatformModelSelected,
         onWriteDeviceConfig = actions.onWriteDeviceConfig,
     )
-    EmptyDistanceSection(
-        uiState = uiState,
-        onSetEmptyDistance = actions.onSetEmptyDistance,
-        onClearEmptyDistance = actions.onClearEmptyDistance,
-    )
-    FallStopProtectionSection(
-        uiState = uiState,
-        onToggleEnabled = actions.onToggleFallStopEnabled,
-        onToggleLeaveEnabled = actions.onToggleLeaveProtectionEnabled,
-    )
+    if (uiState.devicePlatformModel == PlatformModel.PLUS) {
+        SensorProfileSection(
+            uiState = uiState,
+            onSensorProfileSelected = onSensorProfileSelected,
+            onWriteSensorProfile = onWriteSensorProfile,
+        )
+        EmptyDistanceSection(
+            uiState = uiState,
+            onSetEmptyDistance = actions.onSetEmptyDistance,
+            onClearEmptyDistance = actions.onClearEmptyDistance,
+        )
+        FallStopProtectionSection(
+            uiState = uiState,
+            onToggleEnabled = actions.onToggleFallStopEnabled,
+            onToggleLeaveEnabled = actions.onToggleLeaveProtectionEnabled,
+        )
+    }
 }
 
 private fun buildDeviceToolsActions(viewModel: DemoViewModel): DeviceToolsActions {

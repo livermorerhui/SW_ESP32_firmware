@@ -129,13 +129,16 @@ internal class CalibrationSessionStore {
 
     fun withCaptureAvailability(state: UiState): UiState {
         return state.copy(
-            canCaptureCalibrationPoint = state.isConnected &&
-                state.isRecording &&
-                state.sensorBackend?.equals("LASER_485", ignoreCase = true) == true &&
-                isCaptureReferenceValid(state.captureReferenceInput) &&
-                hasCaptureDistanceSnapshot(state),
+            canCaptureCalibrationPoint = captureAvailable(state),
         )
     }
+
+    private fun captureAvailable(state: UiState): Boolean =
+        state.isConnected && state.deviceConfigVerified && state.profileHistoryReady &&
+            state.isRecording &&
+            state.sensorBackend?.equals("LASER_485", ignoreCase = true) == true &&
+            isCaptureReferenceValid(state.captureReferenceInput) &&
+            hasCaptureDistanceSnapshot(state)
 
     fun reset(state: UiState): UiState {
         return synchronizeModelSelectionUi(
@@ -237,10 +240,7 @@ internal class CalibrationSessionStore {
                         ),
                     )
                 },
-                canCaptureCalibrationPoint = state.isConnected &&
-                    state.isRecording &&
-                    isCaptureReferenceValid(state.captureReferenceInput) &&
-                    hasCaptureDistanceSnapshot(state),
+                canCaptureCalibrationPoint = captureAvailable(state),
             ),
         )
     }

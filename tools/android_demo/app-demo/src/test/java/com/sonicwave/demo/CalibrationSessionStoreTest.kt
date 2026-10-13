@@ -16,6 +16,8 @@ class CalibrationSessionStoreTest {
         val unavailable = store.withCaptureAvailability(
             UiState(
                 isConnected = true,
+                deviceConfigVerified = true,
+                profileHistoryReady = true,
                 isRecording = true,
                 captureReferenceInput = "bad",
                 distance = 10f,
@@ -29,6 +31,24 @@ class CalibrationSessionStoreTest {
 
         assertFalse(unavailable.canCaptureCalibrationPoint)
         assertTrue(available.canCaptureCalibrationPoint)
+    }
+
+    @Test
+    fun captureAvailabilityWaitsForVerifiedProfileAndLoadedHistory() {
+        val ready = UiState(
+            isConnected = true,
+            deviceConfigVerified = true,
+            profileHistoryReady = true,
+            isRecording = true,
+            captureReferenceInput = "70.0",
+            distance = 10f,
+            distanceValid = true,
+            sensorBackend = "LASER_485",
+        )
+
+        assertFalse(store.withCaptureAvailability(ready.copy(deviceConfigVerified = false)).canCaptureCalibrationPoint)
+        assertFalse(store.withCaptureAvailability(ready.copy(profileHistoryReady = false)).canCaptureCalibrationPoint)
+        assertTrue(store.withCaptureAvailability(ready).canCaptureCalibrationPoint)
     }
 
     @Test

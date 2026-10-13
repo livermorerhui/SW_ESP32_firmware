@@ -77,6 +77,9 @@ fun CalibrationToolsSection(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             WeightModelSummary(uiState = uiState)
+            uiState.profileHistoryError?.let { error ->
+                Text(error, color = MaterialTheme.colorScheme.error)
+            }
             SectionDivider()
             SectionTitleRow(
                 title = stringResource(R.string.label_calibration_flow_start),
@@ -183,6 +186,33 @@ fun CalibrationToolsSection(
             )
             CalibrationPointSummary(uiState = uiState)
             CalibrationPointTable(points = uiState.calibrationPoints)
+            if (uiState.legacyUnattributedCalibrationPoints.isNotEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            RoundedCornerShape(10.dp),
+                        )
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    SectionTitle(stringResource(R.string.section_legacy_unattributed_calibration))
+                    Text(
+                        text = stringResource(R.string.hint_legacy_unattributed_calibration),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = stringResource(
+                            R.string.label_legacy_unattributed_point_count,
+                            uiState.legacyUnattributedCalibrationPoints.size,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    CalibrationPointTable(points = uiState.legacyUnattributedCalibrationPoints)
+                }
+            }
 
             SectionDivider()
             SectionTitle(stringResource(R.string.label_calibration_flow_chart))

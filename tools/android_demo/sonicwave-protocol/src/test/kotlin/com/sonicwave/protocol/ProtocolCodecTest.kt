@@ -4,12 +4,25 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertFailsWith
 
 class ProtocolCodecTest {
     @Test
     fun encodeCoreCommandsUseFirmwareCanonicalFormat() {
         assertEquals("CAP?", ProtocolCodec.encode(Command.CapabilityQuery))
         assertEquals("SNAPSHOT?", ProtocolCodec.encode(Command.SnapshotQuery))
+        assertEquals("DEVICE:IDENTITY?", ProtocolCodec.encode(Command.DeviceIdentityQuery))
+        assertEquals("DEVICE:GET_CONFIG", ProtocolCodec.encode(Command.DeviceGetConfig))
+        assertEquals(
+            "DEVICE:SET_CONFIG platform_model=PLUS,sensor_profile=CYD3S1612_IIC",
+            ProtocolCodec.encode(
+                Command.DeviceSetProfileConfig(PlatformModel.PLUS, SensorProfile.CYD3S1612_IIC),
+            ),
+        )
+        assertEquals(
+            "DEVICE:SET_CONFIG platform_model=BASE,sensor_profile=NONE",
+            ProtocolCodec.encode(Command.DeviceSetProfileConfig(PlatformModel.BASE, SensorProfile.NONE)),
+        )
         assertEquals(
             "DEVICE:SET_CONFIG platform_model=BASE,laser_installed=0",
             ProtocolCodec.encode(
@@ -28,6 +41,7 @@ class ProtocolCodecTest {
         assertEquals("CAL:CAPTURE w=72.5", ProtocolCodec.encode(Command.CalibrationCapture(72.5f)))
         assertEquals("CAL:GET_MODEL", ProtocolCodec.encode(Command.CalibrationGetModel))
         assertEquals("EMPTY:GET", ProtocolCodec.encode(Command.EmptyDistanceGet))
+        assertEquals("EMPTY:SET_CURRENT", ProtocolCodec.encode(Command.EmptyDistanceSetCurrent))
         assertEquals("EMPTY:SET distance_mm=112.56", ProtocolCodec.encode(Command.EmptyDistanceSet(112.56f)))
         assertEquals("EMPTY:CLEAR", ProtocolCodec.encode(Command.EmptyDistanceClear))
         assertEquals("CAL:CLEAR_WEIGHT_MODEL", ProtocolCodec.encode(Command.CalibrationClearWeightModel))
@@ -63,6 +77,16 @@ class ProtocolCodecTest {
             "STREAM:SET enabled=1,rate_hz=10",
             ProtocolCodec.encode(Command.StreamSet(enabled = true, rateHz = 10)),
         )
+    }
+
+    @Test
+    fun newConfigurationCommandCannotEncodeUnsupportedModelOrBaseSensor() {
+        assertFailsWith<IllegalArgumentException> {
+            ProtocolCodec.encode(Command.DeviceSetProfileConfig(PlatformModel.PRO, SensorProfile.NONE))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ProtocolCodec.encode(Command.DeviceSetProfileConfig(PlatformModel.BASE, SensorProfile.J100_485))
+        }
     }
 
     @Test
@@ -120,6 +144,81 @@ class ProtocolCodecTest {
     }
 
     @Test
+    fun decodeProfileEmptyDistanceRequiresFullProfileAndRevisionReceipt() {
+        val set = assertIs<Event.ProfileEmptyDistanceResult>(
+            ProtocolCodec.decode(
+                "ACK:EMPTY op=SET_CURRENT status=SET distance_mm=112.56 tolerance_mm=0.10 " +
+                    "sensor_profile=J100_485 generation=12 empty_revision=4",
+            ),
+        )
+        assertEquals(true, set.success)
+        assertEquals("SET_CURRENT", set.operation)
+        assertEquals("SET", set.status)
+        assertEquals(112.56f, set.distanceMm)
+        assertEquals(0.10f, set.toleranceMm)
+        assertEquals(SensorProfile.J100_485, set.sensorProfile)
+        assertEquals(12L, set.generation)
+        assertEquals(4L, set.emptyRevision)
+
+        val clear = assertIs<Event.ProfileEmptyDistanceResult>(
+            ProtocolCodec.decode(
+                "ACK:EMPTY op=CLEAR status=UNSET sensor_profile=J100_485 generation=12 empty_revision=5",
+            ),
+        )
+        assertEquals(true, clear.success)
+        assertEquals(null, clear.distanceMm)
+        assertEquals(null, clear.toleranceMm)
+
+        val get = assertIs<Event.ProfileEmptyDistanceResult>(
+            ProtocolCodec.decode("ACK:EMPTY op=GET status=UNSET sensor_profile=NONE generation=0 empty_revision=0"),
+        )
+        assertEquals("GET", get.operation)
+        assertEquals(SensorProfile.NONE, get.sensorProfile)
+
+        val nack = assertIs<Event.ProfileEmptyDistanceResult>(
+            ProtocolCodec.decode("NACK:EMPTY op=SET_CURRENT reason=NO_FRESH_SAMPLE"),
+        )
+        assertEquals(false, nack.success)
+        assertEquals("NO_FRESH_SAMPLE", nack.reason)
+        assertEquals(null, nack.generation)
+
+        assertIs<Event.Error>(
+            ProtocolCodec.decode("ACK:EMPTY op=GET status=SET distance_mm=112.56 sensor_profile=J100_485 generation=12 empty_revision=4"),
+        )
+        assertIs<Event.Error>(
+            ProtocolCodec.decode("ACK:EMPTY op=CLEAR status=UNSET distance_mm=112.56 sensor_profile=J100_485 generation=12 empty_revision=5"),
+        )
+        assertIs<Event.Error>(
+            ProtocolCodec.decode("ACK:EMPTY op=GET status=UNSET sensor_profile=J100_485 generation=12"),
+        )
+    }
+
+    @Test
+    fun decodeProfileEmptyGetAndClearNacksWithoutProfileFields() {
+        val get = assertIs<Event.ProfileEmptyDistanceResult>(
+            ProtocolCodec.decode("NACK:EMPTY op=GET supported=1 reason=CONFIG_ERROR"),
+        )
+        assertEquals(false, get.success)
+        assertEquals("GET", get.operation)
+        assertEquals(true, get.supported)
+        assertEquals("CONFIG_ERROR", get.reason)
+        assertEquals(null, get.sensorProfile)
+
+        val clear = assertIs<Event.ProfileEmptyDistanceResult>(
+            ProtocolCodec.decode("NACK:EMPTY op=CLEAR supported=1 reason=NVS_WRITE_FAILED"),
+        )
+        assertEquals(false, clear.success)
+        assertEquals("CLEAR", clear.operation)
+        assertEquals("NVS_WRITE_FAILED", clear.reason)
+
+        // An older success reply still lacks the profile/generation/revision
+        // needed to confirm a new empty-distance write.
+        assertIs<Event.EmptyDistanceResult>(
+            ProtocolCodec.decode("ACK:EMPTY op=GET supported=1 status=UNSET backend=LASER_485"),
+        )
+    }
+
+    @Test
     fun decodeWeightModelClearAck() {
         val event = assertIs<Event.WeightModelClearResult>(
             ProtocolCodec.decode("ACK:CAL_CLEAR_WEIGHT_MODEL ready=0"),
@@ -134,6 +233,84 @@ class ProtocolCodecTest {
         val config = assertIs<Event.DeviceConfig>(event)
         assertEquals(PlatformModel.BASE, config.platformModel)
         assertEquals(false, config.laserInstalled)
+    }
+
+    @Test
+    fun decodeDeviceIdentityAndProfileConfigSeparatelyFromLegacyAck() {
+        val identity = assertIs<Event.DeviceIdentity>(
+            ProtocolCodec.decode("ACK:DEVICE_ID id=sw1_0123456789abcdef0123456789abcdef version=1"),
+        )
+        assertEquals("sw1_0123456789abcdef0123456789abcdef", identity.id)
+        assertEquals(1, identity.version)
+
+        val get = assertIs<Event.ProfileConfigResult>(
+            ProtocolCodec.decode(
+                "ACK:DEVICE_CONFIG op=GET schema=1 platform_model=BASE sensor_profile=NONE " +
+                    "laser_installed=0 generation=0",
+            ),
+        )
+        assertEquals(true, get.success)
+        assertEquals("GET", get.operation)
+        assertEquals(1, get.schema)
+        assertEquals(PlatformModel.BASE, get.platformModel)
+        assertEquals(SensorProfile.NONE, get.sensorProfile)
+        assertEquals(0L, get.generation)
+
+        val set = assertIs<Event.ProfileConfigResult>(
+            ProtocolCodec.decode(
+                "ACK:DEVICE_CONFIG op=SET schema=1 platform_model=PLUS sensor_profile=CYD3S1612_IIC " +
+                    "laser_installed=1 generation=4294967295",
+            ),
+        )
+        assertEquals(true, set.success)
+        assertEquals(SensorProfile.CYD3S1612_IIC, set.sensorProfile)
+        assertEquals(4_294_967_295L, set.generation)
+
+        val nack = assertIs<Event.ProfileConfigResult>(
+            ProtocolCodec.decode("NACK:DEVICE_CONFIG op=SET reason=NOT_IDLE"),
+        )
+        assertEquals(false, nack.success)
+        assertEquals("NOT_IDLE", nack.reason)
+
+        assertIs<Event.DeviceConfig>(
+            ProtocolCodec.decode("ACK:DEVICE_CONFIG platform_model=PLUS laser_installed=1"),
+        )
+    }
+
+    @Test
+    fun malformedNewReceiptsCannotBeTreatedAsLegacySuccess() {
+        assertIs<Event.Error>(
+            ProtocolCodec.decode(
+                "ACK:DEVICE_CONFIG op=SET platform_model=PLUS sensor_profile=J100_485 laser_installed=1 generation=2",
+            ),
+        )
+        assertIs<Event.Error>(
+            ProtocolCodec.decode(
+                "ACK:DEVICE_CONFIG op=GET schema=1 platform_model=PLUS sensor_profile=J100_485 " +
+                    "laser_installed=0 generation=2",
+            ),
+        )
+        assertIs<Event.Error>(
+            ProtocolCodec.decode(
+                "ACK:DEVICE_CONFIG op=GET schema=1 platform_model=BASE sensor_profile=J100_485 " +
+                    "laser_installed=0 generation=2",
+            ),
+        )
+        assertIs<Event.Error>(
+            ProtocolCodec.decode(
+                "ACK:DEVICE_CONFIG op=GET schema=1 platform_model=BASE sensor_profile=NONE " +
+                    "laser_installed=0 generation=4294967296",
+            ),
+        )
+        assertIs<Event.Error>(
+            ProtocolCodec.decode(
+                "ACK:DEVICE_CONFIG op=GET op=SET schema=1 platform_model=BASE sensor_profile=NONE " +
+                    "laser_installed=0 generation=0",
+            ),
+        )
+        assertIs<Event.Error>(
+            ProtocolCodec.decode("ACK:DEVICE_ID id=sw1_not_an_id version=1"),
+        )
     }
 
     @Test

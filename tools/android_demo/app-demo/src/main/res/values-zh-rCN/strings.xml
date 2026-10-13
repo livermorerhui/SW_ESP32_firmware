@@ -1,4 +1,5 @@
 <resources>
+    <string name="empty_distance_waiting_for_readback">正在读取设备中的空载距离记录</string>
     <string name="app_name">SonicWave 调试工具</string>
     <string name="screen_title_main">SW调试</string>
 
@@ -80,6 +81,17 @@
     <string name="device_profile_consistency_hint">一致性规则：选 Base 会写入 platform_model=BASE 且 laser_installed=0；选 Plus 会写入 platform_model=PLUS 且 laser_installed=1。</string>
     <string name="device_profile_write">确认</string>
     <string name="device_profile_write_pending">确认中…</string>
+    <string name="device_profile_waiting_for_device">正在核对这台设备的身份和已保存设置。确认前不能修改。</string>
+    <string name="section_sensor_profile">激光传感器</string>
+    <string name="sensor_profile_current">设备当前传感器：%1$s</string>
+    <string name="sensor_profile_none">未选择</string>
+    <string name="sensor_profile_j100">J100-485</string>
+    <string name="sensor_profile_cyd">CYD3S1612-IIC</string>
+    <string name="sensor_profile_write">设置传感器</string>
+    <string name="sensor_profile_not_selected">请选择设备实际安装的传感器。</string>
+    <string name="sensor_profile_distance_ready">已正常读取所选传感器的实时距离。</string>
+    <string name="sensor_profile_distance_pending">正在等待所选传感器的有效实时距离。</string>
+    <string name="sensor_profile_distance_fault">未正常读取所选传感器的实时距离，请检查连接和传感器设置。</string>
     <string name="device_config_laser_installed">已安装激光</string>
     <string name="device_config_laser_not_installed">无激光</string>
     <string name="device_config_status_pending">正在写入 platform_model=%1$s，%2$s…</string>
@@ -107,7 +119,7 @@
     <string name="empty_distance_requires_primary">请先连接主协议设备。</string>
     <string name="empty_distance_set_confirm_title">设置空载距离？</string>
     <string name="empty_distance_clear_confirm_title">清除空载距离？</string>
-    <string name="empty_distance_set_confirm_message">将当前实时距离（%1$s）作为空载参考。设备确认成功后，页面才显示为已设置。</string>
+    <string name="empty_distance_set_confirm_message">请确认平台空载。点击“写入”时，ESP32 会读取当时的距离；APP 回读一致后才显示空载距离。</string>
     <string name="empty_distance_clear_confirm_message">清除设备已确认的空载距离。设备确认成功后才会完成清除。</string>
     <string name="degraded_start_dialog_title">激光链路需要维修</string>
     <string name="degraded_start_dialog_message">当前 PLUS 机型的激光或 MAX485 链路不可用，建议维修。确认后可按降级启动路径继续运行，但测量仍不可用。</string>
@@ -258,6 +270,9 @@
     <string name="value_motion_sampling_measurement_invalid">告警 / 不可用</string>
     <string name="label_motion_sampling_runtime_context">运行态/波形态/安全原因：%1$s / %2$s / %3$s</string>
     <string name="label_motion_sampling_session_summary">会话回看</string>
+    <string name="section_legacy_unattributed_sampling">旧采样历史（未归属）</string>
+    <string name="hint_legacy_unattributed_sampling">旧记录没有设备和传感器归属，只供查看；不进入当前采样会话、曲线或导出。</string>
+    <string name="label_legacy_unattributed_sampling_row">+%1$.2f 秒 | 距离 %2$s mm</string>
     <string name="label_motion_sampling_no_session">还没有运动安全采样会话。开始采样后会创建一个可在应用内回看的内存会话。</string>
     <string name="label_motion_sampling_no_session_compact">暂无采样会话</string>
     <string name="label_motion_sampling_session_compact">会话：%1$d 行 | %2$s Hz / 强度 %3$s</string>
@@ -375,6 +390,9 @@
     <string name="label_calibration_flow_start">开始</string>
     <string name="label_calibration_flow_record">记录</string>
     <string name="label_calibration_flow_data">采集数据</string>
+    <string name="section_legacy_unattributed_calibration">旧校准历史（未归属）</string>
+    <string name="hint_legacy_unattributed_calibration">旧记录没有设备和传感器归属，只供查看；不参与当前拟合或模型写入。</string>
+    <string name="label_legacy_unattributed_point_count">旧校准点：%1$d 个</string>
     <string name="label_calibration_flow_chart">点与拟合曲线</string>
     <string name="label_calibration_flow_confirm">确认模型</string>
     <string name="action_start_calibration">开始校准</string>

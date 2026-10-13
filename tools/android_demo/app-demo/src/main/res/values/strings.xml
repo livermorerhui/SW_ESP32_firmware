@@ -1,4 +1,5 @@
 <resources>
+    <string name="empty_distance_waiting_for_readback">Waiting for the device to confirm its empty-distance record</string>
     <string name="app_name">SonicWave Demo Tool</string>
     <string name="screen_title_main">SW Debug</string>
 
@@ -80,6 +81,17 @@
     <string name="device_profile_consistency_hint">Consistency rule: Base writes platform_model=BASE and laser_installed=0. Plus writes platform_model=PLUS and laser_installed=1.</string>
     <string name="device_profile_write">Confirm</string>
     <string name="device_profile_write_pending">Confirming…</string>
+    <string name="device_profile_waiting_for_device">Waiting for this device’s identity and saved settings. Changes are unavailable until both are confirmed.</string>
+    <string name="section_sensor_profile">Laser sensor</string>
+    <string name="sensor_profile_current">Device sensor: %1$s</string>
+    <string name="sensor_profile_none">Not selected</string>
+    <string name="sensor_profile_j100">J100-485</string>
+    <string name="sensor_profile_cyd">CYD3S1612-IIC</string>
+    <string name="sensor_profile_write">Set sensor</string>
+    <string name="sensor_profile_not_selected">Select the sensor installed on this device.</string>
+    <string name="sensor_profile_distance_ready">Distance is updating from the selected sensor.</string>
+    <string name="sensor_profile_distance_pending">Waiting for valid live distance from the selected sensor.</string>
+    <string name="sensor_profile_distance_fault">No valid live distance is arriving from the selected sensor. Check its connection and setting.</string>
     <string name="device_config_laser_installed">laser installed</string>
     <string name="device_config_laser_not_installed">no laser</string>
     <string name="device_config_status_pending">Writing platform_model=%1$s, %2$s…</string>
@@ -107,7 +119,7 @@
     <string name="empty_distance_requires_primary">Connect to a primary protocol device first.</string>
     <string name="empty_distance_set_confirm_title">Set empty distance?</string>
     <string name="empty_distance_clear_confirm_title">Clear empty distance?</string>
-    <string name="empty_distance_set_confirm_message">Use the current live distance (%1$s) as the empty reference. The device must confirm it before the value is shown as set.</string>
+    <string name="empty_distance_set_confirm_message">Confirm the platform is empty. The ESP32 will capture its current distance when you tap Write, and the app will show it after reading it back.</string>
     <string name="empty_distance_clear_confirm_message">Clear the device-confirmed empty distance. The device must confirm the change.</string>
     <string name="degraded_start_dialog_title">Laser chain requires service</string>
     <string name="degraded_start_dialog_message">The PLUS laser or MAX485 path is unavailable. Repair is recommended. Confirm to allow degraded start while measurement remains unavailable.</string>
@@ -258,6 +270,9 @@
     <string name="value_motion_sampling_measurement_invalid">warning / unavailable</string>
     <string name="label_motion_sampling_runtime_context">Runtime/Wave/Safety: %1$s / %2$s / %3$s</string>
     <string name="label_motion_sampling_session_summary">Session review</string>
+    <string name="section_legacy_unattributed_sampling">Legacy sampling history (unattributed)</string>
+    <string name="hint_legacy_unattributed_sampling">Read-only records with no device or sensor identity. They are excluded from the current sampling session, chart, and export.</string>
+    <string name="label_legacy_unattributed_sampling_row">+%1$.2fs | distance %2$s mm</string>
     <string name="label_motion_sampling_no_session">No motion-safety session yet. Start sampling to create an in-memory reviewable session.</string>
     <string name="label_motion_sampling_no_session_compact">No sampling session</string>
     <string name="label_motion_sampling_session_compact">Session: %1$d rows | %2$s Hz / intensity %3$s</string>
@@ -375,6 +390,9 @@
     <string name="label_calibration_flow_start">Start</string>
     <string name="label_calibration_flow_record">Record</string>
     <string name="label_calibration_flow_data">Captured Data</string>
+    <string name="section_legacy_unattributed_calibration">Legacy calibration history (unattributed)</string>
+    <string name="hint_legacy_unattributed_calibration">Read-only records with no device or sensor identity. They cannot enter the current fit or model write.</string>
+    <string name="label_legacy_unattributed_point_count">Legacy points: %1$d</string>
     <string name="label_calibration_flow_chart">Points and Fitted Curves</string>
     <string name="label_calibration_flow_confirm">Confirm Model</string>
     <string name="action_start_calibration">Start Calibration</string>

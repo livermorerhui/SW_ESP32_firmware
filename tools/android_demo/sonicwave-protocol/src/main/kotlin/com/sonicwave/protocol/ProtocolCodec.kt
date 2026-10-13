@@ -4,6 +4,14 @@ object ProtocolCodec {
     fun encode(command: Command): String = when (command) {
         Command.CapabilityQuery -> "CAP?"
         Command.SnapshotQuery -> "SNAPSHOT?"
+        Command.DeviceIdentityQuery -> "DEVICE:IDENTITY?"
+        Command.DeviceGetConfig -> "DEVICE:GET_CONFIG"
+        is Command.DeviceSetProfileConfig -> {
+            require(command.platformModel == PlatformModel.BASE || command.platformModel == PlatformModel.PLUS)
+            require(command.platformModel != PlatformModel.BASE || command.sensorProfile == SensorProfile.NONE)
+            "DEVICE:SET_CONFIG platform_model=${command.platformModel.name}," +
+                "sensor_profile=${command.sensorProfile.name}"
+        }
         is Command.DeviceSetConfig -> {
             "DEVICE:SET_CONFIG platform_model=${command.platformModel.name}," +
                 "laser_installed=${if (command.laserInstalled) 1 else 0}"
@@ -18,6 +26,7 @@ object ProtocolCodec {
         is Command.CalibrationCapture -> "CAL:CAPTURE w=${command.referenceWeightKg}"
         Command.CalibrationGetModel -> "CAL:GET_MODEL"
         Command.EmptyDistanceGet -> "EMPTY:GET"
+        Command.EmptyDistanceSetCurrent -> "EMPTY:SET_CURRENT"
         is Command.EmptyDistanceSet -> "EMPTY:SET distance_mm=${command.distanceMm}"
         Command.EmptyDistanceClear -> "EMPTY:CLEAR"
         Command.CalibrationClearWeightModel -> "CAL:CLEAR_WEIGHT_MODEL"
@@ -40,11 +49,14 @@ object ProtocolCodec {
         if (raw.isEmpty()) return null
 
         parseCapabilities(raw)?.let { return it }
+        parseDeviceIdentity(raw)?.let { return it }
+        parseProfileConfig(raw)?.let { return it }
         parseDeviceConfig(raw)?.let { return it }
         parseFallStopProtection(raw)?.let { return it }
         parseLeaveProtection(raw)?.let { return it }
         parseDegradedStart(raw)?.let { return it }
         parseStreamSubscription(raw)?.let { return it }
+        parseProfileEmptyDistance(raw)?.let { return it }
         parseEmptyDistance(raw)?.let { return it }
         parseWeightModelClear(raw)?.let { return it }
         parseCalibrationModel(raw)?.let { return it }
@@ -96,10 +108,70 @@ object ProtocolCodec {
         return Event.Capabilities(values = values, raw = raw)
     }
 
+    private fun parseDeviceIdentity(raw: String): Event? {
+        val payload = strictPayloadAfterPrefix(raw, "ACK:DEVICE_ID") ?: return null
+        val kv = parseStrictFields(payload, setOf("ID", "VERSION"))
+            ?: return Event.Error("MALFORMED_DEVICE_ID")
+        val id = kv["ID"]
+        val version = kv["VERSION"]?.toIntOrNull()
+        if (id == null || !DEVICE_ID_REGEX.matches(id) || version != 1) {
+            return Event.Error("MALFORMED_DEVICE_ID")
+        }
+        return Event.DeviceIdentity(id = id, version = version, raw = raw)
+    }
+
+    private fun parseProfileConfig(raw: String): Event? {
+        val isAck = strictPayloadAfterPrefix(raw, "ACK:DEVICE_CONFIG")
+        val isNack = strictPayloadAfterPrefix(raw, "NACK:DEVICE_CONFIG")
+        val payload = isAck ?: isNack ?: return null
+        if (isNack != null) {
+            val kv = parseStrictFields(payload, setOf("OP", "REASON"))
+                ?: return Event.Error("MALFORMED_PROFILE_CONFIG_NACK")
+            val operation = kv["OP"]
+            val reason = kv["REASON"]
+            if (operation !in setOf("GET", "SET") || reason.isNullOrBlank()) {
+                return Event.Error("MALFORMED_PROFILE_CONFIG_NACK")
+            }
+            return Event.ProfileConfigResult(
+                operation = operation!!, success = false, schema = null,
+                platformModel = null, sensorProfile = null, laserInstalled = null,
+                generation = null, reason = reason, raw = raw,
+            )
+        }
+
+        // The old ACK uses the same prefix. It is deliberately left for the
+        // legacy parser unless the frame claims to be a schema-1 response.
+        val loose = parseKeyValuePayload(payload)
+        if (loose.keys.none { it in PROFILE_CONFIG_MARKERS }) return null
+        val kv = parseStrictFields(
+            payload,
+            setOf("OP", "SCHEMA", "PLATFORM_MODEL", "SENSOR_PROFILE", "LASER_INSTALLED", "GENERATION"),
+        ) ?: return Event.Error("MALFORMED_PROFILE_CONFIG_ACK")
+        val operation = kv["OP"]
+        val model = parsePlatformModel(kv["PLATFORM_MODEL"])
+        val profile = parseSensorProfile(kv["SENSOR_PROFILE"])
+        val laserInstalled = parseBooleanFlag(kv["LASER_INSTALLED"])
+        val generation = parseUint32(kv["GENERATION"])
+        if (operation !in setOf("GET", "SET") || kv["SCHEMA"] != "1" ||
+            model !in setOf(PlatformModel.BASE, PlatformModel.PLUS) || profile == null ||
+            laserInstalled == null || generation == null ||
+            laserInstalled != (model == PlatformModel.PLUS) ||
+            (model == PlatformModel.BASE && profile != SensorProfile.NONE)
+        ) {
+            return Event.Error("MALFORMED_PROFILE_CONFIG_ACK")
+        }
+        return Event.ProfileConfigResult(
+            operation = operation!!, success = true, schema = 1,
+            platformModel = model, sensorProfile = profile,
+            laserInstalled = laserInstalled, generation = generation,
+            reason = null, raw = raw,
+        )
+    }
+
     private fun parseDeviceConfig(raw: String): Event.DeviceConfig? {
-        if (!raw.startsWith("ACK:DEVICE_CONFIG", ignoreCase = true)) return null
-        val payload = raw.substringAfter("ACK:DEVICE_CONFIG", "").trim()
+        val payload = strictPayloadAfterPrefix(raw, "ACK:DEVICE_CONFIG") ?: return null
         val kv = parseKeyValuePayload(payload)
+        if (kv.keys.any { it in PROFILE_CONFIG_MARKERS }) return null
         return Event.DeviceConfig(
             platformModel = parsePlatformModel(kv["PLATFORM_MODEL"]),
             laserInstalled = parseBooleanFlag(kv["LASER_INSTALLED"]),
@@ -155,6 +227,70 @@ object ProtocolCodec {
             supported = parseBooleanFlag(kv["SUPPORTED"]) ?: true,
             rateHz = kv["RATE_HZ"]?.toIntOrNull(),
             raw = raw,
+        )
+    }
+
+    private fun parseProfileEmptyDistance(raw: String): Event? {
+        val ack = strictPayloadAfterPrefix(raw, "ACK:EMPTY")
+        val nack = strictPayloadAfterPrefix(raw, "NACK:EMPTY")
+        val payload = ack ?: nack ?: return null
+        val loose = parseKeyValuePayload(payload)
+        // Profile-aware GET/CLEAR failures have the same wire shape as the
+        // legacy failures. Treat those NACKs as profile failures so a pending
+        // read/write is resolved, while legacy ACKs still require profile,
+        // generation and revision before they can confirm new device state.
+        val profileReply = loose.keys.any { it in PROFILE_EMPTY_MARKERS } ||
+            loose["OP"] == "SET_CURRENT" ||
+            (nack != null && loose["OP"] in setOf("GET", "CLEAR"))
+        if (!profileReply) return null
+        if (nack != null) {
+            val kv = parseStrictFields(payload, setOf("OP", "REASON", "SUPPORTED"))
+                ?: return Event.Error("MALFORMED_PROFILE_EMPTY_NACK")
+            val operation = kv["OP"]
+            val reason = kv["REASON"]
+            val supported = kv["SUPPORTED"]?.let(::parseBooleanFlag)
+            if (operation !in setOf("GET", "SET_CURRENT", "CLEAR") || reason.isNullOrBlank() ||
+                (kv.containsKey("SUPPORTED") && supported == null)
+            ) {
+                return Event.Error("MALFORMED_PROFILE_EMPTY_NACK")
+            }
+            return Event.ProfileEmptyDistanceResult(
+                operation = operation!!, success = false, status = null,
+                distanceMm = null, toleranceMm = null, sensorProfile = null,
+                generation = null, emptyRevision = null, supported = supported,
+                reason = reason, raw = raw,
+            )
+        }
+
+        val kv = parseStrictFields(
+            payload,
+            setOf("OP", "STATUS", "DISTANCE_MM", "TOLERANCE_MM", "SENSOR_PROFILE", "GENERATION", "EMPTY_REVISION"),
+        ) ?: return Event.Error("MALFORMED_PROFILE_EMPTY_ACK")
+        val operation = kv["OP"]
+        val status = kv["STATUS"]
+        val profile = parseSensorProfile(kv["SENSOR_PROFILE"])
+        val generation = parseUint32(kv["GENERATION"])
+        val revision = parseUint32(kv["EMPTY_REVISION"])
+        val distance = kv["DISTANCE_MM"]?.toFloatOrNull()
+        val tolerance = kv["TOLERANCE_MM"]?.toFloatOrNull()
+        val hasValues = kv.containsKey("DISTANCE_MM") || kv.containsKey("TOLERANCE_MM")
+        if (operation !in setOf("GET", "SET_CURRENT", "CLEAR") ||
+            status !in setOf("SET", "UNSET") || profile == null ||
+            generation == null || revision == null ||
+            (operation == "SET_CURRENT" && status != "SET") ||
+            (operation == "CLEAR" && status != "UNSET") ||
+            (status == "SET" && (profile == SensorProfile.NONE || revision == 0L)) ||
+            (status == "SET" && (distance == null || !distance.isFinite() || distance <= 0f ||
+                tolerance == null || !tolerance.isFinite() || tolerance < 0f)) ||
+            (status == "UNSET" && hasValues)
+        ) {
+            return Event.Error("MALFORMED_PROFILE_EMPTY_ACK")
+        }
+        return Event.ProfileEmptyDistanceResult(
+            operation = operation!!, success = true, status = status,
+            distanceMm = distance, toleranceMm = tolerance, sensorProfile = profile,
+            generation = generation, emptyRevision = revision, supported = null,
+            reason = null, raw = raw,
         )
     }
 
@@ -549,6 +685,39 @@ object ProtocolCodec {
         return result
     }
 
+    /** Unlike the older permissive parser, a configuration ACK is a write receipt. */
+    private fun parseStrictFields(payload: String, allowed: Set<String>): Map<String, String>? {
+        if (payload.isBlank()) return null
+        val fields = linkedMapOf<String, String>()
+        for (token in payload.split(STRICT_FIELD_SEPARATOR).filter { it.isNotEmpty() }) {
+            if (token.count { it == '=' } != 1) return null
+            val key = token.substringBefore('=').uppercase()
+            val value = token.substringAfter('=')
+            if (!FIELD_KEY_REGEX.matches(key) || key !in allowed || value.isBlank() ||
+                fields.put(key, value) != null
+            ) return null
+        }
+        return fields.takeIf { it.isNotEmpty() }
+    }
+
+    private fun strictPayloadAfterPrefix(raw: String, prefix: String): String? {
+        if (!raw.startsWith(prefix, ignoreCase = true)) return null
+        if (raw.length > prefix.length && raw[prefix.length] != ' ') return null
+        return raw.substring(prefix.length).trim()
+    }
+
+    private fun parseUint32(raw: String?): Long? {
+        if (raw == null || !UNSIGNED_DECIMAL_REGEX.matches(raw)) return null
+        return raw.toLongOrNull()?.takeIf { it in 0L..UINT32_MAX }
+    }
+
+    private fun parseSensorProfile(raw: String?): SensorProfile? = when (raw) {
+        SensorProfile.NONE.name -> SensorProfile.NONE
+        SensorProfile.J100_485.name -> SensorProfile.J100_485
+        SensorProfile.CYD3S1612_IIC.name -> SensorProfile.CYD3S1612_IIC
+        else -> null
+    }
+
     private fun parseCalibrationModelType(raw: String?): CalibrationModelType? {
         return when (raw?.uppercase()) {
             "LINEAR", "1" -> CalibrationModelType.LINEAR
@@ -603,6 +772,13 @@ object ProtocolCodec {
     }
 
     private val KEY_VALUE_REGEX = Regex("([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*([^,;\\s]+)")
+    private val STRICT_FIELD_SEPARATOR = Regex("[,;\\s]+")
+    private val FIELD_KEY_REGEX = Regex("[A-Z_][A-Z0-9_]*")
+    private val UNSIGNED_DECIMAL_REGEX = Regex("0|[1-9][0-9]*")
+    private val DEVICE_ID_REGEX = Regex("sw1_[0-9a-f]{32}")
+    private val PROFILE_CONFIG_MARKERS = setOf("OP", "SCHEMA", "SENSOR_PROFILE", "GENERATION")
+    private val PROFILE_EMPTY_MARKERS = setOf("SENSOR_PROFILE", "GENERATION", "EMPTY_REVISION")
+    private const val UINT32_MAX = 4_294_967_295L
     private val NUMBER_REGEX = Regex("-?\\d+(?:\\.\\d+)?")
     private val INTEGER_REGEX = Regex("-?\\d+")
 }

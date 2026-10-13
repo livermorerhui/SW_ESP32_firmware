@@ -1,10 +1,12 @@
 package com.sonicwave.demo
 
 import android.content.Context
+import android.util.AtomicFile
 import com.sonicwave.protocol.CalibrationModelType
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileNotFoundException
 
 internal data class DemoSessionSnapshot(
     val calibrationPoints: List<CalibrationPointUi> = emptyList(),
@@ -15,61 +17,182 @@ internal data class DemoSessionSnapshot(
     val weightModel: WeightModelState = WeightModelState(),
 )
 
+internal sealed interface ProfileSessionLoadResult {
+    data object Missing : ProfileSessionLoadResult
+    data class Loaded(val snapshot: DemoSessionSnapshot) : ProfileSessionLoadResult
+    data object Corrupt : ProfileSessionLoadResult
+}
+
+/** A missing file and an unreadable existing file must never have the same meaning. */
+internal fun classifyProfileSessionRead(
+    anyRecordFilePresent: () -> Boolean,
+    readText: () -> String,
+    parse: (String) -> DemoSessionSnapshot?,
+): ProfileSessionLoadResult {
+    val text = try {
+        readText()
+    } catch (_: FileNotFoundException) {
+        val recordMayExist = runCatching { anyRecordFilePresent() }.getOrDefault(true)
+        return if (recordMayExist) ProfileSessionLoadResult.Corrupt
+        else ProfileSessionLoadResult.Missing
+    } catch (_: Exception) {
+        return ProfileSessionLoadResult.Corrupt
+    }
+    val snapshot = try {
+        parse(text)
+    } catch (_: Exception) {
+        null
+    }
+    return snapshot?.let(ProfileSessionLoadResult::Loaded) ?: ProfileSessionLoadResult.Corrupt
+}
+
 /**
  * Small, versioned internal-file store for user-created calibration and sampling evidence.
  * It deliberately does not persist BLE pending flags or device truth; those belong to a
  * connection and are rebuilt after reconnect.
  */
 internal class DemoSessionPersistence(context: Context) {
-    private val file = File(context.filesDir, FILE_NAME)
+    private val legacyFile = File(context.filesDir, LEGACY_FILE_NAME)
+    private val profileDirectory = File(context.filesDir, PROFILE_DIRECTORY_NAME)
 
-    @Synchronized
-    fun save(snapshot: DemoSessionSnapshot) {
-        val root = JSONObject()
-            .put("schema", SCHEMA)
-            .put("selectedModel", snapshot.selectedModel.name)
-            .put("calibrationPoints", JSONArray().also { array ->
-                snapshot.calibrationPoints.forEach { array.put(pointToJson(it)) }
-            })
-        snapshot.preparedModel?.let { root.put("preparedModel", modelToJson(it)) }
-        snapshot.samplingSession?.let { root.put("samplingSession", samplingToJson(it)) }
-        root.put("emptyDistance", emptyDistanceToJson(snapshot.emptyDistance))
-        root.put("weightModel", weightModelToJson(snapshot.weightModel))
-        file.parentFile?.mkdirs()
-        file.writeText(root.toString())
-    }
+    /** New evidence is owned by a stable firmware ID and an explicit sensor profile. */
+    fun saveForProfile(deviceId: String, sensorProfile: String, snapshot: DemoSessionSnapshot): Unit =
+        synchronized(profileIoLock) {
+            val target = profileFile(deviceId, sensorProfile)
+            if (!profileDirectory.isDirectory && !profileDirectory.mkdirs()) {
+                throw IllegalStateException("Cannot create profile session directory")
+            }
+            // A malformed or foreign existing record is evidence, not an empty record to overwrite.
+            if (loadForProfileResult(deviceId, sensorProfile) == ProfileSessionLoadResult.Corrupt) {
+                throw IllegalStateException("Existing profile session cannot be verified")
+            }
+            val atomicFile = AtomicFile(target)
 
-    @Synchronized
-    fun load(): DemoSessionSnapshot? {
-        if (!file.exists()) return null
-        return runCatching {
-            val root = JSONObject(file.readText())
-            if (root.optString("schema") !in setOf(SCHEMA, LEGACY_SCHEMA)) return null
-            val points = root.optJSONArray("calibrationPoints")?.let { array ->
-                (0 until array.length()).mapNotNull { pointFromJson(array.optJSONObject(it)) }
-            }.orEmpty()
-            val prepared = modelFromJson(root.optJSONObject("preparedModel"))
-            val selected = runCatching {
-                CalibrationModelType.valueOf(root.optString("selectedModel"))
-            }.getOrDefault(CalibrationModelType.LINEAR)
-            DemoSessionSnapshot(
-                calibrationPoints = points,
-                preparedModel = prepared,
-                selectedModel = selected,
-                samplingSession = samplingFromJson(root.optJSONObject("samplingSession")),
-                // Device truth always requires a fresh GET after reconnect or process restart.
-                emptyDistance = emptyDistanceFromJson(root.optJSONObject("emptyDistance"))
-                    .withoutDeviceConfirmation(),
-                weightModel = weightModelFromJson(root.optJSONObject("weightModel"))
-                    .withoutDeviceConfirmation(),
+            val root = JSONObject()
+                .put("schema", PROFILE_SCHEMA)
+                .put("ownerDeviceId", deviceId)
+                .put("ownerSensorProfile", sensorProfile)
+                .put("selectedModel", snapshot.selectedModel.name)
+                .put("calibrationPoints", JSONArray().also { array ->
+                    snapshot.calibrationPoints.forEach { array.put(pointToJson(it)) }
+                })
+            snapshot.preparedModel?.let { root.put("preparedModel", modelToJson(it)) }
+            snapshot.samplingSession?.let { root.put("samplingSession", samplingToJson(it)) }
+            root.put("emptyDistance", emptyDistanceToJson(snapshot.emptyDistance))
+            root.put("weightModel", weightModelToJson(snapshot.weightModel))
+            val bytes = root.toString().toByteArray(Charsets.UTF_8)
+            val output = atomicFile.startWrite()
+            try {
+                output.write(bytes)
+                atomicFile.finishWrite(output)
+            } catch (error: Exception) {
+                atomicFile.failWrite(output)
+                throw error
+            }
+        }
+
+    /** Never falls back to an unattributed or different-profile session. */
+    fun loadForProfile(deviceId: String, sensorProfile: String): DemoSessionSnapshot? =
+        when (val result = loadForProfileResult(deviceId, sensorProfile)) {
+            is ProfileSessionLoadResult.Loaded -> result.snapshot
+            ProfileSessionLoadResult.Missing, ProfileSessionLoadResult.Corrupt -> null
+        }
+
+    /** Distinguishes first use from a damaged record so callers can fail closed. */
+    fun loadForProfileResult(deviceId: String, sensorProfile: String): ProfileSessionLoadResult =
+        synchronized(profileIoLock) {
+            val target = profileFile(deviceId, sensorProfile)
+            val file = AtomicFile(target)
+            classifyProfileSessionRead(
+                anyRecordFilePresent = {
+                    target.exists() || File("${target.path}.bak").exists() ||
+                        File("${target.path}.new").exists()
+                },
+                readText = { file.readFully().toString(Charsets.UTF_8) },
+                parse = { text ->
+                    parseSnapshot(
+                        text,
+                        expectedSchema = PROFILE_SCHEMA,
+                        expectedDeviceId = deviceId,
+                        expectedSensorProfile = sensorProfile,
+                    )
+                },
             )
-        }.getOrNull()
+        }
+
+    /** Old v1/v2 history remains visible for review but is never assigned to a device. */
+    @Synchronized
+    fun loadLegacyUnattributed(): DemoSessionSnapshot? {
+        if (!legacyFile.exists()) return null
+        return runCatching { legacyFile.readText() }.getOrNull()?.let { text ->
+            parseSnapshot(text, expectedSchema = null)
+        }
     }
 
-    @Synchronized
-    fun clear() {
-        file.delete()
-    }
+    @Deprecated("Legacy global history is read-only; use saveForProfile")
+    fun save(@Suppress("UNUSED_PARAMETER") snapshot: DemoSessionSnapshot): Nothing =
+        throw UnsupportedOperationException("Unattributed session history is read-only")
+
+    @Deprecated("Use loadLegacyUnattributed for read-only legacy history")
+    fun load(): DemoSessionSnapshot? = loadLegacyUnattributed()
+
+    @Deprecated("Legacy global history is read-only")
+    fun clear(): Nothing =
+        throw UnsupportedOperationException("Unattributed session history is read-only")
+
+    private fun profileFile(deviceId: String, sensorProfile: String): File =
+        File(profileDirectory, ProfileSessionFileKey.fileName(deviceId, sensorProfile))
+
+    private fun parseSnapshot(
+        text: String,
+        expectedSchema: String?,
+        expectedDeviceId: String? = null,
+        expectedSensorProfile: String? = null,
+    ): DemoSessionSnapshot? = runCatching {
+        val root = JSONObject(text)
+        val schema = root.optString("schema")
+        val isProfileRecord = expectedSchema != null
+        if (!isProfileRecord) {
+            if (schema !in setOf(LEGACY_SCHEMA, PREVIOUS_SCHEMA)) return@runCatching null
+        } else if (schema != expectedSchema ||
+            root.optString("ownerDeviceId") != expectedDeviceId ||
+            root.optString("ownerSensorProfile") != expectedSensorProfile
+        ) {
+            return@runCatching null
+        }
+
+        val pointArray = root.optJSONArray("calibrationPoints")
+        if (isProfileRecord && pointArray == null) return@runCatching null
+        val points = pointArray?.let { array ->
+            (0 until array.length()).mapNotNull { pointFromJson(array.optJSONObject(it)) }
+        }.orEmpty()
+        if (isProfileRecord && points.size != pointArray?.length()) return@runCatching null
+
+        val preparedJson = root.optJSONObject("preparedModel")
+        val prepared = modelFromJson(preparedJson)
+        if (isProfileRecord && root.has("preparedModel") && prepared == null) return@runCatching null
+
+        val samplingJson = root.optJSONObject("samplingSession")
+        val sampling = samplingFromJson(samplingJson)
+        if (isProfileRecord && root.has("samplingSession") && sampling == null) return@runCatching null
+
+        val selected = runCatching {
+            CalibrationModelType.valueOf(root.optString("selectedModel"))
+        }.getOrNull() ?: if (isProfileRecord) return@runCatching null else CalibrationModelType.LINEAR
+        val emptyJson = root.optJSONObject("emptyDistance")
+        val weightJson = root.optJSONObject("weightModel")
+        if (isProfileRecord && (emptyJson == null || weightJson == null)) return@runCatching null
+
+        DemoSessionSnapshot(
+            calibrationPoints = points,
+            preparedModel = prepared,
+            selectedModel = selected,
+            samplingSession = sampling,
+            // Device truth always requires a fresh GET after reconnect or process restart.
+            emptyDistance = emptyDistanceFromJson(emptyJson).withoutDeviceConfirmation(),
+            weightModel = weightModelFromJson(weightJson).withoutDeviceConfirmation(),
+        )
+    }.getOrNull()
 
     private fun emptyDistanceToJson(value: EmptyDistanceState) = JSONObject().apply {
         put("status", value.status.name)
@@ -236,8 +359,12 @@ internal class DemoSessionPersistence(context: Context) {
     private fun booleanOrNull(json: JSONObject, key: String) = if (json.isNull(key) || !json.has(key)) null else json.optBoolean(key)
 
     private companion object {
-        const val FILE_NAME = "demo_session_state.json"
-        const val SCHEMA = "demo_session_v2"
+        // AtomicFile handles interrupted writes; this lock prevents overlapping writers.
+        val profileIoLock = Any()
+        const val LEGACY_FILE_NAME = "demo_session_state.json"
+        const val PROFILE_DIRECTORY_NAME = "demo_sessions"
+        const val PROFILE_SCHEMA = "demo_session_v3"
+        const val PREVIOUS_SCHEMA = "demo_session_v2"
         const val LEGACY_SCHEMA = "demo_session_v1"
     }
 }

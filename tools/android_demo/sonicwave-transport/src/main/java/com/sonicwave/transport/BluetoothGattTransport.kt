@@ -51,6 +51,8 @@ class BluetoothGattTransport(
 
     private val _incomingLines = MutableSharedFlow<String>(extraBufferCapacity = 128)
     val incomingLines: SharedFlow<String> = _incomingLines.asSharedFlow()
+    private val _incomingStampedLines = MutableSharedFlow<StampedBleLine>(extraBufferCapacity = 128)
+    val incomingStampedLines: SharedFlow<StampedBleLine> = _incomingStampedLines.asSharedFlow()
     private val _incomingRawChunks = MutableSharedFlow<String>(extraBufferCapacity = 128)
     val incomingRawChunks: SharedFlow<String> = _incomingRawChunks.asSharedFlow()
     private val _transportLogs = MutableSharedFlow<String>(extraBufferCapacity = 128)
@@ -79,44 +81,59 @@ class BluetoothGattTransport(
     private var writeDeferred: CompletableDeferred<Unit>? = null
 
     private var manualDisconnect = false
+    private val connectionEpochGate = ConnectionEpochGate()
+    val activeConnectionEpoch: Long?
+        get() = connectionEpochGate.activeEpoch()
     private val lineFramer = NotifyLineFramer()
     private val notifySetupLock = Any()
 
     @Volatile
     private var notifySetupStarted = false
 
-    private val gattCallback = object : BluetoothGattCallback() {
+    private fun withCurrentGatt(epoch: Long, callbackGatt: BluetoothGatt, block: () -> Unit) {
+        connectionEpochGate.withCurrent(epoch) {
+            // connectGatt may dispatch its first callback before returning the
+            // GATT object. The callback is already unique to this epoch.
+            val currentGatt = gatt
+            if (currentGatt == null || currentGatt === callbackGatt) block()
+        }
+    }
+
+    private fun createGattCallback(epoch: Long) = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            if (status != BluetoothGatt.GATT_SUCCESS && newState != BluetoothGatt.STATE_CONNECTED) {
-                failConnection("连接失败(status=$status)")
-                closeGatt(gatt)
-                clearConnectionRefs()
-                return
-            }
-
-            when (newState) {
-                BluetoothGatt.STATE_CONNECTED -> {
-                    _connection.value = ConnectionState.DiscoveringServices
-                    if (!gatt.discoverServices()) {
-                        failConnection("discoverServices 调用失败")
-                        closeGatt(gatt)
-                    }
+            withCurrentGatt(epoch, gatt) {
+                if (status != BluetoothGatt.GATT_SUCCESS && newState != BluetoothGatt.STATE_CONNECTED) {
+                    failConnection("连接失败(status=$status)")
+                    closeGatt(gatt)
+                    clearConnectionRefs()
+                    return@withCurrentGatt
                 }
 
-                BluetoothGatt.STATE_DISCONNECTED -> {
-                    val pendingConnect = connectDeferred
-                    val message = if (manualDisconnect) {
-                        null
-                    } else {
-                        "设备断开(status=$status)"
+                when (newState) {
+                    BluetoothGatt.STATE_CONNECTED -> {
+                        _connection.value = ConnectionState.DiscoveringServices
+                        if (!gatt.discoverServices()) {
+                            failConnection("discoverServices 调用失败")
+                            closeGatt(gatt)
+                            clearConnectionRefs()
+                        }
                     }
-                    clearConnectionRefs()
-                    if (message == null) {
-                        _connection.value = ConnectionState.Disconnected
-                    } else {
-                        _connection.value = ConnectionState.Error(message)
-                        pendingConnect?.completeExceptionally(IllegalStateException(message))
+
+                    BluetoothGatt.STATE_DISCONNECTED -> {
+                        val pendingConnect = connectDeferred
+                        val message = if (manualDisconnect) {
+                            null
+                        } else {
+                            "设备断开(status=$status)"
+                        }
+                        clearConnectionRefs()
+                        if (message == null) {
+                            _connection.value = ConnectionState.Disconnected
+                        } else {
+                            _connection.value = ConnectionState.Error(message)
+                            pendingConnect?.completeExceptionally(IllegalStateException(message))
+                        }
                     }
                 }
             }
@@ -124,53 +141,62 @@ class BluetoothGattTransport(
 
         @SuppressLint("MissingPermission")
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                failConnection("服务发现失败(status=$status)")
-                closeGatt(gatt)
-                return
-            }
+            withCurrentGatt(epoch, gatt) {
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    failConnection("服务发现失败(status=$status)")
+                    closeGatt(gatt)
+                    clearConnectionRefs()
+                    return@withCurrentGatt
+                }
 
-            val uartService = gatt.getService(UART_SERVICE_UUID)
-            val rx = uartService?.getCharacteristic(UART_RX_UUID)
-            val tx = uartService?.getCharacteristic(UART_TX_UUID)
-            if (uartService == null || rx == null || tx == null) {
-                failConnection("未发现 Nordic UART UUID")
-                closeGatt(gatt)
-                return
-            }
+                val uartService = gatt.getService(UART_SERVICE_UUID)
+                val rx = uartService?.getCharacteristic(UART_RX_UUID)
+                val tx = uartService?.getCharacteristic(UART_TX_UUID)
+                if (uartService == null || rx == null || tx == null) {
+                    failConnection("未发现 Nordic UART UUID")
+                    closeGatt(gatt)
+                    clearConnectionRefs()
+                    return@withCurrentGatt
+                }
 
-            rxCharacteristic = rx
-            txCharacteristic = tx
-            _connection.value = ConnectionState.Subscribing
+                rxCharacteristic = rx
+                txCharacteristic = tx
+                _connection.value = ConnectionState.Subscribing
 
-            if (requestPreferredMtu(gatt)) {
-                emitSystemLog("MTU request sent, wait callback for notify setup")
-            } else {
-                emitSystemLog("MTU request not sent, continue notify setup directly")
-                continueToNotifySetup(gatt, "mtu-request-not-sent")
+                if (requestPreferredMtu(gatt)) {
+                    emitSystemLog("MTU request sent, wait callback for notify setup")
+                } else {
+                    emitSystemLog("MTU request not sent, continue notify setup directly")
+                    continueToNotifySetup(gatt, "mtu-request-not-sent")
+                }
             }
         }
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-            if (descriptor.uuid != CCCD_UUID) return
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                _connection.value = ConnectionState.Connected
-                connectDeferred?.complete(Unit)
-            } else {
-                failConnection("CCCD 写入返回错误(status=$status)")
-                closeGatt(gatt)
+            withCurrentGatt(epoch, gatt) {
+                if (descriptor.uuid != CCCD_UUID) return@withCurrentGatt
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    _connection.value = ConnectionState.Connected
+                    connectDeferred?.complete(Unit)
+                } else {
+                    failConnection("CCCD 写入返回错误(status=$status)")
+                    closeGatt(gatt)
+                    clearConnectionRefs()
+                }
             }
         }
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-            val success = status == BluetoothGatt.GATT_SUCCESS
-            emitSystemLog("MTU changed mtu=$mtu status=$status success=$success")
-            continueToNotifySetup(gatt, "mtu-callback")
+            withCurrentGatt(epoch, gatt) {
+                val success = status == BluetoothGatt.GATT_SUCCESS
+                emitSystemLog("MTU changed mtu=$mtu status=$status success=$success")
+                continueToNotifySetup(gatt, "mtu-callback")
+            }
         }
 
         @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-            handleNotifyBytes(characteristic.value)
+            withCurrentGatt(epoch, gatt) { handleNotifyBytes(characteristic.value, epoch) }
         }
 
         override fun onCharacteristicChanged(
@@ -178,7 +204,7 @@ class BluetoothGattTransport(
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray,
         ) {
-            handleNotifyBytes(value)
+            withCurrentGatt(epoch, gatt) { handleNotifyBytes(value, epoch) }
         }
 
         override fun onCharacteristicWrite(
@@ -186,11 +212,13 @@ class BluetoothGattTransport(
             characteristic: BluetoothGattCharacteristic,
             status: Int,
         ) {
-            val deferred = writeDeferred ?: return
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                deferred.complete(Unit)
-            } else {
-                deferred.completeExceptionally(IllegalStateException("写入失败(status=$status)"))
+            withCurrentGatt(epoch, gatt) {
+                val deferred = writeDeferred ?: return@withCurrentGatt
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    deferred.complete(Unit)
+                } else {
+                    deferred.completeExceptionally(IllegalStateException("写入失败(status=$status)"))
+                }
             }
         }
     }
@@ -291,19 +319,32 @@ class BluetoothGattTransport(
 
             _connection.value = ConnectionState.Connecting
             manualDisconnect = false
-            connectDeferred = CompletableDeferred()
+            val pendingConnect = CompletableDeferred<Unit>()
+            connectDeferred = pendingConnect
+            val epoch = connectionEpochGate.open()
+            val callback = createGattCallback(epoch)
 
             val localGatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                device.connectGatt(appContext, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+                device.connectGatt(appContext, false, callback, BluetoothDevice.TRANSPORT_LE)
             } else {
                 @Suppress("DEPRECATION")
-                device.connectGatt(appContext, false, gattCallback)
+                device.connectGatt(appContext, false, callback)
+            }
+            if (localGatt == null) {
+                failConnection("connectGatt 未返回 GATT")
+                clearConnectionRefs()
+                throw IllegalStateException("connectGatt 未返回 GATT")
+            }
+            if (!connectionEpochGate.accepts(epoch)) {
+                // An immediate callback failed before connectGatt returned.
+                closeGatt(localGatt)
+                throw IllegalStateException("连接在初始化期间失效")
             }
             gatt = localGatt
 
             try {
                 withTimeout(timeoutMs) {
-                    connectDeferred?.await()
+                    pendingConnect.await()
                 }
             } catch (e: TimeoutCancellationException) {
                 failConnection("连接超时(${timeoutMs}ms)")
@@ -318,6 +359,8 @@ class BluetoothGattTransport(
     }
 
     fun disconnect() {
+        // Revoke queued notifications immediately; mutex cleanup may run later.
+        connectionEpochGate.invalidate()
         scope.launch {
             connectMutex.withLock {
                 internalDisconnect(closeOnly = false)
@@ -326,10 +369,17 @@ class BluetoothGattTransport(
     }
 
     @SuppressLint("MissingPermission")
-    suspend fun writeLine(line: String, timeoutMs: Long = config.writeTimeoutMs) {
+    suspend fun writeLine(
+        line: String,
+        timeoutMs: Long = config.writeTimeoutMs,
+        expectedEpoch: Long? = null,
+    ) {
         writeMutex.withLock {
             if (_connection.value !is ConnectionState.Connected) {
                 throw IllegalStateException("尚未连接")
+            }
+            if (expectedEpoch != null && !connectionEpochGate.accepts(expectedEpoch)) {
+                throw IllegalStateException("BLE 连接已变化")
             }
             val targetGatt = gatt ?: throw IllegalStateException("Gatt 不可用")
             val rx = rxCharacteristic ?: throw IllegalStateException("RX characteristic 不可用")
@@ -339,24 +389,28 @@ class BluetoothGattTransport(
             val deferred = CompletableDeferred<Unit>()
             writeDeferred = deferred
 
-            val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                targetGatt.writeCharacteristic(rx, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) ==
-                    BluetoothStatusCodes.SUCCESS
-            } else {
-                @Suppress("DEPRECATION")
-                run {
-                    rx.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                    rx.value = bytes
-                    targetGatt.writeCharacteristic(rx)
-                }
-            }
-
-            if (!ok) {
-                writeDeferred = null
-                throw IllegalStateException("写入调用失败")
-            }
-
             try {
+                val issueWrite = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        targetGatt.writeCharacteristic(rx, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) ==
+                            BluetoothStatusCodes.SUCCESS
+                    } else {
+                        @Suppress("DEPRECATION")
+                        run {
+                            rx.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                            rx.value = bytes
+                            targetGatt.writeCharacteristic(rx)
+                        }
+                    }
+                }
+                val ok = if (expectedEpoch == null) {
+                    issueWrite()
+                } else {
+                    connectionEpochGate.withCurrent(expectedEpoch, issueWrite)
+                        ?: throw IllegalStateException("BLE 连接已变化")
+                }
+                if (!ok) throw IllegalStateException("写入调用失败")
+
                 withTimeout(timeoutMs) {
                     deferred.await()
                 }
@@ -376,6 +430,7 @@ class BluetoothGattTransport(
     private fun internalDisconnect(closeOnly: Boolean) {
         val localGatt = gatt
         if (localGatt == null) {
+            clearConnectionRefs()
             _connection.value = ConnectionState.Disconnected
             return
         }
@@ -423,6 +478,7 @@ class BluetoothGattTransport(
     }
 
     private fun clearConnectionRefs() {
+        connectionEpochGate.invalidate()
         gatt = null
         rxCharacteristic = null
         txCharacteristic = null
@@ -439,18 +495,26 @@ class BluetoothGattTransport(
         connectDeferred?.completeExceptionally(IllegalStateException(message))
     }
 
-    private fun handleNotifyBytes(bytes: ByteArray?) {
-        if (bytes == null || bytes.isEmpty()) return
+    private fun handleNotifyBytes(bytes: ByteArray?, epoch: Long) {
+        if (bytes == null || bytes.isEmpty() || !connectionEpochGate.accepts(epoch)) return
 
         val chunk = bytes.toString(StandardCharsets.UTF_8)
         val chunkForLog = escapeForLog(chunk)
         Log.d(TAG, "RX chunk len=${bytes.size} payload=$chunkForLog")
-        scope.launch { _incomingRawChunks.emit(chunkForLog) }
+        scope.launch {
+            if (connectionEpochGate.accepts(epoch)) _incomingRawChunks.emit(chunkForLog)
+        }
 
-        val completeLines = lineFramer.append(chunk)
+        val completeLines = connectionEpochGate.withCurrent(epoch) {
+            lineFramer.append(chunk)
+        } ?: return
         completeLines.forEach { line ->
             Log.d(TAG, "RX line emitted=${escapeForLog(line)}")
-            scope.launch { _incomingLines.emit(line) }
+            scope.launch {
+                if (!connectionEpochGate.accepts(epoch)) return@launch
+                _incomingStampedLines.emit(StampedBleLine(epoch, line))
+                if (connectionEpochGate.accepts(epoch)) _incomingLines.emit(line)
+            }
         }
     }
 
@@ -491,6 +555,7 @@ class BluetoothGattTransport(
             emitSystemLog("Notify setup failed: UART service missing")
             failConnection("未发现 Nordic UART UUID")
             closeGatt(gatt)
+            clearConnectionRefs()
             return
         }
 
@@ -499,6 +564,7 @@ class BluetoothGattTransport(
             emitSystemLog("Notify setup failed: TX characteristic missing")
             failConnection("未发现 Nordic UART TX UUID")
             closeGatt(gatt)
+            clearConnectionRefs()
             return
         }
 
@@ -511,6 +577,7 @@ class BluetoothGattTransport(
         if (!gatt.setCharacteristicNotification(tx, true)) {
             failConnection("setCharacteristicNotification 失败")
             closeGatt(gatt)
+            clearConnectionRefs()
             return
         }
 
@@ -518,6 +585,7 @@ class BluetoothGattTransport(
         if (cccd == null) {
             failConnection("TX 缺少 CCCD 描述符")
             closeGatt(gatt)
+            clearConnectionRefs()
             return
         }
 
@@ -535,6 +603,7 @@ class BluetoothGattTransport(
         if (!writeOk) {
             failConnection("CCCD 写入失败")
             closeGatt(gatt)
+            clearConnectionRefs()
         }
     }
 

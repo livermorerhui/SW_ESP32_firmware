@@ -3,6 +3,13 @@ package com.sonicwave.protocol
 sealed class Command {
     data object CapabilityQuery : Command()
     data object SnapshotQuery : Command()
+    data object DeviceIdentityQuery : Command()
+    data object DeviceGetConfig : Command()
+    /** Schema-1 configuration; the legacy laser_installed command remains separate. */
+    data class DeviceSetProfileConfig(
+        val platformModel: PlatformModel,
+        val sensorProfile: SensorProfile,
+    ) : Command()
     data class DeviceSetConfig(
         val platformModel: PlatformModel,
         val laserInstalled: Boolean,
@@ -21,6 +28,8 @@ sealed class Command {
     data object CalibrationGetModel : Command()
     /** Independent empty-distance owner; does not touch the weight model. */
     data object EmptyDistanceGet : Command()
+    /** The ESP32 captures its own current fresh distance; no APP value is sent. */
+    data object EmptyDistanceSetCurrent : Command()
     data class EmptyDistanceSet(val distanceMm: Float) : Command()
     data object EmptyDistanceClear : Command()
     /** Clears only the weight model a/b/c; the independent empty-distance anchor is preserved. */
@@ -84,12 +93,50 @@ enum class PlatformModel {
     ULTRA,
 }
 
+/** Stable schema-1 sensor identity, separate from transport backend names. */
+enum class SensorProfile {
+    NONE,
+    J100_485,
+    CYD3S1612_IIC,
+}
+
 enum class MeasurementCarrier {
     FORMAL_EVT_STREAM,
     LEGACY_CSV_FALLBACK,
 }
 
 sealed class Event {
+    data class DeviceIdentity(
+        val id: String,
+        val version: Int,
+        val raw: String,
+    ) : Event()
+    /** Only a fully validated schema-1 ACK may have success=true. */
+    data class ProfileConfigResult(
+        val operation: String,
+        val success: Boolean,
+        val schema: Int?,
+        val platformModel: PlatformModel?,
+        val sensorProfile: SensorProfile?,
+        val laserInstalled: Boolean?,
+        val generation: Long?,
+        val reason: String?,
+        val raw: String,
+    ) : Event()
+    /** Profile-aware D_e reply; legacy EMPTY results use EmptyDistanceResult. */
+    data class ProfileEmptyDistanceResult(
+        val operation: String,
+        val success: Boolean,
+        val status: String?,
+        val distanceMm: Float?,
+        val toleranceMm: Float?,
+        val sensorProfile: SensorProfile?,
+        val generation: Long?,
+        val emptyRevision: Long?,
+        val supported: Boolean?,
+        val reason: String?,
+        val raw: String,
+    ) : Event()
     data class State(val state: DeviceState) : Event()
     data class Snapshot(
         val topState: DeviceState,

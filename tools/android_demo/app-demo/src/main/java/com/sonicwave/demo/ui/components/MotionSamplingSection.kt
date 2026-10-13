@@ -61,6 +61,7 @@ fun MotionSamplingSection(
 ) {
     val notAvailable = stringResource(R.string.common_not_available)
     val session = uiState.motionSamplingSession
+    val legacySession = uiState.legacyUnattributedSamplingSession
     val rows = session?.rows.orEmpty()
     val rowCount = rows.size
     val latestRow = rows.lastOrNull()
@@ -152,10 +153,14 @@ fun MotionSamplingSection(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            uiState.profileHistoryError?.let { error ->
+                Text(error, color = MaterialTheme.colorScheme.error)
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = actions.onStartSampling,
-                    enabled = !uiState.isMotionSamplingActive,
+                    enabled = !uiState.isMotionSamplingActive &&
+                        uiState.deviceConfigVerified && uiState.profileHistoryReady,
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(stringResource(R.string.action_start_motion_sampling))
@@ -398,6 +403,42 @@ fun MotionSamplingSection(
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
+                    }
+                }
+            }
+
+            if (legacySession != null) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            RoundedCornerShape(10.dp),
+                        )
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.section_legacy_unattributed_sampling),
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = stringResource(R.string.hint_legacy_unattributed_sampling),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(stringResource(R.string.label_motion_sampling_session_id, legacySession.sessionId))
+                    Text(stringResource(R.string.label_motion_sampling_started_at, formatTimestamp(legacySession.startedAtMs)))
+                    Text(stringResource(R.string.label_motion_sampling_row_count, legacySession.rows.size))
+                    legacySession.rows.takeLast(3).forEach { row ->
+                        Text(
+                            text = stringResource(
+                                R.string.label_legacy_unattributed_sampling_row,
+                                row.elapsedMs / 1000.0,
+                                row.distanceMm.format2(),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                 }
             }
