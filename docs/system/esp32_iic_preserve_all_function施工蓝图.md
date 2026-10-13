@@ -1,7 +1,12 @@
 # ESP32 测距链路施工蓝图：保留原功能并加入 CYD3S1612-IIC
 
-版本：E7-SOURCE-REVIEW
+版本：E8-SOURCE-REVIEW
 目标：在不减少原有产品功能的前提下，加入 CYD3S1612-IIC 测距，并把“距离状态判断”和“体重测量/校准”分成两条链路；同时让 Demo APP 的校准、采样、运行控制和日志都遵守这两条链路，最终形成一份可通过现有 BLE OTA 发布的统一 ESP32 固件。
+
+当前专题入口：
+
+- “新设备默认 Base、已配置设备烧录或升级后保留原型号、由 Demo APP 选择 Plus/传感器/空载距离”的最新施工合同见 [ESP32 Base/Plus 与 Demo APP 传感器配置施工蓝图](./esp32_base_plus_sensor_profile_app_configuration施工蓝图.md)。
+- 该专题文档优先于本文件早期关于“默认 Plus”“统一固件自动探测”的历史描述；历史章节保留作审计证据，不代表新的目标合同。
 
 本次修订重点：
 
