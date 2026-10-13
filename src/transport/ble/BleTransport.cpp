@@ -6,10 +6,14 @@
 #include "core/SystemStateMachine.h"
 #include "core/VerboseSerial.h"
 #include <esp_gap_ble_api.h>
+#include <esp_heap_caps.h>
 #include <string.h>
 
 static BleTransport* g_self = nullptr;
 static constexpr uint8_t kControlQueueLen = 8;
+// DEVICE:SET_CONFIG runs parsing, persistence, verification, and reader
+// switching on BleCtrl. The former 4096-byte stack overflowed on hardware.
+static constexpr uint32_t kControlTaskStackBytes = 12288;
 static constexpr uint8_t kTxControlQueueLen = 64;
 static constexpr uint8_t kTxStreamQueueLen = 1;
 static constexpr uint32_t kAdvRestartMinIntervalMs = 300;
@@ -341,7 +345,12 @@ void BleTransport::begin(CommandBus* cb, const char* deviceName, const char* adv
     xQueueAddToSet(txControlQueue, txQueueSet);
     xQueueAddToSet(txStreamQueue, txQueueSet);
   }
-  xTaskCreatePinnedToCore(controlTaskThunk, "BleCtrl", 4096, this, 3, &controlTaskHandle, 1);
+  if (xTaskCreatePinnedToCore(controlTaskThunk, "BleCtrl",
+                              kControlTaskStackBytes, this, 3,
+                              &controlTaskHandle, 1) != pdPASS) {
+    HumanReadableLog::error("蓝牙控制任务创建失败");
+    return;
+  }
   xTaskCreatePinnedToCore(otaTaskThunk, "BleOta", 8192, this, 3, &otaTaskHandle, 1);
   xTaskCreatePinnedToCore(txTaskThunk, "BleTx", 4096, this, 3, &txTaskHandle, 1);
 
@@ -1674,6 +1683,11 @@ void BleTransport::controlTaskLoop() {
     }
 
     String in = msg.line;
+    const bool profileConfigWrite = in.startsWith("DEVICE:SET_CONFIG");
+    if (profileConfigWrite) {
+      Serial.printf("[BLE_CTRL_STACK] phase=before_parse min_free_bytes=%u\n",
+                    static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+    }
     if (businessCommandBlockedByOta(in)) {
       if (!enqueueTxLineRaw("NACK:BUSY_OTA")) {
         noteTxEnqueueFailure(TxFrameClass::NACK, "ota_busy_nack", "NACK:BUSY_OTA");
@@ -1697,6 +1711,10 @@ void BleTransport::controlTaskLoop() {
     cmd.transportSessionId = msg.sessionId;
     cmd.connectionId = msg.connId;
     cmd.connectionIdKnown = msg.connIdKnown;
+    if (profileConfigWrite) {
+      Serial.printf("[BLE_CTRL_STACK] phase=before_dispatch min_free_bytes=%u\n",
+                    static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+    }
 
     String ack;
     if (!bus) {
@@ -1709,6 +1727,13 @@ void BleTransport::controlTaskLoop() {
     bus->dispatch(cmd, ack);
     if (!enqueueTxLine(ack)) {
       noteTxEnqueueFailure(classifyTxLine(ack.c_str()), "command_ack", ack.c_str());
+    }
+    if (profileConfigWrite) {
+      Serial.printf(
+          "[BLE_CTRL_STACK] phase=after_ack min_free_bytes=%u internal_free_bytes=%u internal_min_free_bytes=%u\n",
+          static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)),
+          static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+          static_cast<unsigned>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL)));
     }
   }
 }
