@@ -169,10 +169,19 @@ static constexpr bool BASELINE_CONTRACT_DIAG_ENABLED = false;
 #define DEBUG_LASER_STREAM 0
 #define DEBUG_BLE_TX_VERBOSE 0
 
-// USB 串口默认只显示人话运行日志。需要排查底层时临时改为 true，
+// UART/USB 串口默认只显示人话运行日志。需要排查底层时临时改为 true，
 // 不影响 BLE 通信、状态机和波形控制。
 #ifndef SERIAL_VERBOSE_DIAGNOSTICS
 #define SERIAL_VERBOSE_DIAGNOSTICS 0
+#endif
+
+// 静态诊断profile：0=普通中文，1=全部详细，2=波形，3=测量，4=BLE，5=OTA。
+// 只控制日志；不支持采集端stop动态关闭，也不影响正式BLE订阅。
+#ifndef SW_DIAGNOSTIC_PROFILE
+#define SW_DIAGNOSTIC_PROFILE SERIAL_VERBOSE_DIAGNOSTICS
+#endif
+#if SW_DIAGNOSTIC_PROFILE < 0 || SW_DIAGNOSTIC_PROFILE > 5
+#error "SW_DIAGNOSTIC_PROFILE must be 0..5"
 #endif
 
 // ===== Diagnostic Flags =====

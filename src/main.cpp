@@ -656,6 +656,7 @@ static String buildBleDeviceName(PlatformModel model) {
 void setup() {
   clearBoardRgbLed();
   Serial.begin(115200);
+  FirmwareDiagnostics::begin();
   configureHumanSerialLog();
   delay(1500);
   clearBoardRgbLed();
@@ -678,9 +679,7 @@ void setup() {
   );
   HumanReadableLog::boot(FW_VER, PROTO_VER, resetReasonName(resetReason));
 #if defined(SW_ESP32_ROLLBACK_USB_DIAGNOSTICS)
-  ESP_LOGI(
-      "BOOT_DIAG",
-      "[BOOT_DIAG] fw=%s proto=%d reset_reason=%s(%d) heap_free=%u heap_min_free=%u psram_free=%u board=sonicwave_esp32s3_n16r8 psram_enabled=%d",
+  FirmwareDiagnostics::bootDiagnostic(
       FW_VER,
       PROTO_VER,
       resetReasonName(resetReason),
@@ -723,7 +722,7 @@ void setup() {
 
   HumanReadableLog::ready();
 #if defined(SW_ESP32_ROLLBACK_USB_DIAGNOSTICS)
-  ESP_LOGI("BOOT_DIAG", "Ready");
+  FirmwareDiagnostics::record(FirmwareDiagnostics::EventKind::RollbackReady);
 #endif
 }
 

@@ -35,9 +35,23 @@ def main() -> None:
                        "-I", str(temp), "-I", str(ROOT / "src"), *defines,
                        str(ROOT / "tools/tests" / source), "-o", str(binary)]
             print(f"编译并运行：{name}", flush=True)
-            subprocess.run(command, check=True, cwd=ROOT)
-            subprocess.run([str(binary)], check=True, cwd=ROOT)
-    print("固件日志策略测试通过：3 个程序，16 条断言；不代表固件构建或真机时序通过。")
+            subprocess.run(command, check=True, cwd=ROOT, timeout=60)
+            subprocess.run([str(binary)], check=True, cwd=ROOT, timeout=60)
+        for name, defines in [
+            ("pipeline_normal", ["-DSERIAL_VERBOSE_DIAGNOSTICS=0"]),
+            ("pipeline_wave", ["-DSERIAL_VERBOSE_DIAGNOSTICS=1", "-DSW_DIAGNOSTIC_PROFILE=2"]),
+        ]:
+            binary = temp / name
+            command = [args.cxx, "-std=c++11", "-Wall", "-Wextra", "-Werror", "-pthread",
+                       "-DSW_DIAGNOSTIC_HOST_TEST=1", *defines,
+                       "-I", str(ROOT / "tools/tests/firmware_diagnostic_stubs"),
+                       "-I", str(ROOT / "src"), str(ROOT / "tools/tests/firmware_diagnostics_test.cpp"),
+                       str(ROOT / "src/core/FirmwareDiagnosticBuffer.cpp"),
+                       str(ROOT / "src/core/FirmwareDiagnostics.cpp"), "-o", str(binary)]
+            print(f"编译并运行：{name}", flush=True)
+            subprocess.run(command, check=True, cwd=ROOT, timeout=60)
+            subprocess.run([str(binary)], check=True, cwd=ROOT, timeout=60)
+    print("固件日志原生测试通过；不代表完整固件构建或真机时序通过。")
 
 
 if __name__ == "__main__":

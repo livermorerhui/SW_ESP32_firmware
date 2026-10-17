@@ -1685,7 +1685,7 @@ void BleTransport::controlTaskLoop() {
     String in = msg.line;
     const bool profileConfigWrite = in.startsWith("DEVICE:SET_CONFIG");
     if (profileConfigWrite) {
-      Serial.printf("[BLE_CTRL_STACK] phase=before_parse min_free_bytes=%u\n",
+      SW_VERBOSE_SERIAL_PRINTF("[BLE_CTRL_STACK] phase=before_parse min_free_bytes=%u\n",
                     static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
     }
     if (businessCommandBlockedByOta(in)) {
@@ -1712,7 +1712,7 @@ void BleTransport::controlTaskLoop() {
     cmd.connectionId = msg.connId;
     cmd.connectionIdKnown = msg.connIdKnown;
     if (profileConfigWrite) {
-      Serial.printf("[BLE_CTRL_STACK] phase=before_dispatch min_free_bytes=%u\n",
+      SW_VERBOSE_SERIAL_PRINTF("[BLE_CTRL_STACK] phase=before_dispatch min_free_bytes=%u\n",
                     static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
     }
 
@@ -1729,7 +1729,7 @@ void BleTransport::controlTaskLoop() {
       noteTxEnqueueFailure(classifyTxLine(ack.c_str()), "command_ack", ack.c_str());
     }
     if (profileConfigWrite) {
-      Serial.printf(
+      SW_VERBOSE_SERIAL_PRINTF(
           "[BLE_CTRL_STACK] phase=after_ack min_free_bytes=%u internal_free_bytes=%u internal_min_free_bytes=%u\n",
           static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)),
           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),

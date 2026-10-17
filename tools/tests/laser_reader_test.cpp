@@ -10,6 +10,14 @@
 #include <thread>
 
 #include "modules/laser/LaserMeasurementReader.h"
+#include "core/FirmwareDiagnostics.h"
+
+// Reader 测试隔离诊断外部副作用；writer 准入/背压由固件日志专项测试覆盖。
+namespace FirmwareDiagnostics {
+Admission record(EventKind, const char*, const char*, float, float, int32_t) {
+  return Admission::Accepted;
+}
+}
 
 std::atomic<uint32_t> g_fakeNowMs{1000};
 std::atomic<int> g_fakeMutexTakeAttempts{0};
