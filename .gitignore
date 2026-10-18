@@ -89,6 +89,20 @@ analysis_output/
 exports/
 captures/
 
+# Local capture bundles and generated ESP-IDF/PlatformIO configuration.
+.artifacts/
+sdkconfig.*
+!sdkconfig.defaults
+!sdkconfig.esp32s3
+!sdkconfig.esp32s3_rollback_self_check_fail
+
+# Local vendor PDFs used as source material during hardware audit.
+传感器资料/
+
+# Superseded planning drafts; the current unified blueprint is committed.
+docs/system/esp32_cyd3s1612_iic_dual_firmware_plan.md
+docs/system/esp32_cyd3s1612_iic_formal_firmware_blueprint.md
+
 
 .venv*/
 .venv*/

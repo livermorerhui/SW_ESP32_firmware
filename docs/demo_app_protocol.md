@@ -5,9 +5,8 @@
 当前交付边界说明：
 
 - 本文描述的是当前 Demo APP 仍然兼容的主协议面。
-- 当前可交付子集以 `BASE` 与 `PLUS degraded-start` 为主。
-- 在现有 ESP32-S3-only bench 上，不应把本文解释为“完整测量版已完成”。
-- measurement / calibration 相关命令仍保留协议兼容性，但不属于当前子集交付承诺。
+- 当前统一固件同时覆盖 `BASE`、`PLUS`、J100(P)-485 和 CYD3S1612-IIC 测量链；真机验收状态见统一施工蓝图第 12 节。
+- `SW APP` 继续只消费正式状态，不消费 Demo 的距离/体重校准字段。
 
 ### 1. BLE 基本信息
 
@@ -21,7 +20,7 @@
 #### 2.1 能力探测
 - 请求: `CAP?`
 - 预期回包:
-  - `ACK:CAP fw=SW-HUB-1.0.0 proto=2 platform_model=<BASE|PLUS|PRO|ULTRA> laser_installed=<0|1> ...`
+  - `ACK:CAP fw=SW-HUB-1.0.0 proto=2 platform_model=<BASE|PLUS|PRO|ULTRA> laser_installed=<0|1> ... cue_supported=<0|1>`
 
 #### 2.2 设备配置
 - 写入设备画像:
@@ -53,15 +52,29 @@
 - 启动: `WAVE:START`
 - 停止: `WAVE:STOP`
 
+#### 2.5 连接提示音
+- 固件在当前 BLE 连接生命周期事件通过控制任务确认后，由 `HubHandler::onBleConnected()` 本地触发一次连接提示音。APP 继续按原来的 `CAP? / SNAPSHOT? / WAVE:*` 协议通讯，不再发送 `AUDIO:CUE id=CONNECT`。
+- `AUDIO:CUE id=CONNECT` 仍保留为旧 APP 的兼容入口；旧命令与本地连接事件使用同一 `sessionId` 去重，返回 `DUPLICATE` 时不重复播放。
+- 断开提示音由 ESP32 在真实 BLE 断开后本地播放；APP 不发送 `DISCONNECT` 命令。
+- 提示音失败不影响连接、WAVE、停止和 Plus 运行状态判断。
+
 #### 2.5 测重与校准
 - 归零: `SCALE:ZERO`
 - 校准: `SCALE:CAL z=<zeroDistance>,k=<scaleFactor>`
+- 参数归零/清除体重模型: `CAL:CLEAR_WEIGHT_MODEL`
+- 空载距离读取/设置/清除: `EMPTY:GET` / `EMPTY:SET distance_mm=<finite>` / `EMPTY:CLEAR`
+- 记录校准点: `CAL:CAPTURE w=<referenceWeightKg>`
+- 读取模型: `CAL:GET_MODEL`
+- 写入模型: `CAL:SET_MODEL type=<LINEAR|QUADRATIC>,ref=<runtimeDistance>,c0=<...>,c1=<...>,c2=<...>`
 
 说明：
 
-- 这些命令仍然是协议面的一部分。
-- 但在当前 `BASE / PLUS degraded-start` 交付子集中，它们不是演示闭环的必测项。
-- 现有 bench 缺少 MAX485 / laser / PCM5102A 时，不应用它们判断当前子集是否可交付。
+- `CAL:CLEAR_WEIGHT_MODEL` 只清空 ESP32 已保存的体重模型 `a/b/c`，保留型号页独立设置的空载距离 `D_e`。
+- `EMPTY:SET` 只写入用户确认的空载距离；设置后 APP 必须再发 `EMPTY:GET`，只有设备回读一致才显示“已设置”。
+- `EMPTY:CLEAR` 清除 `D_e`，并使依赖该 `D_e` 的已部署体重模型失效；它不等同于体重模型归零。需要保留 `D_e` 时使用 `CAL:CLEAR_WEIGHT_MODEL`。
+- `CAL:CAPTURE w=0` 在激光后端只要求距离稳定，是体重拟合样本，不会隐式修改 `D_e`；非零重量还要求有人基线稳定。
+- `CAL:SET_MODEL` 成功后 Demo APP 必须继续发送 `CAL:GET_MODEL`，收到 `ACK:CAL_MODEL ... ready=1` 且参数逐项一致后，才显示模型已经部署。
+- `CAL:SET_MODEL` 不会隐式设置空载距离；必须先完成型号页 `EMPTY:SET` 和 `EMPTY:GET` 回读。
 
 ### 3. Legacy 兼容协议
 
@@ -90,14 +103,16 @@
 - `EVT:PARAM:<zeroDistance>,<scaleFactor>`
 - formal measurement carrier:
   - valid sample:
-    - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=1 ma12_ready=<0|1> distance=<distance> weight=<weightKg> [ma12=<ma12Kg>]`
+    - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=<0|1> distance_valid=1 weight_valid=<0|1> ma12_ready=<0|1> distance_mm=<physicalMillimetres> [weight=<weightKg>] [ma12=<ma12Kg>] backend=<...>`
   - invalid sample:
-    - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=0 ma12_ready=0 reason=<READ_FAIL|OUT_OF_RANGE_LOW|...>`
+    - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=0 distance_valid=0 weight_valid=0 ma12_ready=0 reason=<READ_FAIL|DISTANCE_OUT_OF_RANGE|...> backend=<...>`
 - `SNAPSHOT: ... platform_model=... laser_installed=... laser_available=... degraded_start_available=... degraded_start_enabled=...`
 
 说明：
 
 - `EVT:STREAM` 是 measurement plane 的唯一正式 continuous carrier。
+- `EVT:STREAM distance` 保留旧运行时单位以兼容既有协议；`distance_mm` 是 ESP32 输出的统一物理毫米字段。Demo APP 只读取并记录 `distance_mm`，不按传感器类型自行换算；没有该字段时，样本视为不完整。
+- `distance_valid`、`weight_valid` 和 `distance_reason`/`weight_reason` 分别表达两条测量链；距离有效但体重未校准时，Demo 仍显示和保存距离，不把缺失体重写成 0 或沿用上一帧。
 - `distance / weight / MA12 / valid / reason / seq` 归属于同一 plane、同一 sample 序列。
 - `STABLE` 仍只是离散事件，不等于连续 plane。
 - Demo APP 在 `PRIMARY/UNKNOWN` 模式下只消费 formal `EVT:STREAM` carrier。

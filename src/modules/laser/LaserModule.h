@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <Preferences.h>
+#include <freertos/semphr.h>
 #include "config/LaserPhase2Config.h"
 #include "core/DeviceConfig.h"
 #include "core/EventBus.h"
@@ -11,6 +12,7 @@
 #include "modules/laser/CalibrationRuntime.h"
 #include "modules/laser/CalibrationModelStore.h"
 #include "modules/laser/DeviceConfigStore.h"
+#include "modules/laser/DistanceStateChain.h"
 #include "modules/laser/LaserDiagnostics.h"
 #include "modules/laser/LaserMeasurementReader.h"
 #include "modules/laser/LaserStableWindow.h"
@@ -19,6 +21,7 @@
 #include "modules/laser/MeasurementPlane.h"
 #include "modules/laser/MotionSafetyShadowEvaluator.h"
 #include "modules/laser/PresenceContractEvaluator.h"
+#include "modules/laser/ProfileEmptyDistanceStore.h"
 #include "modules/laser/RhythmStateJudge.h"
 #include "modules/laser/RuntimeZeroObserver.h"
 #include "modules/laser/RunSummaryCollector.h"
@@ -73,7 +76,7 @@ public:
 
   // Command hooks（由统一命令处理器调用）
   void triggerZero();
-  void setParams(float zero, float factor);
+  bool setParams(float zero, float factor, String& reason);
   void getParams(float &zero, float &factor) const;
   float getWeightKg() const;
   bool isUserPresent() const;
@@ -87,9 +90,27 @@ public:
   bool measurementStartupResolved() const;
   bool protectionDegraded() const;
   void getDeviceConfig(DeviceConfigSnapshot& out) const;
+  bool getProfileConfig(DeviceConfigSnapshot& out, String& reason);
+  bool setProfileConfig(
+      PlatformModel platformModel,
+      SensorProfileId sensorProfile,
+      String& reason);
   bool setDeviceConfig(PlatformModel platformModel, bool laserInstalled, String& reason);
+  bool configOperational() const;
+  bool configIdentityValid() const;
+  bool startConfigurationComplete() const;
+  bool protectedStartPolicyAvailable() const;
   bool getCalibrationModel(CalibrationModel& out) const;
   bool setCalibrationModel(const CalibrationModel& model, String& reason);
+  bool getEmptyDistance(EmptyDistanceRecord& out) const;
+  bool getProfileEmptyDistance(ProfileEmptyDistanceRecord& out, String& reason);
+  bool setEmptyDistanceFromCurrent(EmptyDistanceRecord& out, String& reason);
+  bool setEmptyDistanceFromCurrent(ProfileEmptyDistanceRecord& out, String& reason);
+  bool setEmptyDistance(float distanceMm, String& reason);
+  bool clearEmptyDistance(String& reason);
+  bool clearWeightModel(String& reason);
+  bool clearCalibrationParameters(String& reason);
+  const char* sensorBackendName() const;
   bool captureCalibrationPoint(float referenceWeightKg, CalibrationCapture& out, String& reason);
   bool setStreamSubscription(bool enabled, uint8_t rateHz, String& reason);
   void resetStreamSubscription(const char* reason);
@@ -123,9 +144,19 @@ private:
   bool measurementBypassActive() const;
   void logConfigTruth(const char* source, const char* reason = nullptr);
   void loadDeviceConfig();
-  void saveDeviceConfig();
+  bool applyStoredConfigTransition(
+      PlatformModel platformModel,
+      SensorProfileId sensorProfile,
+      bool legacyReserved,
+      const char* source,
+      String& reason);
   void applyDeviceConfigRuntimeEffects(const char* source);
+  void configureDistanceStateChainForProfile(const char* source);
+  bool configurationMutationBlocked(String& reason) const;
+  void stopWaveForConfigurationFault(const char* source);
+  void invalidateEmptyReferenceAfterStorageFailure(const char* source);
   void loadCalibrationModel();
+  void loadEmptyDistance();
   void saveCalibrationModel();
   void syncLegacyParamsFromModel();
   bool applyCalibrationModel(const CalibrationModel& model, bool persist, const char* source, String& reason);
@@ -208,6 +239,14 @@ private:
       float distance,
       float weight,
       const char* reason);
+  void publishMeasurementSample(
+      uint32_t now,
+      bool distanceValid,
+      bool weightValid,
+      float distance,
+      float weight,
+      const char* distanceReason,
+      const char* weightReason);
   bool shouldPublishStreamSample(uint32_t now);
   void logLatestMeasurementPlaneSummary(const char* trigger);
 
@@ -226,17 +265,35 @@ private:
   WaveModule* wave = nullptr;
 
   LaserMeasurementReader measurementReader;
+  DistanceStateChain distanceStateChain;
   MeasurementPlane measurementPlane;
   DeviceConfigStore deviceConfigStore;
   CalibrationModelStore calibrationModelStore;
+  ProfileEmptyDistanceStore profileEmptyDistanceStore;
   Preferences preferences;
   DeviceConfigSnapshot deviceConfig{};
+  DeviceConfigStoreStatus configStatus = DeviceConfigStoreStatus::CONFIG_ERROR;
+  bool preferencesOpened = false;
+  volatile bool configTransitionActive = false;
+  SemaphoreHandle_t profileTransitionMutex = nullptr;
+  bool currentSampleValid = false;
+  float currentSamplePhysicalMm = NAN;
+  uint32_t currentSampleAtMs = 0;
+  uint32_t currentSampleSequence = 0;
+  uint32_t currentSampleReaderEpoch = 0;
+  SensorProfileId currentSampleProfile = SensorProfileId::NONE;
+  uint32_t currentSampleConfigGeneration = 0;
   LaserPhase2ThresholdConfig phase2Thresholds{};
 
   // 与你原固件保持一致
   float zeroDistance = 0.0f;
   float scaleFactor = 1.0f;
   CalibrationModel calibrationModel{};
+  EmptyDistanceRecord emptyDistanceRecord{};
+  // A cleared or never-written model must not be silently treated as a valid
+  // weight calibration. Distance state can still run without it.
+  bool calibrationModelReady = false;
+  bool emptyDistanceReady = false;
   DualZeroState dualZero{};
 
   float weightBuffer[WINDOW_N]{};

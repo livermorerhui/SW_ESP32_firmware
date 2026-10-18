@@ -27,4 +27,5 @@ kotlin {
 dependencies {
     api(project(":sonicwave-transport"))
     implementation(libs.kotlinx.coroutines.android)
+    testImplementation(kotlin("test"))
 }

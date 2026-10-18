@@ -17,9 +17,10 @@ class CalibrationComparisonEngineTest {
     fun linearFitRecoversSimpleLine() {
         val result = CalibrationComparisonEngine.compare(
             samples = listOf(
-                sample(distanceRuntime = 0.5f, weightKg = 6.0f),
-                sample(distanceRuntime = 1.5f, weightKg = 10.0f),
-                sample(distanceRuntime = 2.5f, weightKg = 14.0f),
+                sample(distanceRuntime = 1.0f, weightKg = 0.0f),
+                sample(distanceRuntime = 1.5f, weightKg = 2.0f),
+                sample(distanceRuntime = 2.0f, weightKg = 4.0f),
+                sample(distanceRuntime = 2.5f, weightKg = 6.0f),
             ),
         )
 
@@ -27,10 +28,10 @@ class CalibrationComparisonEngineTest {
         assertTrue(linear.isAvailable)
         val coefficients = assertNotNull(linear.coefficients)
         val metrics = assertNotNull(linear.metrics)
-        assertNear(1.5f, coefficients.referenceDistance)
+        assertNear(1.0f, coefficients.referenceDistance)
         assertNear(0.0f, coefficients.c0)
         assertNear(4.0f, coefficients.c1)
-        assertNear(10.0f, coefficients.c2)
+        assertNear(0.0f, coefficients.c2)
         assertNear(0.0f, metrics.meanAbsoluteErrorKg)
         assertNear(0.0f, metrics.maxAbsoluteErrorKg)
     }
@@ -39,31 +40,31 @@ class CalibrationComparisonEngineTest {
     fun quadraticFitRecoversSimpleParabola() {
         val result = CalibrationComparisonEngine.compare(
             samples = listOf(
-                sample(distanceRuntime = 0.0f, weightKg = 1.0f),
-                sample(distanceRuntime = 1.0f, weightKg = 2.5f),
-                sample(distanceRuntime = 2.0f, weightKg = 5.0f),
-                sample(distanceRuntime = 3.0f, weightKg = 8.5f),
-                sample(distanceRuntime = 4.0f, weightKg = 13.0f),
+                sample(distanceRuntime = 1.0f, weightKg = 0.0f),
+                sample(distanceRuntime = 1.5f, weightKg = 1.625f),
+                sample(distanceRuntime = 2.0f, weightKg = 3.5f),
+                sample(distanceRuntime = 3.0f, weightKg = 8.0f),
+                sample(distanceRuntime = 4.0f, weightKg = 13.5f),
             ),
         )
 
         val quadratic = result.quadratic
         assertTrue(quadratic.isAvailable)
         val coefficients = assertNotNull(quadratic.coefficients)
-        assertNear(2.0f, coefficients.referenceDistance)
+        assertNear(1.0f, coefficients.referenceDistance)
         assertNear(0.5f, coefficients.c0)
         assertNear(3.0f, coefficients.c1)
-        assertNear(5.0f, coefficients.c2)
+        assertNear(0.0f, coefficients.c2)
     }
 
     @Test
     fun metricsAreComputedAgainstRecordedReferenceWeight() {
         val result = CalibrationComparisonEngine.compare(
             samples = listOf(
-                sample(distanceRuntime = -1.0f, weightKg = 1.0f),
-                sample(distanceRuntime = 0.0f, weightKg = 3.0f),
-                sample(distanceRuntime = 1.0f, weightKg = 5.0f),
-                sample(distanceRuntime = 2.0f, weightKg = 7.0f),
+                sample(distanceRuntime = 1.0f, weightKg = 0.0f),
+                sample(distanceRuntime = 2.0f, weightKg = 2.0f),
+                sample(distanceRuntime = 3.0f, weightKg = 4.0f),
+                sample(distanceRuntime = 4.0f, weightKg = 6.0f),
             ),
         )
 
@@ -77,11 +78,11 @@ class CalibrationComparisonEngineTest {
     fun monotonicCheckFlagsNonMonotonicQuadraticCandidate() {
         val result = CalibrationComparisonEngine.compare(
             samples = listOf(
-                sample(distanceRuntime = -2.0f, weightKg = 6.0f),
-                sample(distanceRuntime = -1.0f, weightKg = 9.0f),
-                sample(distanceRuntime = 0.0f, weightKg = 10.0f),
-                sample(distanceRuntime = 1.0f, weightKg = 9.0f),
-                sample(distanceRuntime = 2.0f, weightKg = 6.0f),
+                sample(distanceRuntime = 1.0f, weightKg = 0.0f),
+                sample(distanceRuntime = 1.5f, weightKg = 7.5f),
+                sample(distanceRuntime = 2.0f, weightKg = 10.0f),
+                sample(distanceRuntime = 2.5f, weightKg = 7.5f),
+                sample(distanceRuntime = 3.5f, weightKg = -12.5f),
             ),
         )
 
@@ -100,12 +101,31 @@ class CalibrationComparisonEngineTest {
 
         val twoPoints = CalibrationComparisonEngine.compare(
             samples = listOf(
-                sample(distanceRuntime = 1.0f, weightKg = 5.0f),
+                sample(distanceRuntime = 1.0f, weightKg = 0.0f),
                 sample(distanceRuntime = 2.0f, weightKg = 7.0f),
             ),
         )
         assertTrue(twoPoints.linear.isAvailable)
         assertFalse(twoPoints.quadratic.isAvailable)
+    }
+
+    @Test
+    fun explicitEmptyDistanceAllowsFitWithoutZeroWeightSample() {
+        val result = CalibrationComparisonEngine.compare(
+            samples = listOf(
+                sample(distanceRuntime = 1.5f, weightKg = 2.0f),
+                sample(distanceRuntime = 2.0f, weightKg = 4.0f),
+                sample(distanceRuntime = 2.5f, weightKg = 6.0f),
+            ),
+            emptyDistanceMm = 100.0f,
+        )
+
+        val linear = result.linear
+        assertTrue(linear.isAvailable)
+        val coefficients = assertNotNull(linear.coefficients)
+        assertNear(1.0f, coefficients.referenceDistance)
+        assertNear(0.0f, coefficients.c0)
+        assertNear(4.0f, coefficients.c1)
     }
 
     private fun sample(distanceRuntime: Float, weightKg: Float): CalibrationFitSample {

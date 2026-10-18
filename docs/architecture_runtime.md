@@ -9,7 +9,8 @@
 - 创建方式：`xTaskCreatePinnedToCore(..., "I2S_Audio", ..., priority=4, core=1)`
 - 源码：`src/modules/wave/WaveModule.cpp`
 - 周期特征：无显式 `vTaskDelay`，持续循环生成 DDS 数据并 `i2s_write(..., portMAX_DELAY)` 阻塞等待 DMA
-- 职责：LUT 正弦合成、频率/强度平滑、软停静音、I2S DMA 输出
+- 职责：WAVE LUT 正弦合成、频率/强度平滑、软停静音、独立 CONNECT/DISCONNECT CUE 合成、I2S DMA 输出
+- 约束：WAVE 和 CUE 共用这一个 I2S 写入 owner；CUE 不改变 WAVE 参数，也不改变 `isOutputActive()` 的 WAVE-only 含义
 
 ### 1.2 `laserTask`（`LaserModule::taskLoop`）
 - 创建位置：`LaserModule::startTask()`
@@ -89,20 +90,34 @@ APP
 ```text
 LaserModule::taskLoop()
 -> weight < LEAVE_TH && userPresent
--> SystemStateMachine::onUserOff()
--> SystemStateMachine::setState(FAULT_STOP)
+-> SystemStateMachine::onBleDisconnected()
+-> SystemStateMachine 进入可恢复暂停并调用唯一停波 owner
 -> WaveModule.stopSoft()
 ```
 
 ### 3.4 BLE DISCONNECT
 ```text
 BleTransport::MyServerCallbacks::onDisconnect()
--> STOP_ON_DISCONNECT == true
--> BleDisconnectSink::onBleDisconnect() (HubHandler)
+-> 捕获 sessionId/connId 后将 BLE_DISCONNECTED 投递到控制队列
+-> BleDisconnectSink::onBleDisconnect(sessionId, connId, connIdKnown) (HubHandler)
 -> SystemStateMachine::onUserOff()
 -> SystemStateMachine::setState(FAULT_STOP)
 -> WaveModule.stopSoft()
+-> WaveModule::audioTask 等待 WAVE 静音并停止 I2S
+-> 同一 audioTask 播放 DISCONNECT CUE
 ```
+
+### 3.5 CONNECT CUE
+```text
+BleTransport::MyServerCallbacks::onConnect()
+-> 捕获当前 sessionId/connId，并将 BLE_CONNECTED 投递到控制队列
+-> BleTransport::controlTaskLoop() 校验当前连接生命周期
+-> HubHandler::onBleConnected()
+-> WaveModule::requestCue(CONNECT, 当前 sessionId)
+-> WaveModule::audioTask 播放 CONNECT CUE
+```
+
+`AUDIO:CUE id=CONNECT` 仍保留为旧 APP 的兼容入口。旧 APP 可能在协议确认后发送该命令；固件按当前 `sessionId` 去重，返回 `DUPLICATE` 时不重复发声。正式 APP 不再发送连接提示音命令，CAP/SNAPSHOT/WAVE 等正常通讯仍按原协议运行。
 
 ## 4. Control Plane 与 Data Plane 对应
 
@@ -110,7 +125,7 @@ BleTransport::MyServerCallbacks::onDisconnect()
 `APP -> BleTransport -> ProtocolCodec -> CommandBus -> SystemStateMachine -> WaveModule/LaserModule`
 
 ### 4.2 Data Plane
-`WaveModule -> DDS/LUT -> I2S DMA -> PCM5102A -> TPA3255 -> Platform`
+`WaveModule（WAVE/CUE） -> DDS/LUT -> I2S DMA -> PCM5102A -> TPA3255 -> Platform`
 
 ### 4.3 Event Flow
 `LaserModule + SystemStateMachine -> EventBus -> BleTransport -> APP`

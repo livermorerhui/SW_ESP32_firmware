@@ -1,4 +1,5 @@
 #include "MotionSafetyShadowEvaluator.h"
+#include "core/VerboseSerial.h"
 
 #include <math.h>
 #include <string.h>
@@ -79,7 +80,7 @@ void MotionSafetyShadowEvaluator::reset(const char* reason) {
   lastLoggedDetail = "NONE";
   lastLogMs = 0;
   if (MOTION_SAFETY_SHADOW_VERBOSE_RESET_LOG) {
-    Serial.printf("[MOTION_SHADOW] action=reset reason=%s note=observe_only\n",
+    SW_VERBOSE_SERIAL_PRINTF("[MOTION_SHADOW] action=reset reason=%s note=observe_only\n",
                   reason ? reason : "unspecified");
   }
 }
@@ -297,7 +298,7 @@ void MotionSafetyShadowEvaluator::maybeLog(
     return;
   }
 
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "[MOTION_SHADOW] action=observe_only top_state=%s user_present=%d baseline_ready=%d "
       "mapped_reason=%s effect_if_enabled=%s effect_if_disabled=%s detail=%s "
       "stable_weight=%.2f stable_distance=%.2f ma_weight=%.2f ma_distance=%.2f "

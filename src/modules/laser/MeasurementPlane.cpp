@@ -1,4 +1,5 @@
 #include "modules/laser/MeasurementPlane.h"
+#include "core/VerboseSerial.h"
 
 void MeasurementPlane::reset(const char* reason, bool logReset) {
   ma12Head = 0;
@@ -8,7 +9,7 @@ void MeasurementPlane::reset(const char* reason, bool logReset) {
   lastInvalidEventMs = 0;
   lastInvalidEventReason = nullptr;
   if (logReset) {
-    Serial.printf(
+    SW_VERBOSE_SERIAL_PRINTF(
         "[LAYER:MEASUREMENT_PLANE] action=reset reason=%s ma12_window=%u\n",
         reason ? reason : "unspecified",
         static_cast<unsigned>(MEASUREMENT_MA12_WINDOW));
@@ -21,26 +22,40 @@ MeasurementPlaneRecordResult MeasurementPlane::record(
     float distance,
     float weight,
     const char* reason) {
+  return record(now, valid, valid, distance, weight, reason, reason, nullptr);
+}
+
+MeasurementPlaneRecordResult MeasurementPlane::record(
+    uint32_t now,
+    bool distanceValid,
+    bool weightValid,
+    float distance,
+    float weight,
+    const char* distanceReason,
+    const char* weightReason,
+    const char* sensorBackend) {
   const bool shouldEmitInvalid =
-      !valid &&
-      (lastInvalidEventReason != reason ||
+      !distanceValid &&
+      (lastInvalidEventReason != distanceReason ||
        (now - lastInvalidEventMs) >= MEASUREMENT_INVALID_KEEPALIVE_MS);
-  if (!valid && !shouldEmitInvalid) {
+  if (!distanceValid && !shouldEmitInvalid) {
     return {};
   }
 
-  if (valid) {
+  if (weightValid) {
     pushWeightSample(weight);
   }
 
   float ma12 = NAN;
-  const bool ma12Ready = valid && currentMa12(ma12);
-  latestSampleValid = valid;
+  const bool ma12Ready = weightValid && currentMa12(ma12);
+  latestSampleValid = distanceValid;
+  latestDistanceValid = distanceValid;
+  latestWeightValid = weightValid;
   latestSampleDistance = distance;
   latestSampleWeight = weight;
   latestSampleMa12Ready = ma12Ready;
   latestSampleMa12 = ma12Ready ? ma12 : 0.0f;
-  latestSampleReason = valid ? nullptr : reason;
+  latestSampleReason = distanceValid ? weightReason : distanceReason;
   hasLatestSample = true;
 
   MeasurementPlaneRecordResult result{};
@@ -48,19 +63,38 @@ MeasurementPlaneRecordResult MeasurementPlane::record(
   result.event.type = EventType::STREAM;
   result.event.ts_ms = now;
   result.event.sampleSeq = ++measurementSequence;
-  result.event.measurementValid = valid;
+  result.event.measurementValid = distanceValid;
+  result.event.distanceValid = distanceValid;
+  result.event.weightValid = weightValid;
   result.event.distance = distance;
   result.event.weightKg = weight;
   result.event.ma12Ready = ma12Ready;
   result.event.ma12WeightKg = ma12Ready ? ma12 : 0.0f;
-  if (!valid) {
+  if (sensorBackend) {
+    strlcpy(result.event.sensorBackend, sensorBackend, sizeof(result.event.sensorBackend));
+  }
+  if (!distanceValid) {
     strlcpy(
         result.event.measurementReason,
-        reason ? reason : "INVALID",
+        distanceReason ? distanceReason : "INVALID",
         sizeof(result.event.measurementReason));
+    strlcpy(
+        result.event.distanceReason,
+        distanceReason ? distanceReason : "INVALID",
+        sizeof(result.event.distanceReason));
     lastInvalidEventMs = now;
-    lastInvalidEventReason = reason;
+    lastInvalidEventReason = distanceReason;
   } else {
+    if (!weightValid) {
+      strlcpy(
+          result.event.weightReason,
+          weightReason ? weightReason : "WEIGHT_INVALID",
+          sizeof(result.event.weightReason));
+      strlcpy(
+          result.event.measurementReason,
+          weightReason ? weightReason : "WEIGHT_INVALID",
+          sizeof(result.event.measurementReason));
+    }
     lastInvalidEventReason = nullptr;
   }
 
@@ -158,7 +192,7 @@ void MeasurementPlane::logSummary(
   const float approxRateHz = elapsedMs > 0
       ? (static_cast<float>(logSamples) * 1000.0f / static_cast<float>(elapsedMs))
       : 0.0f;
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "[LAYER:MEASUREMENT_PLANE] seq=%lu valid=%d distance=%.2f weight=%.2f ma12_ready=%d ma12=%.2f "
       "reason=%s target_read_interval_ms=%lu approx_rate_hz=%.2f trigger=%s\n",
       static_cast<unsigned long>(measurementSequence),
@@ -172,7 +206,7 @@ void MeasurementPlane::logSummary(
       approxRateHz,
       trigger ? trigger : "unknown");
   if (DEBUG_MEASUREMENT_PLANE_VERBOSE) {
-    Serial.printf(
+    SW_VERBOSE_SERIAL_PRINTF(
         "[LAYER:MEASUREMENT_CARRIER] carrier=EVT:STREAM queue_policy=ordered_no_overwrite seq=%lu valid=%d "
         "reason=%s\n",
         static_cast<unsigned long>(measurementSequence),
@@ -180,7 +214,7 @@ void MeasurementPlane::logSummary(
         valid ? "NONE" : (reason ? reason : "INVALID"));
   }
   if (DEBUG_MEASUREMENT_PLANE_VERBOSE && ma12Ready) {
-    Serial.printf(
+    SW_VERBOSE_SERIAL_PRINTF(
         "[LAYER:MA12] seq=%lu window=%u value=%.2f input=weightKg\n",
         static_cast<unsigned long>(measurementSequence),
         static_cast<unsigned>(MEASUREMENT_MA12_WINDOW),

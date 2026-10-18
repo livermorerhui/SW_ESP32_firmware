@@ -76,13 +76,21 @@ internal class MotionSamplingSessionStore {
     ): MotionSamplingAppendResult {
         if (!state.isMotionSamplingActive) return MotionSamplingAppendResult(session, null)
         val activeSession = session ?: return MotionSamplingAppendResult(null, null)
-        val distance = sample.distance ?: return MotionSamplingAppendResult(activeSession, null)
-        val weight = sample.weight ?: return MotionSamplingAppendResult(activeSession, null)
+        val distance = sample.distance?.takeIf { it.isFinite() } ?: Float.NaN
+        val distanceValid = sample.distanceValid && distance.isFinite()
+        val weight = sample.weight
+            ?.takeIf { sample.weightValid && it.isFinite() }
         val previous = activeSession.rows.lastOrNull()
         val elapsedMs = nowMs - activeSession.startedAtMs
         val dtSeconds = previous?.let { ((nowMs - it.timestampMs).coerceAtLeast(1L)) / 1000f }
-        val ddDt = dtSeconds?.let { (distance - previous.distanceMm) / it }
-        val dwDt = dtSeconds?.let { (weight - previous.liveWeightKg) / it }
+        val ddDt = dtSeconds?.takeIf { distanceValid && previous.distanceMm.isFinite() }
+            ?.let { (distance - previous.distanceMm) / it }
+        val previousWeight = previous?.liveWeightKg
+        val dwDt = if (weight != null && previousWeight != null) {
+            dtSeconds?.let { (weight - previousWeight) / it }
+        } else {
+            null
+        }
         val row = MotionSamplingRowUi(
             sampleIndex = activeSession.rows.size + 1,
             measurementSeq = sample.sequence,
@@ -93,7 +101,14 @@ internal class MotionSamplingSessionStore {
             liveWeightKg = weight,
             ma12WeightKg = sample.ma12.takeIf { sample.ma12Ready },
             stableWeightKg = if (state.stableWeightActive) state.stableWeight else null,
-            measurementValid = sample.valid && distance.isFinite() && weight.isFinite(),
+            // Distance is the primary sampling signal. Weight remains an
+            // optional reference column and must not suppress a distance row.
+            measurementValid = distanceValid && distance.isFinite(),
+            distanceValid = distanceValid,
+            weightValid = sample.weightValid && weight != null,
+            distanceReason = sample.distanceReason,
+            weightReason = sample.weightReason ?: sample.reason.takeIf { !sample.weightValid },
+            sensorBackend = sample.sensorBackend,
             stableVisible = state.stableWeightActive,
             runtimeStateCode = state.deviceState.name,
             waveStateCode = state.safetyStatus.waveCode.ifBlank {

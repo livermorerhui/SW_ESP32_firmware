@@ -58,7 +58,7 @@ cd tools/android_demo
   - `SNAPSHOT: top_state=IDLE runtime_ready=1 start_ready=1 baseline_ready=0 platform_model=BASE laser_installed=0 laser_available=0 degraded_start_available=0 degraded_start_enabled=0`
 - Live stream:
   - `ACK:STREAM enabled=1 supported=1 rate_hz=10`
-  - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=1 ma12_ready=<0|1> distance=<mm> weight=<kg> ma12=<kg>`
+  - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=1 ma12_ready=<0|1> distance_mm=<mm> weight=<kg> ma12=<kg>`
 - Stable weight:
   - `EVT:STABLE:<weight>`
 - Calibration:

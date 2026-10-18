@@ -55,6 +55,9 @@ public:
 
   bool requestStart(FaultCode& reason);
   void requestStop();
+  // An internal configuration/NVS fault must stop output without being
+  // reported as a user-initiated stop or as a fall/leave safety event.
+  void stopForConfigurationFault();
 
 private:
   void setState(TopState s);

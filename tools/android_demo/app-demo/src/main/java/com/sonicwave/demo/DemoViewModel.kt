@@ -10,7 +10,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.sonicwave.protocol.CalibrationComparisonResult
 import com.sonicwave.protocol.CalibrationModelType
-import com.sonicwave.protocol.CALIBRATION_DISTANCE_RUNTIME_DIVISOR
 import com.sonicwave.protocol.CapabilityResult
 import com.sonicwave.protocol.Command
 import com.sonicwave.protocol.DeviceState
@@ -19,6 +18,7 @@ import com.sonicwave.protocol.MeasurementCarrier
 import com.sonicwave.protocol.PlatformModel
 import com.sonicwave.protocol.ProtocolMode
 import com.sonicwave.protocol.SafetyEffect
+import com.sonicwave.protocol.SensorProfile
 import com.sonicwave.protocol.WaveState
 import com.sonicwave.sdk.SonicWaveClient
 import com.sonicwave.transport.BleScanResult
@@ -33,8 +33,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 sealed interface ScanState {
@@ -58,6 +61,22 @@ data class UiState(
     val notifyError: String? = null,
     val capabilityInfo: String? = null,
     val protocolMode: ProtocolMode = ProtocolMode.UNKNOWN,
+    val deviceIdentity: String? = null,
+    val deviceSensorProfile: SensorProfile? = null,
+    val deviceConfigGeneration: Long? = null,
+    val deviceConfigVerified: Boolean = false,
+    /** A profile write cannot reuse the previous profile's start readiness. */
+    val profileRuntimeRefreshPending: Boolean = false,
+    /** Do not deploy a new model until the post-EMPTY model readback is resolved. */
+    val emptyModelReadbackPending: Boolean = false,
+    val emptyModelReadbackNeedsReconnect: Boolean = false,
+    val profileHistoryReady: Boolean = false,
+    val profileHistoryError: String? = null,
+    val deviceEmptyRevision: Long? = null,
+    val selectedSensorProfile: SensorProfile = SensorProfile.NONE,
+    val profileDistanceReady: Boolean = false,
+    val profileDistanceFault: Boolean = false,
+    val streamSubscriptionConfirmed: Boolean = false,
     val devicePlatformModel: PlatformModel? = null,
     val deviceLaserInstalled: Boolean? = null,
     val deviceLaserAvailable: Boolean? = null,
@@ -69,8 +88,8 @@ data class UiState(
     val deviceBaselineReady: Boolean? = null,
     val deviceReasonCode: String = "NONE",
     val deviceSafetyEffectCode: String = "NONE",
-    val selectedPlatformModel: PlatformModel = PlatformModel.PLUS,
-    val selectedLaserInstalled: Boolean = true,
+    val selectedPlatformModel: PlatformModel = PlatformModel.BASE,
+    val selectedLaserInstalled: Boolean = false,
     val deviceConfigStatus: String? = null,
     val isDeviceConfigWritePending: Boolean = false,
     val deviceState: DeviceState = DeviceState.UNKNOWN,
@@ -80,6 +99,16 @@ data class UiState(
     val weight: Float? = null,
     val ma12: Float? = null,
     val measurementValid: Boolean = false,
+    val distanceValid: Boolean = false,
+    val weightValid: Boolean = false,
+    val distanceInvalidReason: String? = null,
+    val weightInvalidReason: String? = null,
+    val sensorBackend: String? = null,
+    val emptyDistance: EmptyDistanceState = EmptyDistanceState(),
+    /** Null means the command has not been probed; false is a device truth. */
+    val emptyDistanceControlSupported: Boolean? = null,
+    val weightModel: WeightModelState = WeightModelState(),
+    val weightModelClearSupported: Boolean? = null,
     val lastMeasurementSequence: Long? = null,
     val telemetryPoints: List<TelemetryPointUi> = emptyList(),
     val stableWeight: Float? = null,
@@ -89,6 +118,8 @@ data class UiState(
     val latestModel: CalibrationModelUi? = null,
     val latestCalibrationPoint: CalibrationPointUi? = null,
     val calibrationPoints: List<CalibrationPointUi> = emptyList(),
+    val legacyUnattributedCalibrationPoints: List<CalibrationPointUi> = emptyList(),
+    val legacyUnattributedSamplingSession: MotionSamplingSessionUi? = null,
     val comparisonResult: CalibrationComparisonResult? = null,
     val selectedComparisonModel: CalibrationModelType = CalibrationModelType.LINEAR,
     val modelOptions: List<CalibrationModelOptionUi> = SUPPORTED_CALIBRATION_MODEL_TYPES.map { type ->
@@ -100,6 +131,7 @@ data class UiState(
         )
     },
     val preparedModel: PreparedCalibrationModelUi? = null,
+    val canDeployCalibrationModel: Boolean = false,
     val canCaptureCalibrationPoint: Boolean = false,
     val captureStatus: CaptureFeedbackUi? = null,
     val writeModelStatus: WriteModelFeedbackUi? = null,
@@ -153,12 +185,19 @@ data class UiState(
     val isConnecting: Boolean = false,
 )
 
+private data class PendingProfileSave(
+    val owner: Pair<String, SensorProfile>,
+    val snapshot: DemoSessionSnapshot,
+    val serial: Long,
+)
+
 class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private val client = SonicWaveClient(application)
     private val recorder = TelemetryRecorder(application)
     private val testSessionBridge = TestSessionBridge(nowProvider = { System.currentTimeMillis() })
     private val testSessionExporter = TestSessionExporter(application)
     private val motionSamplingExporter = MotionSamplingExporter(application)
+    private val demoSessionPersistence = DemoSessionPersistence(application)
     private val recordingMutex = Mutex()
     private val measurementTrace = DemoMeasurementTrace()
     private val measurementDisplayStore = MeasurementDisplayStore(TELEMETRY_WINDOW_MS)
@@ -169,6 +208,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     )
     private val motionSamplingStore = MotionSamplingSessionStore()
     private val deviceConfigWriteTracker = DeviceConfigWriteTracker()
+    private val profileConfigTransaction = ProfileConfigTransaction()
+    private val profileEmptyTransaction = ProfileEmptyTransaction()
     private val wavePendingLifecycleStore = WavePendingLifecycleStore(
         nowProvider = { System.currentTimeMillis() },
     )
@@ -183,6 +224,24 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     val testSessionPanelState: StateFlow<TestSessionPanelUiState> = _testSessionPanelState.asStateFlow()
 
     private var selectedDeviceName: String? = null
+    private var connectWorkflowJob: Job? = null
+    private var connectRequestSerial: Long = 0L
+    private var lastConnectionCapabilities: Event.Capabilities? = null
+    private var profileRecoveryReadPending: Boolean = false
+    private var profileConfigReadExpiredEpoch: Long? = null
+    private var profileEmptyReadFailedEpoch: Long? = null
+    private val profileStreamSubscriptionGate = ProfileStreamSubscriptionGate()
+    private val profileSnapshotRefreshGate = ProfileSnapshotRefreshGate()
+    private var profileHistoryFlushJob: Job? = null
+    private val profileHistoryFlushJobs = mutableListOf<Job>()
+    private var profileConfigTimeoutJob: Job? = null
+    private var profileDistanceExpiryJob: Job? = null
+    private var profileHistoryLoadJob: Job? = null
+    private var profileObservedSequence: Long? = null
+    private var profileDistanceLastAcceptedAtMs: Long = 0L
+    private var consecutiveProfileSamples: Int = 0
+    private var profileEpoch: Long? = null
+    private var profileHistoryOwner: Pair<String, SensorProfile>? = null
     private var streamWatchdogJob: Job? = null
     private var waveTruthRefreshJob: Job? = null
     private var liveWaveParamSendJob: Job? = null
@@ -198,15 +257,44 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private var disconnectRequested: Boolean = false
     private var hadConnectedSession: Boolean = false
     private var awaitingCalibrationCaptureResult: Boolean = false
+    private var awaitingCalibrationZeroResult: Boolean = false
     private var awaitingModelWriteResult: Boolean = false
+    private var awaitingModelReadback: Boolean = false
     private var pendingDeviceConfigWatchdogJob: Job? = null
+    private var calibrationCaptureTimeoutJob: Job? = null
+    private var calibrationZeroTimeoutJob: Job? = null
+    private var modelWriteTimeoutJob: Job? = null
+    private var modelReadbackTimeoutJob: Job? = null
+    private var emptyDistanceTimeoutJob: Job? = null
+    private var weightModelClearTimeoutJob: Job? = null
+    private var weightModelClearSerial = 0L
+    /** Confirmed D_e before the current SET/CLEAR transaction, if any. */
+    private var pendingEmptyDistancePreviousConfirmedMm: Float? = null
+    /** A CAL_MODEL frame from before EMPTY:GET must not revive the old model. */
+    private var emptyModelRefreshEpoch: Long? = null
+    private var emptyModelQuerySent: Boolean = false
+    /** A successful EMPTY write revokes the old model even when D_e is unchanged. */
+    private var emptyModelInvalidatedEpoch: Long? = null
+    /** Distinguish an old GATT completion from a later EMPTY transaction on the same link. */
+    private var emptyMutationSerial: Long = 0L
+    private var emptyModelReadbackTimeoutJob: Job? = null
+    private var persistenceWriteJob: Job? = null
+    private var pendingPersistence: PendingProfileSave? = null
+    private var pendingPersistenceChangedAtMs: Long = 0L
+    private val inFlightProfileFlushes = mutableMapOf<Long, PendingProfileSave>()
+    private var nextProfileFlushId: Long = 0L
+    private var nextProfileSaveSerial: Long = 0L
+    private val profileSaveLock = Any()
+    private val lastSavedSerialByOwner = mutableMapOf<Pair<String, SensorProfile>, Long>()
     private var pendingWriteModelType: CalibrationModelType? = null
+    private var pendingModelReadback: PreparedCalibrationModelUi? = null
     private var degradedStartDialogSuppressed: Boolean = false
     private var preferredLaserPlatformModel: PlatformModel = PlatformModel.PLUS
     private var testSessionStore: TestSessionUi? = null
     private var motionSamplingSessionStore: MotionSamplingSessionUi? = null
 
     init {
+        restorePersistedSessions()
         observeClient()
         refreshPermissionState()
         _uiState.update {
@@ -219,6 +307,175 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     ),
                 ),
             )
+        }
+    }
+
+    private fun restorePersistedSessions() {
+        viewModelScope.launch {
+            val snapshot = withContext(Dispatchers.IO) {
+                demoSessionPersistence.loadLegacyUnattributed()
+            } ?: return@launch
+            _uiState.update { state ->
+                state.copy(
+                    legacyUnattributedCalibrationPoints = snapshot.calibrationPoints,
+                    legacyUnattributedSamplingSession = snapshot.samplingSession,
+                )
+            }
+            appendSystemLog("[PERSISTENCE] legacy_read_only calibration_points=${snapshot.calibrationPoints.size} sampling_rows=${snapshot.samplingSession?.rows?.size ?: 0}")
+        }
+    }
+
+    private fun sessionSnapshot(state: UiState): DemoSessionSnapshot = DemoSessionSnapshot(
+        calibrationPoints = state.calibrationPoints,
+        preparedModel = state.preparedModel,
+        selectedModel = state.selectedComparisonModel,
+        samplingSession = motionSamplingSessionStore,
+        emptyDistance = state.emptyDistance,
+        weightModel = state.weightModel,
+    )
+
+    private fun saveProfileSnapshot(pending: PendingProfileSave): Result<Unit> =
+        synchronized(profileSaveLock) {
+            if (pending.serial <= (lastSavedSerialByOwner[pending.owner] ?: -1L)) {
+                Result.success(Unit)
+            } else {
+                runCatching {
+                    demoSessionPersistence.saveForProfile(
+                        pending.owner.first, pending.owner.second.name, pending.snapshot,
+                    )
+                    lastSavedSerialByOwner[pending.owner] = pending.serial
+                }
+            }
+        }
+
+    private fun persistSessions() {
+        if (!_uiState.value.profileHistoryReady) return
+        val owner = profileHistoryOwner ?: return
+        val snapshot = sessionSnapshot(_uiState.value)
+        pendingPersistence = PendingProfileSave(owner, snapshot, ++nextProfileSaveSerial)
+        pendingPersistenceChangedAtMs = System.currentTimeMillis()
+        if (persistenceWriteJob?.isActive == true) return
+        persistenceWriteJob = viewModelScope.launch {
+            val startedAt = System.currentTimeMillis()
+            while (true) {
+                delay(PERSISTENCE_DEBOUNCE_MS)
+                val now = System.currentTimeMillis()
+                if (now - pendingPersistenceChangedAtMs >= PERSISTENCE_DEBOUNCE_MS ||
+                    now - startedAt >= PERSISTENCE_MAX_DELAY_MS) break
+            }
+            val pending = pendingPersistence ?: return@launch
+            val result = withContext(Dispatchers.IO) {
+                saveProfileSnapshot(pending)
+            }
+            if (result.isSuccess) {
+                if (pendingPersistence === pending) pendingPersistence = null
+            } else {
+                val reason = result.exceptionOrNull()?.message ?: "UNKNOWN"
+                appendSystemLog("[PERSISTENCE] save_failed reason=$reason")
+                if (profileHistoryOwner == pending.owner) {
+                    _uiState.update { it.copy(profileHistoryReady = false,
+                        profileHistoryError = "本机历史保存失败；已停止继续录点和采样，请检查存储") }
+                    stopMotionSamplingIfActive("历史保存失败，采样已停止")
+                }
+            }
+            persistenceWriteJob = null
+            if (result.isSuccess && pendingPersistence != null &&
+                profileHistoryOwner == pendingPersistence?.owner && _uiState.value.profileHistoryReady
+            ) persistSessions()
+        }
+    }
+
+    private fun flushPendingProfileHistory(): Job? {
+        persistenceWriteJob?.cancel()
+        persistenceWriteJob = null
+        val pending = pendingPersistence ?: return null
+        pendingPersistence = null
+        val flushId = ++nextProfileFlushId
+        synchronized(inFlightProfileFlushes) { inFlightProfileFlushes[flushId] = pending }
+        val job = viewModelScope.launch(Dispatchers.IO) {
+            val result = saveProfileSnapshot(pending)
+            if (result.isSuccess) {
+                synchronized(inFlightProfileFlushes) { inFlightProfileFlushes.remove(flushId) }
+            } else {
+                appendSystemLog("[PERSISTENCE] flush_failed reason=${result.exceptionOrNull()?.message ?: "UNKNOWN"}")
+            }
+        }
+        profileHistoryFlushJobs += job
+        return job
+    }
+
+    private fun activateProfileHistory(deviceId: String, sensorProfile: SensorProfile, epoch: Long) {
+        val owner = deviceId to sensorProfile
+        if (profileHistoryOwner == owner && _uiState.value.profileHistoryReady) return
+        flushPendingProfileHistory()?.let { profileHistoryFlushJob = it }
+        val flushJobs = profileHistoryFlushJobs.toList()
+        profileHistoryOwner = owner
+        profileHistoryLoadJob?.cancel()
+        motionSamplingSessionStore = null
+        _uiState.update { state ->
+            calibrationSessionStore.rebuildComparison(state.copy(
+                profileHistoryReady = false,
+                profileHistoryError = null,
+                calibrationPoints = emptyList(),
+                latestCalibrationPoint = null,
+                selectedComparisonModel = CalibrationModelType.LINEAR,
+                modelType = CalibrationModelType.LINEAR,
+                preparedModel = null,
+                motionSamplingSession = null,
+                isMotionSamplingActive = false,
+            ))
+        }
+        profileHistoryLoadJob = viewModelScope.launch {
+            flushJobs.joinAll()
+            val unsavedForOwner = synchronized(inFlightProfileFlushes) {
+                inFlightProfileFlushes.filterValues { it.owner == owner }.toList()
+            }.sortedBy { it.second.serial }
+            val recovered = withContext(Dispatchers.IO) {
+                unsavedForOwner.all { (flushId, pending) ->
+                    val saved = saveProfileSnapshot(pending).isSuccess
+                    if (saved) synchronized(inFlightProfileFlushes) {
+                        inFlightProfileFlushes.remove(flushId)
+                    }
+                    saved
+                }
+            }
+            if (!recovered) {
+                if (profileHistoryOwner == owner && client.currentConnectionEpoch == epoch) {
+                    _uiState.update { it.copy(
+                        profileHistoryReady = false,
+                        profileHistoryError = "本机历史尚未保存成功；已保留未保存数据，请检查存储后重新连接",
+                    ) }
+                }
+                return@launch
+            }
+            val result = withContext(Dispatchers.IO) {
+                demoSessionPersistence.loadForProfileResult(deviceId, sensorProfile.name)
+            }
+            if (profileHistoryOwner != owner || client.currentConnectionEpoch != epoch ||
+                _uiState.value.deviceIdentity != deviceId || _uiState.value.deviceSensorProfile != sensorProfile
+            ) return@launch
+            if (result == ProfileSessionLoadResult.Corrupt) {
+                _uiState.update { it.copy(profileHistoryReady = false,
+                    profileHistoryError = "本机这台设备的历史文件无法读取；已停止录点和采样，原文件未覆盖") }
+                appendSystemLog("[PERSISTENCE] profile_history_corrupt id=$deviceId profile=${sensorProfile.name}")
+                return@launch
+            }
+            val snapshot = (result as? ProfileSessionLoadResult.Loaded)?.snapshot
+            motionSamplingSessionStore = snapshot?.samplingSession
+            _uiState.update { state ->
+                calibrationSessionStore.rebuildComparison(state.copy(
+                    calibrationPoints = snapshot?.calibrationPoints.orEmpty(),
+                    selectedComparisonModel = snapshot?.selectedModel ?: CalibrationModelType.LINEAR,
+                    modelType = snapshot?.selectedModel ?: CalibrationModelType.LINEAR,
+                    preparedModel = snapshot?.preparedModel,
+                    motionSamplingSession = snapshot?.samplingSession,
+                    isMotionSamplingActive = false,
+                    profileHistoryReady = true,
+                    profileHistoryError = null,
+                ))
+            }
+            appendSystemLog("[PERSISTENCE] profile_restored id=$deviceId profile=${sensorProfile.name} points=${snapshot?.calibrationPoints?.size ?: 0} rows=${snapshot?.samplingSession?.rows?.size ?: 0}")
+            persistSessions()
         }
     }
 
@@ -277,13 +534,58 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun connectToDevice(device: BleScanResult) {
+        connectToDeviceInternal(device)
+    }
+
+    private fun connectToDeviceInternal(device: BleScanResult) {
+        stopMotionSamplingIfActive(text(R.string.motion_sampling_status_stopped_disconnect))
+        connectWorkflowJob?.cancel()
+        val requestSerial = ++connectRequestSerial
+        flushPendingProfileHistory()?.let { profileHistoryFlushJob = it }
+        profileHistoryOwner = null
+        profileHistoryLoadJob?.cancel()
+        profileConfigTransaction.clear()
+        profileEmptyTransaction.clear()
+        profileConfigTimeoutJob?.cancel()
+        profileDistanceExpiryJob?.cancel()
+        profileObservedSequence = null
+        profileDistanceLastAcceptedAtMs = 0L
+        consecutiveProfileSamples = 0
+        profileEpoch = null
+        lastConnectionCapabilities = null
+        profileRecoveryReadPending = false
+        profileConfigReadExpiredEpoch = null
+        profileEmptyReadFailedEpoch = null
+        profileStreamSubscriptionGate.retire()
+        profileSnapshotRefreshGate.retire()
         selectedDeviceName = device.name ?: device.address
         disconnectRequested = false
         hadConnectedSession = false
         awaitingCalibrationCaptureResult = false
+        calibrationCaptureTimeoutJob?.cancel()
+        calibrationCaptureTimeoutJob = null
+        awaitingCalibrationZeroResult = false
+        calibrationZeroTimeoutJob?.cancel()
+        calibrationZeroTimeoutJob = null
         awaitingModelWriteResult = false
+        modelWriteTimeoutJob?.cancel()
+        modelWriteTimeoutJob = null
+        awaitingModelReadback = false
+        modelReadbackTimeoutJob?.cancel()
+        modelReadbackTimeoutJob = null
+        emptyDistanceTimeoutJob?.cancel()
+        emptyDistanceTimeoutJob = null
+        pendingEmptyDistancePreviousConfirmedMm = null
+        emptyModelRefreshEpoch = null
+        emptyModelQuerySent = false
+        emptyModelInvalidatedEpoch = null
+        emptyModelReadbackTimeoutJob?.cancel()
+        emptyModelReadbackTimeoutJob = null
+        weightModelClearTimeoutJob?.cancel()
+        weightModelClearTimeoutJob = null
         clearPendingDeviceConfigWriteState()
         pendingWriteModelType = null
+        pendingModelReadback = null
         wavePendingLifecycleStore.clearAll()
         preferredLaserPlatformModel = PlatformModel.PLUS
         degradedStartDialogSuppressed = false
@@ -296,11 +598,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         measurementTrace.reset()
         resetMeasurementDisplayState()
         resetRawConsoleState()
-        resetSessionStores(clearTestSession = false)
+        resetSessionStores(clearTestSession = false, clearMotionSamplingSession = true)
+        motionSamplingSessionStore = null
 
         _uiState.update {
-            calibrationSessionStore.reset(
-                calibrationSessionStore.withCaptureAvailability(
+            calibrationSessionStore.withCaptureAvailability(
                     it.copy(
                         scanState = ScanState.Idle,
                         statusLabel = currentStatusLabel(connectionState = ConnectionState.Connecting, isScanning = false),
@@ -308,6 +610,19 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         connectedDeviceName = selectedDeviceName,
                         capabilityInfo = null,
                         protocolMode = ProtocolMode.UNKNOWN,
+                        deviceIdentity = null,
+                        deviceSensorProfile = null,
+                        deviceConfigGeneration = null,
+                        deviceConfigVerified = false,
+                        profileRuntimeRefreshPending = false,
+                        emptyModelReadbackPending = false,
+                        emptyModelReadbackNeedsReconnect = false,
+                        profileHistoryReady = false,
+                        deviceEmptyRevision = null,
+                        selectedSensorProfile = SensorProfile.NONE,
+                        profileDistanceReady = false,
+                        profileDistanceFault = false,
+                        streamSubscriptionConfirmed = false,
                         devicePlatformModel = null,
                         deviceLaserInstalled = null,
                         deviceLaserAvailable = null,
@@ -319,14 +634,23 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         deviceBaselineReady = null,
                         deviceReasonCode = "NONE",
                         deviceSafetyEffectCode = "NONE",
-                        selectedPlatformModel = PlatformModel.PLUS,
-                        selectedLaserInstalled = true,
+                        selectedPlatformModel = PlatformModel.BASE,
+                        selectedLaserInstalled = false,
                         deviceConfigStatus = null,
                         isDeviceConfigWritePending = false,
                         notifyEnabled = false,
                         notifyError = null,
                         streamWarning = null,
                         measurementValid = false,
+                        emptyDistance = EmptyDistanceState(),
+                        calibrationPoints = emptyList(),
+                        latestCalibrationPoint = null,
+                        preparedModel = null,
+                        comparisonResult = null,
+                        motionSamplingSession = null,
+                        emptyDistanceControlSupported = null,
+                        weightModel = WeightModelState(),
+                        weightModelClearSupported = null,
                         lastMeasurementSequence = null,
                         ma12 = null,
                         telemetryPoints = emptyList(),
@@ -359,15 +683,16 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         faultStatus = FaultStatusUi(),
                         safetyStatus = defaultSafetyStatus(),
                     ),
-                ),
-            ).resetWaveRuntime()
+                ).resetWaveRuntime()
         }
         publishTestSessionPanel(force = true)
 
-        viewModelScope.launch {
+        connectWorkflowJob = viewModelScope.launch {
             runCatching {
                 client.connect(device.id)
             }.onSuccess {
+                if (requestSerial != connectRequestSerial) return@onSuccess
+                val connectedEpoch = client.currentConnectionEpoch ?: return@onSuccess
                 _uiState.update {
                     calibrationSessionStore.withCaptureAvailability(
                         it.copy(
@@ -383,6 +708,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 startStreamWatchdog(connectAtMs)
 
                 val probe = probeCapabilitiesWithRetry(source = "connect")
+                if (requestSerial != connectRequestSerial ||
+                    client.currentConnectionEpoch != connectedEpoch
+                ) return@onSuccess
 
                 _uiState.update {
                     val probeCapabilities = probe?.capabilities
@@ -420,13 +748,20 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 probe?.reason?.let { reason ->
                     appendSystemLog(text(R.string.log_capability_probe_result, reason))
                 }
-                enableDemoRealtimeStreamIfSupported(probe?.capabilities)
+                lastConnectionCapabilities = probe?.capabilities
                 val nextProtocolMode = mergeProtocolMode(
                     currentMode = _uiState.value.protocolMode,
                     observedMode = probe?.mode,
                 )
                 if (nextProtocolMode == ProtocolMode.PRIMARY) {
                     appendSystemLog(text(R.string.log_canonical_protocol_confirmed))
+                    val epoch = client.currentConnectionEpoch
+                    if (epoch != null) {
+                        scheduleProfileConfigReadTimeout(epoch)
+                        runCatching { client.send(Command.DeviceIdentityQuery, expectedEpoch = epoch) }
+                            .onFailure { appendSystemLog("[DEVICE_CONFIG] identity_query_failed reason=${it.message ?: "UNKNOWN"}") }
+                    }
+                    sendCalibrationGetModel()
                 }
                 if (shouldAttemptPrimarySnapshotRefresh(nextProtocolMode)) {
                     requestSnapshotRefresh()
@@ -435,6 +770,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     requestSnapshotRefresh(force = true)
                 }
             }.onFailure { error ->
+                if (error is CancellationException || requestSerial != connectRequestSerial) return@onFailure
                 _uiState.update {
                     calibrationSessionStore.withCaptureAvailability(
                         it.copy(
@@ -456,13 +792,57 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun disconnect() {
+    fun disconnect() = disconnectInternal()
+
+    private fun disconnectInternal() {
+        stopMotionSamplingIfActive(text(R.string.motion_sampling_status_stopped_disconnect))
+        connectWorkflowJob?.cancel()
+        connectWorkflowJob = null
+        connectRequestSerial++
+        flushPendingProfileHistory()?.let { profileHistoryFlushJob = it }
+        profileHistoryOwner = null
+        profileHistoryLoadJob?.cancel()
+        profileConfigTransaction.clear()
+        profileEmptyTransaction.clear()
+        profileConfigTimeoutJob?.cancel()
+        profileDistanceExpiryJob?.cancel()
+        profileObservedSequence = null
+        profileDistanceLastAcceptedAtMs = 0L
+        consecutiveProfileSamples = 0
+        profileEpoch = null
+        lastConnectionCapabilities = null
+        profileRecoveryReadPending = false
+        profileConfigReadExpiredEpoch = null
+        profileEmptyReadFailedEpoch = null
+        profileStreamSubscriptionGate.retire()
+        profileSnapshotRefreshGate.retire()
         disconnectRequested = true
         hadConnectedSession = false
         awaitingCalibrationCaptureResult = false
+        calibrationCaptureTimeoutJob?.cancel()
+        calibrationCaptureTimeoutJob = null
+        awaitingCalibrationZeroResult = false
+        calibrationZeroTimeoutJob?.cancel()
+        calibrationZeroTimeoutJob = null
         awaitingModelWriteResult = false
+        modelWriteTimeoutJob?.cancel()
+        modelWriteTimeoutJob = null
+        awaitingModelReadback = false
+        modelReadbackTimeoutJob?.cancel()
+        modelReadbackTimeoutJob = null
+        emptyDistanceTimeoutJob?.cancel()
+        emptyDistanceTimeoutJob = null
+        pendingEmptyDistancePreviousConfirmedMm = null
+        emptyModelRefreshEpoch = null
+        emptyModelQuerySent = false
+        emptyModelInvalidatedEpoch = null
+        emptyModelReadbackTimeoutJob?.cancel()
+        emptyModelReadbackTimeoutJob = null
+        weightModelClearTimeoutJob?.cancel()
+        weightModelClearTimeoutJob = null
         clearPendingDeviceConfigWriteState()
         pendingWriteModelType = null
+        pendingModelReadback = null
         wavePendingLifecycleStore.clearAll()
         degradedStartDialogSuppressed = false
         finishTestSessionIfRecording(
@@ -479,10 +859,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         stopMotionSamplingIfActive(text(R.string.motion_sampling_status_stopped_disconnect))
         telemetrySessionStartMs = 0L
         resetMeasurementDisplayState()
-        resetSessionStores(clearTestSession = false)
+        resetSessionStores(clearTestSession = false, clearMotionSamplingSession = true)
+        motionSamplingSessionStore = null
         _uiState.update {
-            calibrationSessionStore.reset(
-                calibrationSessionStore.withCaptureAvailability(
+            calibrationSessionStore.withCaptureAvailability(
                     it.copy(
                         connectedDeviceName = null,
                         isConnecting = false,
@@ -490,6 +870,19 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         notifyError = null,
                         capabilityInfo = null,
                         protocolMode = ProtocolMode.UNKNOWN,
+                        deviceIdentity = null,
+                        deviceSensorProfile = null,
+                        deviceConfigGeneration = null,
+                        deviceConfigVerified = false,
+                        profileRuntimeRefreshPending = false,
+                        emptyModelReadbackPending = false,
+                        emptyModelReadbackNeedsReconnect = false,
+                        profileHistoryReady = false,
+                        deviceEmptyRevision = null,
+                        selectedSensorProfile = SensorProfile.NONE,
+                        profileDistanceReady = false,
+                        profileDistanceFault = false,
+                        streamSubscriptionConfirmed = false,
                         devicePlatformModel = null,
                         deviceLaserInstalled = null,
                         deviceLaserAvailable = null,
@@ -501,8 +894,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         deviceBaselineReady = null,
                         deviceReasonCode = "NONE",
                         deviceSafetyEffectCode = "NONE",
-                        selectedPlatformModel = PlatformModel.PLUS,
-                        selectedLaserInstalled = true,
+                        selectedPlatformModel = PlatformModel.BASE,
+                        selectedLaserInstalled = false,
                         deviceConfigStatus = null,
                         isDeviceConfigWritePending = false,
                         streamWarning = null,
@@ -531,6 +924,15 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         motionSamplingModeEnabled = false,
                         stableWeight = null,
                         stableWeightActive = false,
+                        emptyDistance = EmptyDistanceState(),
+                        calibrationPoints = emptyList(),
+                        latestCalibrationPoint = null,
+                        preparedModel = null,
+                        comparisonResult = null,
+                        motionSamplingSession = null,
+                        emptyDistanceControlSupported = null,
+                        weightModel = WeightModelState(),
+                        weightModelClearSupported = null,
                         measurementValid = false,
                         lastMeasurementSequence = null,
                         ma12 = null,
@@ -540,8 +942,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             isScanning = isScanActive(it.scanState),
                         ),
                     ),
-                ),
-            ).resetWaveRuntime()
+                ).resetWaveRuntime()
         }
         publishTestSessionPanel(force = true)
     }
@@ -562,11 +963,20 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         if (model != PlatformModel.BASE) {
             preferredLaserPlatformModel = model
         }
-        _uiState.update {
-            it.copy(
+        _uiState.update { state ->
+            state.copy(
                 selectedPlatformModel = model,
                 selectedLaserInstalled = model != PlatformModel.BASE,
+                selectedSensorProfile = if (model == PlatformModel.BASE) SensorProfile.NONE
+                    else state.deviceSensorProfile ?: SensorProfile.NONE,
             )
+        }
+    }
+
+    fun updateSelectedSensorProfile(profile: SensorProfile) {
+        _uiState.update { state ->
+            if (state.devicePlatformModel != PlatformModel.PLUS) state
+            else state.copy(selectedSensorProfile = profile)
         }
     }
 
@@ -591,24 +1001,28 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { state ->
             calibrationSessionStore.updateManualModelInput(state, referenceInput = value)
         }
+        persistSessions()
     }
 
     fun updateModelC0Input(value: String) {
         _uiState.update { state ->
             calibrationSessionStore.updateManualModelInput(state, c0Input = value)
         }
+        persistSessions()
     }
 
     fun updateModelC1Input(value: String) {
         _uiState.update { state ->
             calibrationSessionStore.updateManualModelInput(state, c1Input = value)
         }
+        persistSessions()
     }
 
     fun updateModelC2Input(value: String) {
         _uiState.update { state ->
             calibrationSessionStore.updateManualModelInput(state, c2Input = value)
         }
+        persistSessions()
     }
 
     fun toggleEngineeringSection() {
@@ -627,6 +1041,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { state ->
             calibrationSessionStore.selectModelType(state, type)
         }
+        persistSessions()
         val prepared = _uiState.value.preparedModel
         if (prepared != null && prepared.type == type) {
             appendSystemLog(
@@ -748,6 +1163,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val normalizedState = _uiState.value
+        if (normalizedState.isDeviceConfigWritePending || normalizedState.profileRuntimeRefreshPending) {
+            _uiState.update { it.copy(lastAckOrError = startBlockedMessage(normalizedState)) }
+            return
+        }
         if (requiresDegradedStartAuthorizationBeforeWaveStart(normalizedState)) {
             degradedStartDialogSuppressed = false
             _uiState.update { syncDegradedStartUi(it).syncWaveControlFlags() }
@@ -865,12 +1284,30 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     fun sendCalibrationCapture() {
         val state = _uiState.value
         appendSystemLog(buildCapturePreconditionLog(state))
-        appendSystemLog(buildCalibrationCaptureAttemptLog(state, route = CalibrationCaptureRouteUi.APP_LIVE_SNAPSHOT.name))
-        if (!state.canCaptureCalibrationPoint) {
+        val primaryRoute = state.protocolMode == ProtocolMode.PRIMARY
+        val route = if (primaryRoute) {
+            CalibrationCaptureRouteUi.DEVICE_STABLE_CAPTURE
+        } else {
+            CalibrationCaptureRouteUi.APP_LIVE_SNAPSHOT
+        }
+        appendSystemLog(buildCalibrationCaptureAttemptLog(state, route = route.name))
+        if (awaitingCalibrationCaptureResult) {
+            val pendingReferenceWeight = state.captureReferenceInput.toFloatOrNull() ?: 0.0f
+            _uiState.update {
+                it.copy(
+                    lastAckOrError = text(
+                        R.string.capture_status_pending,
+                        pendingReferenceWeight,
+                    ),
+                )
+            }
+            return
+        }
+        if (!state.profileHistoryReady || !state.deviceConfigVerified || !state.canCaptureCalibrationPoint) {
             appendSystemLog(
                 buildCalibrationCaptureFailureLog(
                     state = state,
-                    route = CalibrationCaptureRouteUi.APP_LIVE_SNAPSHOT.name,
+                    route = route.name,
                     reason = "PRECONDITION_NOT_MET",
                 ),
             )
@@ -890,7 +1327,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             appendSystemLog(
                 buildCalibrationCaptureFailureLog(
                     state = state,
-                    route = CalibrationCaptureRouteUi.APP_LIVE_SNAPSHOT.name,
+                    route = route.name,
                     reason = "INVALID_REFERENCE_WEIGHT",
                 ),
             )
@@ -906,12 +1343,74 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             }
             return
         }
-        val distanceRuntime = state.distance
-        if (distanceRuntime == null || !distanceRuntime.isFinite()) {
+
+        if (primaryRoute) {
+            awaitingCalibrationCaptureResult = true
+            calibrationCaptureTimeoutJob?.cancel()
+            calibrationCaptureTimeoutJob = viewModelScope.launch {
+                delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+                if (!awaitingCalibrationCaptureResult) return@launch
+                awaitingCalibrationCaptureResult = false
+                appendSystemLog("[CAL_UI] capture timeout after ${CALIBRATION_REQUEST_TIMEOUT_MS}ms")
+                _uiState.update { it.copy(
+                    lastAckOrError = text(R.string.capture_status_timeout),
+                    captureStatus = captureFeedback(
+                        kind = CaptureFeedbackKind.FAILURE,
+                        message = text(R.string.capture_status_timeout),
+                        rawReason = "TIMEOUT",
+                    ),
+                ) }
+            }
+            _uiState.update {
+                it.copy(
+                    captureStatus = captureFeedback(
+                        kind = CaptureFeedbackKind.PENDING,
+                        message = text(R.string.capture_status_pending, referenceWeight),
+                        rawReason = route.name,
+                    ),
+                    lastAckOrError = text(R.string.capture_status_pending, referenceWeight),
+                )
+            }
+            appendSystemLog("[CAL_CAPTURE] send CAL:CAPTURE reference_weight=$referenceWeight route=${route.name}")
+            viewModelScope.launch {
+                runCatching {
+                    client.send(Command.CalibrationCapture(referenceWeight))
+                }.onSuccess {
+                    _uiState.update { it.copy(lastAckOrError = text(R.string.message_sent, "CAL:CAPTURE")) }
+                }.onFailure { error ->
+                    awaitingCalibrationCaptureResult = false
+                    calibrationCaptureTimeoutJob?.cancel()
+                    calibrationCaptureTimeoutJob = null
+                    _uiState.update {
+                        it.copy(
+                            lastAckOrError = text(
+                                R.string.message_send_failed,
+                                "CAL:CAPTURE",
+                                error.message ?: text(R.string.common_not_available),
+                            ),
+                            captureStatus = captureFeedback(
+                                kind = CaptureFeedbackKind.FAILURE,
+                                message = text(
+                                    R.string.capture_status_send_failed,
+                                    error.message ?: text(R.string.common_not_available),
+                                ),
+                                rawReason = "SEND_FAILED",
+                            ),
+                        )
+                    }
+                }
+            }
+            return
+        }
+
+        // Legacy fallback: retain an explicit APP snapshot route, but it is
+        // never allowed to masquerade as a device-stable point.
+        val liveDistanceMm = state.distance
+        if (liveDistanceMm == null || !liveDistanceMm.isFinite()) {
             appendSystemLog(
                 buildCalibrationCaptureFailureLog(
                     state = state,
-                    route = CalibrationCaptureRouteUi.APP_LIVE_SNAPSHOT.name,
+                    route = route.name,
                     reason = "NO_LIVE_DISTANCE",
                 ),
             )
@@ -931,12 +1430,14 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val point = CalibrationPointUi(
             index = nextIndex,
             timestampMs = System.currentTimeMillis(),
-            distanceMm = distanceRuntime * CALIBRATION_DISTANCE_RUNTIME_DIVISOR,
+            // Formal EVT:STREAM distance is already physical millimetres.
+            // Do not apply the legacy runtime-unit x100 conversion here.
+            distanceMm = liveDistanceMm,
             referenceWeightKg = referenceWeight,
             predictedWeightKg = state.weight,
             liveWeightKg = state.weight,
             stableWeightKg = state.stableWeight,
-            captureRoute = CalibrationCaptureRouteUi.APP_LIVE_SNAPSHOT,
+            captureRoute = route,
             visibleSampleValid = hasVisibleCaptureQuality(state),
             stableFlag = state.stableWeightActive,
             validFlag = true,
@@ -965,6 +1466,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 ),
             )
         }
+        persistSessions()
         appendSystemLog(
             "[CAL_APP] point appended count=${_uiState.value.calibrationPoints.size} distance_mm=${point.distanceMm} ref=${point.referenceWeightKg} stableVisible=${point.stableFlag} route=${point.captureRoute.name}",
         )
@@ -976,8 +1478,417 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         sendCommand(Command.CalibrationGetModel, "CAL:GET_MODEL")
     }
 
+    private fun requestCalibrationModelAfterEmptyReadback(epoch: Long) {
+        if (client.currentConnectionEpoch != epoch || !_uiState.value.isConnected ||
+            emptyModelRefreshEpoch != epoch || emptyModelQuerySent ||
+            _uiState.value.emptyModelReadbackNeedsReconnect
+        ) return
+        // EMPTY:GET is the receive-order barrier for any older CAL_MODEL reply.
+        // The firmware's new model truth is requested only after that GET.
+        emptyModelQuerySent = true
+        emptyModelReadbackTimeoutJob?.cancel()
+        emptyModelReadbackTimeoutJob = viewModelScope.launch {
+            delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+            if (!shouldFailEmptyModelReadbackOnTimeout(
+                    refreshEpoch = emptyModelRefreshEpoch,
+                    replyEpoch = epoch,
+                    currentEpoch = client.currentConnectionEpoch,
+                    querySent = emptyModelQuerySent,
+                    pending = _uiState.value.emptyModelReadbackPending,
+                )
+            ) return@launch
+            appendSystemLog("[CAL_UI] empty_model_readback_timeout epoch=$epoch after ${CALIBRATION_REQUEST_TIMEOUT_MS}ms")
+            _uiState.update { it.copy(
+                emptyModelReadbackNeedsReconnect = true,
+                lastAckOrError = text(R.string.message_model_empty_readback_reconnect),
+            ) }
+        }
+        viewModelScope.launch {
+            runCatching { client.send(Command.CalibrationGetModel, expectedEpoch = epoch) }
+                .onFailure { error ->
+                    if (client.currentConnectionEpoch == epoch && emptyModelRefreshEpoch == epoch) {
+                        emptyModelQuerySent = false
+                        emptyModelReadbackTimeoutJob?.cancel()
+                        emptyModelReadbackTimeoutJob = null
+                        _uiState.update { it.copy(
+                            emptyModelReadbackNeedsReconnect = true,
+                            lastAckOrError = text(R.string.message_model_empty_readback_reconnect),
+                        ) }
+                        appendSystemLog("[CAL_UI] empty_model_readback_send_failed reason=${error.message ?: "UNKNOWN"}")
+                    }
+                }
+        }
+    }
+
+    /** Probe/read the device-owned empty-distance record. Local cache is never promoted to SET. */
+    fun sendEmptyDistanceGet() {
+        val state = _uiState.value
+        val epoch = client.currentConnectionEpoch ?: return
+        val mutationSerial = emptyMutationSerial
+        val refreshPendingAtSend = emptyModelRefreshEpoch == epoch
+        if (!state.isConnected || state.protocolMode != ProtocolMode.PRIMARY ||
+            !state.deviceConfigVerified || state.deviceIdentity == null ||
+            state.devicePlatformModel != PlatformModel.PLUS ||
+            state.deviceSensorProfile == null || state.deviceSensorProfile == SensorProfile.NONE
+        ) return
+        appendSystemLog("[EMPTY_DISTANCE_UI] request EMPTY:GET")
+        viewModelScope.launch {
+            runCatching { client.send(Command.EmptyDistanceGet, expectedEpoch = epoch) }
+                .onFailure { error ->
+                    appendSystemLog("[EMPTY_DISTANCE_UI] get_send_failed reason=${error.message ?: "UNKNOWN"}")
+                    if (!isCurrentEmptyVerificationGet(
+                            epoch, mutationSerial, refreshPendingAtSend,
+                            client.currentConnectionEpoch, emptyMutationSerial, emptyModelRefreshEpoch,
+                        )
+                    ) {
+                        return@onFailure
+                    }
+                    profileEmptyReadFailedEpoch = epoch
+                    profileEmptyTransaction.clear()
+                    emptyDistanceTimeoutJob?.cancel()
+                    emptyModelReadbackTimeoutJob?.cancel()
+                    emptyModelReadbackTimeoutJob = null
+                    emptyModelInvalidatedEpoch = epoch
+                    pendingEmptyDistancePreviousConfirmedMm = null
+                    _uiState.update {
+                        calibrationSessionStore.markEmptyVerificationNeedsReconnect(it.copy(
+                            emptyDistance = EmptyDistanceState(status = EmptyDistanceStatusUi.INVALID),
+                            deviceEmptyRevision = null,
+                            lastAckOrError = text(
+                                R.string.message_send_failed,
+                                "EMPTY:GET",
+                                error.message ?: text(R.string.common_not_available),
+                            ),
+                        ))
+                    }
+                }
+        }
+    }
+
+    fun sendEmptyDistanceSet() {
+        val state = _uiState.value
+        val epoch = client.currentConnectionEpoch
+        val identity = state.deviceIdentity
+        val profile = state.deviceSensorProfile
+        val generation = state.deviceConfigGeneration
+        val revision = state.deviceEmptyRevision
+        val distanceMm = state.distance?.takeIf { state.profileDistanceReady && state.distanceValid &&
+            state.streamSubscriptionConfirmed && it.isFinite() && it > 0f }
+        if (distanceMm == null || profile == null || profile == SensorProfile.NONE) {
+            _uiState.update { it.copy(lastAckOrError = text(R.string.empty_distance_requires_live_value)) }
+            return
+        }
+        if (!state.isConnected || state.protocolMode != ProtocolMode.PRIMARY ||
+            !state.deviceConfigVerified || state.devicePlatformModel != PlatformModel.PLUS ||
+            state.waveOutputActive || identity == null || generation == null || revision == null ||
+            epoch == null || state.calibrationModelMutationBlocked() ||
+            profileEmptyTransaction.isPending || profileConfigTransaction.isPending ||
+            isEmptyModelReadbackPending(emptyModelRefreshEpoch, epoch) ||
+            awaitingModelWriteResult || awaitingModelReadback
+        ) {
+            _uiState.update { it.copy(lastAckOrError = text(R.string.empty_distance_requires_primary)) }
+            return
+        }
+        profileEmptyTransaction.start(identity, epoch, profile, generation, "SET_CURRENT", revision)
+        val mutationSerial = ++emptyMutationSerial
+        emptyModelRefreshEpoch = epoch
+        emptyModelQuerySent = false
+        val now = System.currentTimeMillis()
+        pendingEmptyDistancePreviousConfirmedMm = state.emptyDistance.confirmedDistanceMm
+        _uiState.update {
+            calibrationSessionStore.markModelUnverifiedForEmptyMutation(
+                calibrationSessionStore.markEmptyDistancePending(
+                    state = it,
+                    distanceMm = distanceMm,
+                    backend = it.sensorBackend,
+                    toleranceMm = it.emptyDistance.toleranceMm,
+                    nowMs = now,
+                ).copy(lastAckOrError = text(R.string.empty_distance_status_pending)),
+            )
+        }
+        emptyDistanceTimeoutJob?.cancel()
+        emptyDistanceTimeoutJob = viewModelScope.launch {
+            delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+            if (!isCurrentEmptyMutation(epoch, mutationSerial, client.currentConnectionEpoch,
+                    emptyMutationSerial, profileEmptyTransaction.isPending)
+            ) return@launch
+            profileEmptyTransaction.clear()
+            emptyModelInvalidatedEpoch = epoch
+            appendSystemLog("[EMPTY_DISTANCE_UI] set timeout after ${CALIBRATION_REQUEST_TIMEOUT_MS}ms")
+            _uiState.update {
+                it.copy(
+                    emptyDistance = it.emptyDistance.copy(status = EmptyDistanceStatusUi.INVALID),
+                    lastAckOrError = text(R.string.empty_distance_status_timeout),
+                )
+            }
+            sendEmptyDistanceGet()
+        }
+        appendSystemLog("[EMPTY_DISTANCE_UI] set_current_requested display_distance_mm=$distanceMm profile=$profile generation=$generation")
+        viewModelScope.launch {
+            runCatching { client.send(Command.EmptyDistanceSetCurrent, expectedEpoch = epoch) }
+                .onSuccess {
+                    if (isCurrentEmptyMutation(epoch, mutationSerial, client.currentConnectionEpoch,
+                            emptyMutationSerial, profileEmptyTransaction.isPending)) {
+                        _uiState.update { it.copy(lastAckOrError = text(R.string.message_sent, "EMPTY:SET_CURRENT")) }
+                    }
+                }
+                .onFailure { error ->
+                    if (!isCurrentEmptyMutation(epoch, mutationSerial, client.currentConnectionEpoch,
+                            emptyMutationSerial, profileEmptyTransaction.isPending)) return@onFailure
+                    profileEmptyTransaction.clear()
+                    emptyModelInvalidatedEpoch = epoch
+                    emptyDistanceTimeoutJob?.cancel()
+                    emptyDistanceTimeoutJob = null
+                    pendingEmptyDistancePreviousConfirmedMm = null
+                    _uiState.update {
+                        it.copy(
+                            emptyDistance = it.emptyDistance.copy(status = EmptyDistanceStatusUi.INVALID),
+                            lastAckOrError = text(
+                                R.string.message_send_failed,
+                                "EMPTY:SET_CURRENT",
+                                error.message ?: text(R.string.common_not_available),
+                            ),
+                        )
+                    }
+                    sendEmptyDistanceGet()
+                }
+        }
+    }
+
+    fun sendEmptyDistanceClear() {
+        val state = _uiState.value
+        val epoch = client.currentConnectionEpoch
+        val identity = state.deviceIdentity
+        val profile = state.deviceSensorProfile
+        val generation = state.deviceConfigGeneration
+        val revision = state.deviceEmptyRevision
+        if (!state.isConnected || state.protocolMode != ProtocolMode.PRIMARY ||
+            !state.deviceConfigVerified || state.devicePlatformModel != PlatformModel.PLUS ||
+            profile == null || profile == SensorProfile.NONE || identity == null || generation == null ||
+            revision == null || epoch == null || state.calibrationModelMutationBlocked() ||
+            profileEmptyTransaction.isPending ||
+            profileConfigTransaction.isPending || awaitingModelWriteResult || awaitingModelReadback ||
+            isEmptyModelReadbackPending(emptyModelRefreshEpoch, epoch) ||
+            state.emptyDistance.confirmedDistanceMm == null || state.waveOutputActive
+        ) {
+            _uiState.update { it.copy(lastAckOrError = text(R.string.empty_distance_requires_primary)) }
+            return
+        }
+        profileEmptyTransaction.start(identity, epoch, profile, generation, "CLEAR", revision)
+        val mutationSerial = ++emptyMutationSerial
+        emptyModelRefreshEpoch = epoch
+        emptyModelQuerySent = false
+        pendingEmptyDistancePreviousConfirmedMm = state.emptyDistance.confirmedDistanceMm
+        _uiState.update {
+            calibrationSessionStore.markModelUnverifiedForEmptyMutation(it.copy(
+                emptyDistance = it.emptyDistance.copy(
+                    status = EmptyDistanceStatusUi.PENDING,
+                    source = EmptyDistanceSourceUi.USER_SET,
+                    updatedAtMs = System.currentTimeMillis(),
+                ),
+                lastAckOrError = text(R.string.empty_distance_status_pending),
+            ))
+        }
+        emptyDistanceTimeoutJob?.cancel()
+        emptyDistanceTimeoutJob = viewModelScope.launch {
+            delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+            if (!isCurrentEmptyMutation(epoch, mutationSerial, client.currentConnectionEpoch,
+                    emptyMutationSerial, profileEmptyTransaction.isPending)
+            ) return@launch
+            profileEmptyTransaction.clear()
+            emptyModelInvalidatedEpoch = epoch
+            appendSystemLog("[EMPTY_DISTANCE_UI] clear timeout after ${CALIBRATION_REQUEST_TIMEOUT_MS}ms")
+            _uiState.update {
+                it.copy(
+                    emptyDistance = it.emptyDistance.copy(status = EmptyDistanceStatusUi.INVALID),
+                    lastAckOrError = text(R.string.empty_distance_status_timeout),
+                )
+            }
+            sendEmptyDistanceGet()
+        }
+        appendSystemLog("[EMPTY_DISTANCE_UI] clearRequested")
+        viewModelScope.launch {
+            runCatching { client.send(Command.EmptyDistanceClear, expectedEpoch = epoch) }
+                .onSuccess {
+                    if (isCurrentEmptyMutation(epoch, mutationSerial, client.currentConnectionEpoch,
+                            emptyMutationSerial, profileEmptyTransaction.isPending)) {
+                        _uiState.update { it.copy(lastAckOrError = text(R.string.message_sent, "EMPTY:CLEAR")) }
+                    }
+                }
+                .onFailure { error ->
+                    if (!isCurrentEmptyMutation(epoch, mutationSerial, client.currentConnectionEpoch,
+                            emptyMutationSerial, profileEmptyTransaction.isPending)) return@onFailure
+                    profileEmptyTransaction.clear()
+                    emptyModelInvalidatedEpoch = epoch
+                    emptyDistanceTimeoutJob?.cancel()
+                    emptyDistanceTimeoutJob = null
+                    pendingEmptyDistancePreviousConfirmedMm = null
+                    _uiState.update {
+                        it.copy(
+                            emptyDistance = it.emptyDistance.copy(status = EmptyDistanceStatusUi.INVALID),
+                            lastAckOrError = text(
+                                R.string.message_send_failed,
+                                "EMPTY:CLEAR",
+                                error.message ?: text(R.string.common_not_available),
+                            ),
+                        )
+                    }
+                    sendEmptyDistanceGet()
+                }
+        }
+    }
+
+    fun sendCalibrationClearWeightModel() {
+        val state = _uiState.value
+        val epoch = client.currentConnectionEpoch
+        if (!state.isConnected || state.protocolMode != ProtocolMode.PRIMARY || epoch == null ||
+            state.calibrationModelMutationBlocked() || profileConfigTransaction.isPending ||
+            profileEmptyTransaction.isPending || awaitingModelWriteResult || awaitingModelReadback
+        ) {
+            _uiState.update { it.copy(lastAckOrError = text(R.string.message_model_requires_primary)) }
+            return
+        }
+        val mutationSerial = ++weightModelClearSerial
+        _uiState.update {
+            it.copy(
+                weightModel = it.weightModel.copy(
+                    status = WeightModelStatusUi.PENDING,
+                    updatedAtMs = System.currentTimeMillis(),
+                ),
+                lastAckOrError = text(R.string.weight_model_status_pending),
+            )
+        }
+        weightModelClearTimeoutJob?.cancel()
+        weightModelClearTimeoutJob = viewModelScope.launch {
+            delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+            if (client.currentConnectionEpoch != epoch || weightModelClearSerial != mutationSerial ||
+                _uiState.value.weightModel.status != WeightModelStatusUi.PENDING
+            ) return@launch
+            appendSystemLog("[CAL_UI] clearWeightModel timeout after ${CALIBRATION_REQUEST_TIMEOUT_MS}ms")
+            _uiState.update {
+                it.copy(
+                    weightModel = it.weightModel.copy(status = WeightModelStatusUi.INVALID),
+                    lastAckOrError = text(R.string.weight_model_status_timeout),
+                )
+            }
+        }
+        appendSystemLog("[CAL_UI] clearWeightModelRequested")
+        viewModelScope.launch {
+            runCatching { client.send(Command.CalibrationClearWeightModel, expectedEpoch = epoch) }
+                .onSuccess {
+                    if (client.currentConnectionEpoch != epoch || weightModelClearSerial != mutationSerial ||
+                        _uiState.value.weightModel.status != WeightModelStatusUi.PENDING
+                    ) return@onSuccess
+                    _uiState.update { it.copy(lastAckOrError = text(R.string.message_sent, "CAL:CLEAR_WEIGHT_MODEL")) }
+                }
+                .onFailure { error ->
+                    if (client.currentConnectionEpoch != epoch || weightModelClearSerial != mutationSerial ||
+                        _uiState.value.weightModel.status != WeightModelStatusUi.PENDING
+                    ) return@onFailure
+                    weightModelClearTimeoutJob?.cancel()
+                    weightModelClearTimeoutJob = null
+                    _uiState.update {
+                        it.copy(
+                            weightModel = it.weightModel.copy(status = WeightModelStatusUi.INVALID),
+                            lastAckOrError = text(
+                                R.string.message_send_failed,
+                                "CAL:CLEAR_WEIGHT_MODEL",
+                                error.message ?: text(R.string.common_not_available),
+                            ),
+                        )
+                    }
+                }
+        }
+    }
+
+    private fun modelReadbackMatches(
+        expected: PreparedCalibrationModelUi,
+        actual: Event.CalibrationModel,
+    ): Boolean {
+        if (actual.ready == false || actual.type != expected.type) return false
+        fun close(actualValue: Float?, expectedValue: Float, tolerance: Float): Boolean {
+            return actualValue != null && actualValue.isFinite() &&
+                kotlin.math.abs(actualValue - expectedValue) <= tolerance
+        }
+        return close(actual.referenceDistance, expected.referenceDistance, 0.0002f) &&
+            close(actual.c0, expected.c0, 0.00001f) &&
+            close(actual.c1, expected.c1, 0.00001f) &&
+            close(actual.c2, expected.c2, 0.00001f)
+    }
+
+    private fun beginModelReadback(expected: PreparedCalibrationModelUi) {
+        awaitingModelReadback = true
+        modelReadbackTimeoutJob?.cancel()
+        modelReadbackTimeoutJob = viewModelScope.launch {
+            delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+            if (!awaitingModelReadback) return@launch
+            awaitingModelReadback = false
+            pendingModelReadback = null
+            appendSystemLog("[CAL_UI] model readback timeout after ${CALIBRATION_REQUEST_TIMEOUT_MS}ms")
+            _uiState.update { it.copy(writeModelStatus = writeModelFeedback(
+                kind = WriteModelFeedbackKind.FAILURE,
+                message = text(R.string.write_model_status_timeout),
+                modelType = expected.type,
+                rawReason = "READBACK_TIMEOUT",
+            )) }
+        }
+        pendingModelReadback = expected
+        _uiState.update {
+            it.copy(
+                writeModelStatus = writeModelFeedback(
+                    kind = WriteModelFeedbackKind.PENDING,
+                    message = text(R.string.write_model_status_verifying),
+                    modelType = expected.type,
+                ),
+            )
+        }
+        appendSystemLog("[CAL_UI] writeModel ack accepted; requesting CAL:GET_MODEL for readback")
+        viewModelScope.launch {
+            runCatching { client.send(Command.CalibrationGetModel) }
+                .onFailure { error ->
+                    awaitingModelReadback = false
+                    modelReadbackTimeoutJob?.cancel()
+                    modelReadbackTimeoutJob = null
+                    pendingModelReadback = null
+                    val reason = "READBACK_SEND_FAILED"
+                    appendSystemLog("[CAL_UI] readback result=failure reason=${error.message ?: reason}")
+                    _uiState.update {
+                        it.copy(
+                            lastAckOrError = text(
+                                R.string.message_send_failed,
+                                "CAL:GET_MODEL",
+                                error.message ?: text(R.string.common_not_available),
+                            ),
+                            writeModelStatus = writeModelFeedback(
+                                kind = WriteModelFeedbackKind.FAILURE,
+                                message = text(
+                                    R.string.write_model_status_failure_with_reason,
+                                    formatModelWriteFailure(reason),
+                                ),
+                                modelType = expected.type,
+                                rawReason = reason,
+                            ),
+                        )
+                    }
+                }
+        }
+    }
+
     fun sendCalibrationSetModel() {
         val state = _uiState.value
+        if (isEmptyModelReadbackPending(emptyModelRefreshEpoch, client.currentConnectionEpoch)) {
+            _uiState.update { it.copy(lastAckOrError = text(
+                if (it.emptyModelReadbackNeedsReconnect) R.string.message_model_empty_readback_reconnect
+                else R.string.message_model_wait_empty_readback,
+            )) }
+            return
+        }
+        if (state.calibrationModelMutationBlocked() || profileConfigTransaction.isPending ||
+            profileEmptyTransaction.isPending
+        ) {
+            _uiState.update { it.copy(lastAckOrError = text(R.string.message_model_write_pending)) }
+            return
+        }
         val prepared = state.preparedModel ?: calibrationSessionStore.parsePreparedModelFromInputs(
             state = state,
             source = PreparedCalibrationModelSourceUi.MANUAL_OVERRIDE,
@@ -997,10 +1908,56 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             }
             return
         }
+        if (!state.isConnected || state.protocolMode != ProtocolMode.PRIMARY) {
+            _uiState.update {
+                it.copy(lastAckOrError = text(R.string.message_model_requires_primary))
+            }
+            return
+        }
+        if (awaitingModelWriteResult || awaitingModelReadback) {
+            _uiState.update {
+                it.copy(lastAckOrError = text(R.string.message_model_write_pending))
+            }
+            return
+        }
+        if (!calibrationSessionStore.canDeployModel(state, prepared)) {
+            _uiState.update {
+                it.copy(
+                    lastAckOrError = text(R.string.message_model_not_deployable),
+                    writeModelStatus = writeModelFeedback(
+                        kind = WriteModelFeedbackKind.FAILURE,
+                        message = text(R.string.message_model_not_deployable),
+                        modelType = prepared.type,
+                    ),
+                )
+            }
+            return
+        }
         awaitingModelWriteResult = true
+        modelWriteTimeoutJob?.cancel()
+        modelWriteTimeoutJob = viewModelScope.launch {
+            delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+            if (!awaitingModelWriteResult) return@launch
+            awaitingModelWriteResult = false
+            pendingWriteModelType = null
+            pendingModelReadback = null
+            appendSystemLog("[CAL_UI] model write timeout after ${CALIBRATION_REQUEST_TIMEOUT_MS}ms")
+            _uiState.update { it.copy(writeModelStatus = writeModelFeedback(
+                kind = WriteModelFeedbackKind.FAILURE,
+                message = text(R.string.write_model_status_timeout),
+                modelType = it.selectedComparisonModel,
+                rawReason = "WRITE_TIMEOUT",
+            )) }
+        }
+        awaitingModelReadback = false
         pendingWriteModelType = prepared.type
+        pendingModelReadback = prepared
         _uiState.update {
-            it.copy(
+            calibrationSessionStore.markWeightModelPending(
+                state = it,
+                model = prepared,
+                nowMs = System.currentTimeMillis(),
+            ).copy(
                 writeModelStatus = writeModelFeedback(
                     kind = WriteModelFeedbackKind.PENDING,
                     message = text(
@@ -1029,7 +1986,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(lastAckOrError = text(R.string.message_sent, "CAL:SET_MODEL")) }
             }.onFailure { error ->
                 awaitingModelWriteResult = false
+                modelWriteTimeoutJob?.cancel()
+                modelWriteTimeoutJob = null
+                awaitingModelReadback = false
                 pendingWriteModelType = null
+                pendingModelReadback = null
                 appendSystemLog("[CAL_UI] writeModel result=failure reason=${error.message ?: "send_failed"}")
                 _uiState.update {
                     it.copy(
@@ -1058,16 +2019,39 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendDeviceConfig() {
         val state = _uiState.value
-        if (!state.isConnected || state.protocolMode != ProtocolMode.PRIMARY) {
+        val model = state.selectedPlatformModel
+        if (model != PlatformModel.BASE && model != PlatformModel.PLUS) return
+        val profile = if (model == PlatformModel.BASE) SensorProfile.NONE else
+            if (state.devicePlatformModel == PlatformModel.PLUS) state.deviceSensorProfile ?: SensorProfile.NONE
+            else SensorProfile.NONE
+        sendProfileConfig(model, profile)
+    }
+
+    fun sendSensorProfileConfig() {
+        val state = _uiState.value
+        if (state.devicePlatformModel != PlatformModel.PLUS) return
+        sendProfileConfig(PlatformModel.PLUS, state.selectedSensorProfile)
+    }
+
+    private fun sendProfileConfig(platformModel: PlatformModel, sensorProfile: SensorProfile) {
+        val state = _uiState.value
+        val epoch = client.currentConnectionEpoch
+        val identity = state.deviceIdentity
+        val generation = state.deviceConfigGeneration
+        if (!state.isConnected || state.protocolMode != ProtocolMode.PRIMARY ||
+            !state.deviceConfigVerified || state.calibrationModelMutationBlocked() ||
+            identity == null || generation == null || epoch == null ||
+            profileConfigTransaction.isPending || profileEmptyTransaction.isPending ||
+            awaitingModelWriteResult || awaitingModelReadback
+        ) {
             _uiState.update {
                 it.copy(lastAckOrError = text(R.string.device_config_status_requires_primary))
             }
             return
         }
-
-        val platformModel = state.selectedPlatformModel
-        val laserInstalled = state.selectedLaserInstalled
-        if (!isSupportedDeviceConfigSelection(platformModel = platformModel, laserInstalled = laserInstalled)) {
+        if ((platformModel == PlatformModel.BASE && sensorProfile != SensorProfile.NONE) ||
+            platformModel !in setOf(PlatformModel.BASE, PlatformModel.PLUS)
+        ) {
             _uiState.update {
                 it.copy(
                     lastAckOrError = text(R.string.device_config_status_conflict),
@@ -1077,51 +2061,97 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             }
             return
         }
-
-        deviceConfigWriteTracker.start(
-            platformModel = platformModel,
-            laserInstalled = laserInstalled,
-            requestedAtMs = System.currentTimeMillis(),
+        if (state.waveOutputActive) {
+            _uiState.update { it.copy(deviceConfigStatus = "请先停止律动，再切换型号或传感器") }
+            return
+        }
+        if (profileStreamSubscriptionGate.isPendingFor(epoch)) {
+            _uiState.update { it.copy(deviceConfigStatus = "实时距离订阅尚未完成，请稍后再写入") }
+            return
+        }
+        stopMotionSamplingIfActive(text(R.string.motion_sampling_status_stopped_manual))
+        flushPendingProfileHistory()?.let { profileHistoryFlushJob = it }
+        profileHistoryLoadJob?.cancel()
+        profileHistoryOwner = null
+        motionSamplingSessionStore = null
+        val requestSerial = profileConfigTransaction.start(
+            deviceId = identity,
+            connectionEpoch = epoch,
+            model = platformModel,
+            profile = sensorProfile,
+            previousGeneration = generation,
+            allowSameGeneration = platformModel == state.devicePlatformModel &&
+                sensorProfile == state.deviceSensorProfile,
         )
+        profileRecoveryReadPending = false
+        if (emptyModelRefreshEpoch == epoch) {
+            emptyModelReadbackTimeoutJob?.cancel()
+            emptyModelReadbackTimeoutJob = null
+            _uiState.update { it.copy(emptyModelReadbackNeedsReconnect = true) }
+        }
+        // A profile switch invalidates the firmware's previous STREAM subscription.
+        // Retire any in-flight ACK from that subscription before re-subscribing.
+        profileStreamSubscriptionGate.retire()
+        profileSnapshotRefreshGate.arm(epoch)
+        profileDistanceExpiryJob?.cancel()
+        resetMeasurementDisplayState()
         _uiState.update {
             it.copy(
                 isDeviceConfigWritePending = true,
-                deviceConfigStatus = text(
-                    R.string.device_config_status_pending,
-                    platformModel.name,
-                    if (laserInstalled) {
-                        text(R.string.device_config_laser_installed)
-                    } else {
-                        text(R.string.device_config_laser_not_installed)
-                    },
-                ),
+                deviceConfigVerified = false,
+                profileRuntimeRefreshPending = true,
+                profileHistoryReady = false,
+                profileDistanceReady = false,
+                profileDistanceFault = false,
+                streamSubscriptionConfirmed = false,
+                deviceStartReady = null,
+                deviceBaselineReady = null,
+                distance = null,
+                weight = null,
+                ma12 = null,
+                measurementValid = false,
+                distanceValid = false,
+                weightValid = false,
+                sensorBackend = null,
+                lastMeasurementSequence = null,
+                telemetryPoints = emptyList(),
+                emptyDistance = EmptyDistanceState(),
+                deviceEmptyRevision = null,
+                weightModel = WeightModelState(),
+                weightModelClearSupported = null,
+                latestModel = null,
+                writeModelStatus = null,
+                calibrationPoints = emptyList(),
+                latestCalibrationPoint = null,
+                preparedModel = null,
+                comparisonResult = null,
+                motionSamplingSession = null,
+                deviceConfigStatus = "正在写入 ${platformModel.name}/${sensorProfile.name}，等待设备回读",
             )
         }
-        scheduleDeviceConfigWriteWatchdog()
-
+        scheduleProfileConfigWriteTimeout(epoch, requestSerial)
         viewModelScope.launch {
             runCatching {
                 client.send(
-                    Command.DeviceSetConfig(
-                        platformModel = platformModel,
-                        laserInstalled = laserInstalled,
-                    ),
+                    Command.DeviceSetProfileConfig(platformModel, sensorProfile),
+                    expectedEpoch = epoch,
                 )
             }.onSuccess {
+                if (client.currentConnectionEpoch != epoch ||
+                    !profileConfigTransaction.isPendingRequest(epoch, requestSerial)
+                ) return@onSuccess
                 _uiState.update {
                     it.copy(
                         lastAckOrError = text(R.string.message_sent, "DEVICE:SET_CONFIG"),
                     )
                 }
             }.onFailure { error ->
-                clearPendingDeviceConfigWriteState()
+                if (!recoverProfileAfterWriteFailure(
+                        epoch, "SEND_FAILED:${error.message ?: "UNKNOWN"}", requestSerial,
+                    )
+                ) return@onFailure
                 _uiState.update {
                     it.copy(
-                        isDeviceConfigWritePending = false,
-                        deviceConfigStatus = text(
-                            R.string.device_config_status_send_failed,
-                            error.message ?: text(R.string.common_not_available),
-                        ),
                         lastAckOrError = text(
                             R.string.message_send_failed,
                             "DEVICE:SET_CONFIG",
@@ -1131,6 +2161,300 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    private fun scheduleProfileConfigReadTimeout(epoch: Long) {
+        profileConfigTimeoutJob?.cancel()
+        profileConfigReadExpiredEpoch = null
+        profileConfigTimeoutJob = viewModelScope.launch {
+            delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+            if (client.currentConnectionEpoch == epoch && !_uiState.value.deviceConfigVerified) {
+                profileConfigReadExpiredEpoch = epoch
+                profileRecoveryReadPending = false
+                _uiState.update {
+                    it.copy(deviceConfigStatus = "设备身份或配置回读超时；请重新连接", isDeviceConfigWritePending = false)
+                }
+                appendSystemLog("[DEVICE_CONFIG] initial_read_timeout epoch=$epoch")
+            }
+        }
+    }
+
+    private fun scheduleProfileConfigWriteTimeout(epoch: Long, requestSerial: Long) {
+        profileConfigTimeoutJob?.cancel()
+        profileConfigTimeoutJob = viewModelScope.launch {
+            delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+            if (client.currentConnectionEpoch == epoch &&
+                profileConfigTransaction.isPendingRequest(epoch, requestSerial)
+            ) {
+                recoverProfileAfterWriteFailure(epoch, "SET_GET_TIMEOUT", requestSerial)
+                appendSystemLog("[DEVICE_CONFIG] write_timeout epoch=$epoch")
+            }
+        }
+    }
+
+    private fun scheduleProfileRuntimeRefreshTimeout(epoch: Long) {
+        profileConfigTimeoutJob?.cancel()
+        profileConfigTimeoutJob = viewModelScope.launch {
+            delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+            if (client.currentConnectionEpoch == epoch && _uiState.value.profileRuntimeRefreshPending) {
+                _uiState.update { it.copy(deviceConfigStatus = "设备状态回读超时；请重新连接确认") }
+                appendSystemLog("[DEVICE_CONFIG] post_write_snapshot_timeout epoch=$epoch")
+            }
+        }
+    }
+
+    private fun sendProfileConfigGet(epoch: Long) {
+        viewModelScope.launch {
+            runCatching { client.send(Command.DeviceGetConfig, expectedEpoch = epoch) }
+                .onFailure { appendSystemLog("[DEVICE_CONFIG] get_send_failed reason=${it.message ?: "UNKNOWN"}") }
+        }
+    }
+
+    private fun recoverProfileAfterWriteFailure(
+        epoch: Long,
+        reason: String,
+        requestSerial: Long? = profileConfigTransaction.pendingSerialFor(epoch),
+    ): Boolean {
+        if (client.currentConnectionEpoch != epoch || requestSerial == null ||
+            !profileConfigTransaction.clearIfCurrent(epoch, requestSerial)
+        ) return false
+        profileConfigTimeoutJob?.cancel()
+        profileRecoveryReadPending = true
+        _uiState.update { it.copy(isDeviceConfigWritePending = true,
+            deviceConfigStatus = "写入未确认，正在重新读取设备实际配置") }
+        appendSystemLog("[DEVICE_CONFIG] recovering_after_failure reason=$reason epoch=$epoch")
+        scheduleProfileConfigReadTimeout(epoch)
+        sendProfileConfigGet(epoch)
+        return true
+    }
+
+    private fun handleDeviceIdentity(event: Event.DeviceIdentity, epoch: Long) {
+        if (profileConfigReadExpiredEpoch == epoch) return
+        _uiState.update { it.copy(deviceIdentity = event.id, deviceConfigStatus = "正在读取设备型号与传感器") }
+        appendSystemLog("[DEVICE_CONFIG] identity id=${event.id} version=${event.version} epoch=$epoch")
+        sendProfileConfigGet(epoch)
+    }
+
+    private fun handleProfileConfigResult(event: Event.ProfileConfigResult, epoch: Long) {
+        if (profileConfigReadExpiredEpoch == epoch) return
+        val identity = _uiState.value.deviceIdentity ?: return
+        if (!event.success) {
+            if (event.operation == "SET") {
+                recoverProfileAfterWriteFailure(epoch, "NACK:${event.reason ?: "UNKNOWN"}")
+            } else if (event.operation == "GET") {
+                profileConfigTimeoutJob?.cancel()
+                profileConfigTransaction.clear()
+                profileRecoveryReadPending = false
+                profileConfigReadExpiredEpoch = epoch
+                _uiState.update { it.copy(
+                    deviceConfigVerified = false,
+                    isDeviceConfigWritePending = false,
+                    deviceConfigStatus = "设备配置不可读取：${event.reason ?: "UNKNOWN"}；请重新连接",
+                ) }
+            }
+            appendSystemLog("[DEVICE_CONFIG] nack op=${event.operation} reason=${event.reason ?: "UNKNOWN"}")
+            return
+        }
+        if (event.operation == "SET") {
+            if (profileConfigTransaction.onSetAck(event, identity, epoch)) {
+                appendSystemLog("[DEVICE_CONFIG] set_accepted generation=${event.generation}; requesting GET")
+                sendProfileConfigGet(epoch)
+            } else {
+                appendSystemLog("[DEVICE_CONFIG] ignored_unmatched_set_ack raw=${event.raw}")
+            }
+            return
+        }
+        if (event.operation != "GET" || event.schema != 1) return
+        if (profileConfigTransaction.isPending &&
+            (event.platformModel !in setOf(PlatformModel.BASE, PlatformModel.PLUS) ||
+                (event.platformModel == PlatformModel.BASE && event.sensorProfile != SensorProfile.NONE) ||
+                event.laserInstalled != (event.platformModel == PlatformModel.PLUS))
+        ) {
+            appendSystemLog("[DEVICE_CONFIG] rejected_inconsistent_write_readback raw=${event.raw}")
+            recoverProfileAfterWriteFailure(epoch, "INCONSISTENT_GET")
+            return
+        }
+        var confirmedWrite = false
+        if (profileConfigTransaction.isPending) {
+            val confirmation = profileConfigTransaction.onGet(event, identity, epoch) ?: return
+            profileConfigTimeoutJob?.cancel()
+            appendSystemLog("[DEVICE_CONFIG] write_readback_confirmed id=$identity model=${confirmation.platformModel} profile=${confirmation.sensorProfile} generation=${confirmation.generation} action=stay_connected")
+            confirmedWrite = true
+        }
+        val model = event.platformModel ?: return
+        val profile = event.sensorProfile ?: return
+        val generation = event.generation ?: return
+        if (model !in setOf(PlatformModel.BASE, PlatformModel.PLUS) ||
+            (model == PlatformModel.BASE && profile != SensorProfile.NONE) ||
+            event.laserInstalled != (model == PlatformModel.PLUS)
+        ) {
+            appendSystemLog("[DEVICE_CONFIG] rejected_inconsistent_get raw=${event.raw}")
+            return
+        }
+        val recoveredWrite = profileRecoveryReadPending
+        profileRecoveryReadPending = false
+        profileConfigTimeoutJob?.cancel()
+        val previousConfig = _uiState.value
+        val verifiedProfileChanged = hasVerifiedProfileChanged(
+                previousModel = previousConfig.devicePlatformModel,
+                previousProfile = previousConfig.deviceSensorProfile,
+                previousGeneration = previousConfig.deviceConfigGeneration,
+                model = model,
+                profile = profile,
+                generation = generation,
+            )
+        if (verifiedProfileChanged) {
+            // EMPTY invalidation belongs to the previous verified config. The
+            // new profile's CAL:GET_MODEL can now report its own ready model.
+            emptyModelRefreshEpoch = null
+            emptyModelQuerySent = false
+            emptyModelInvalidatedEpoch = null
+            emptyModelReadbackTimeoutJob?.cancel()
+            emptyModelReadbackTimeoutJob = null
+        }
+        profileEpoch = epoch
+        profileEmptyReadFailedEpoch = null
+        profileObservedSequence = null
+        profileDistanceLastAcceptedAtMs = 0L
+        consecutiveProfileSamples = 0
+        profileDistanceExpiryJob?.cancel()
+        if (!confirmedWrite && !recoveredWrite) startProfileDistanceExpiryWatchdog(epoch)
+        _uiState.update { state ->
+            state.copy(
+                devicePlatformModel = model,
+                deviceSensorProfile = profile,
+                deviceConfigGeneration = generation,
+                deviceConfigVerified = true,
+                emptyModelReadbackPending = if (verifiedProfileChanged) false else state.emptyModelReadbackPending,
+                emptyModelReadbackNeedsReconnect = if (verifiedProfileChanged) false else state.emptyModelReadbackNeedsReconnect,
+                deviceEmptyRevision = null,
+                selectedPlatformModel = model,
+                selectedSensorProfile = profile,
+                selectedLaserInstalled = model == PlatformModel.PLUS,
+                deviceLaserInstalled = model == PlatformModel.PLUS,
+                emptyDistance = EmptyDistanceState(),
+                profileDistanceReady = false,
+                profileDistanceFault = false,
+                isDeviceConfigWritePending = false,
+                deviceConfigStatus = if (recoveredWrite) {
+                    "写入未确认；设备实际配置：${model.name}/${profile.name}"
+                } else {
+                    "设备已确认：${model.name}/${profile.name}"
+                },
+            )
+        }
+        appendSystemLog("[DEVICE_CONFIG] verified id=$identity model=$model profile=$profile generation=$generation epoch=$epoch")
+        activateProfileHistory(identity, profile, epoch)
+        if (confirmedWrite || recoveredWrite) {
+            // SET was independently confirmed by GET on this identity/epoch.
+            // The GATT link remains valid; refresh runtime truth and restore
+            // STREAM without hiding and rebuilding the whole page.
+            scheduleProfileRuntimeRefreshTimeout(epoch)
+            refreshCapabilityAndSnapshot(resubscribeStream = true)
+        } else {
+            enableDemoRealtimeStreamIfSupported(lastConnectionCapabilities)
+        }
+        if (model == PlatformModel.PLUS && profile != SensorProfile.NONE) sendEmptyDistanceGet()
+    }
+
+    private fun handleProfileEmptyDistanceResult(event: Event.ProfileEmptyDistanceResult, epoch: Long) {
+        if (profileEmptyReadFailedEpoch == epoch) return
+        val state = _uiState.value
+        val identity = state.deviceIdentity ?: return
+        val profile = state.deviceSensorProfile ?: return
+        val generation = state.deviceConfigGeneration ?: return
+        if (!state.deviceConfigVerified || profile == SensorProfile.NONE || profileEpoch != epoch) return
+        if (!event.success) {
+            if (event.operation == "SET_CURRENT" || event.operation == "CLEAR") {
+                profileEmptyTransaction.clear()
+                emptyDistanceTimeoutJob?.cancel()
+                // A storage-stage NACK can happen after the old model binding
+                // was revoked. Without a revision in CAL_MODEL, do not restore
+                // ready=1 on this link; a reconnect can re-read fresh truth.
+                if (emptyModelRefreshEpoch == epoch) emptyModelInvalidatedEpoch = epoch
+                _uiState.update {
+                    calibrationSessionStore.markModelUnverifiedForEmptyMutation(it.copy(
+                        emptyDistance = it.emptyDistance.copy(status = EmptyDistanceStatusUi.INVALID),
+                        lastAckOrError = formatNackMessage(event.reason ?: "UNKNOWN"),
+                    ))
+                }
+                appendSystemLog("[EMPTY_DISTANCE_UI] command_failed op=${event.operation} reason=${event.reason ?: "UNKNOWN"}")
+                sendEmptyDistanceGet()
+            } else if (event.operation == "GET") {
+                profileEmptyReadFailedEpoch = epoch
+                profileEmptyTransaction.clear()
+                emptyDistanceTimeoutJob?.cancel()
+                emptyModelReadbackTimeoutJob?.cancel()
+                emptyModelReadbackTimeoutJob = null
+                emptyModelInvalidatedEpoch = epoch
+                pendingEmptyDistancePreviousConfirmedMm = null
+                _uiState.update { calibrationSessionStore.markEmptyVerificationNeedsReconnect(it.copy(
+                    emptyDistance = EmptyDistanceState(status = EmptyDistanceStatusUi.INVALID),
+                    deviceEmptyRevision = null,
+                    emptyDistanceControlSupported = event.supported ?: false,
+                    lastAckOrError = formatNackMessage(event.reason ?: "UNKNOWN"),
+                )) }
+            }
+            return
+        }
+        if (event.sensorProfile != profile || event.generation != generation) {
+            appendSystemLog("[EMPTY_DISTANCE_UI] ignored_wrong_profile_or_generation raw=${event.raw}")
+            return
+        }
+        if (event.operation == "SET_CURRENT" || event.operation == "CLEAR") {
+            if (profileEmptyTransaction.onCommandAck(event, identity, epoch)) {
+                appendSystemLog("[EMPTY_DISTANCE_UI] command_accepted op=${event.operation} revision=${event.emptyRevision}; requesting GET")
+                sendEmptyDistanceGet()
+            } else {
+                appendSystemLog("[EMPTY_DISTANCE_UI] ignored_unmatched_command_ack raw=${event.raw}")
+            }
+            return
+        }
+        if (event.operation != "GET") return
+        var confirmedMutation = false
+        if (profileEmptyTransaction.isPending) {
+            if (profileEmptyTransaction.onGet(event, identity, epoch) == null) return
+            confirmedMutation = true
+            emptyDistanceTimeoutJob?.cancel()
+            appendSystemLog("[EMPTY_DISTANCE_UI] write_readback_confirmed status=${event.status} revision=${event.emptyRevision}")
+        } else if (state.deviceEmptyRevision != null && event.emptyRevision!! < state.deviceEmptyRevision) {
+            return
+        }
+        val previous = pendingEmptyDistancePreviousConfirmedMm ?: state.emptyDistance.confirmedDistanceMm
+        val nextEmpty = if (event.status == "SET") {
+            calibrationSessionStore.markEmptyDistanceReadback(
+                state = state,
+                distanceMm = event.distanceMm,
+                backend = when (profile) {
+                    SensorProfile.J100_485 -> "LASER_485"
+                    SensorProfile.CYD3S1612_IIC -> "CYD3S1612_IIC"
+                    SensorProfile.NONE -> null
+                },
+                toleranceMm = event.toleranceMm,
+                nowMs = System.currentTimeMillis(),
+            ).emptyDistance
+        } else EmptyDistanceState()
+        val modelInvalidated = confirmedMutation ||
+            (state.deviceEmptyRevision != null && event.emptyRevision != state.deviceEmptyRevision) ||
+            (previous != null && previous != nextEmpty.confirmedDistanceMm)
+        pendingEmptyDistancePreviousConfirmedMm = null
+        if (modelInvalidated) emptyModelInvalidatedEpoch = epoch
+        _uiState.update { current ->
+            calibrationSessionStore.applyProfileEmptyReadback(
+                state = current,
+                emptyDistance = nextEmpty,
+                revision = event.emptyRevision!!,
+                raw = event.raw,
+                modelInvalidated = modelInvalidated,
+            )
+        }
+        persistSessions()
+        appendSystemLog("[EMPTY_DISTANCE_UI] verified id=$identity profile=$profile generation=$generation revision=${event.emptyRevision} status=${event.status} distance_mm=${event.distanceMm ?: "-"}")
+        if (modelInvalidated && emptyModelRefreshEpoch != epoch) {
+            emptyModelRefreshEpoch = epoch
+            emptyModelQuerySent = false
+        }
+        requestCalibrationModelAfterEmptyReadback(epoch)
     }
 
     fun dismissDegradedStartDialog() {
@@ -1194,8 +2518,42 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendCalibrationZero() {
+        if (awaitingCalibrationZeroResult) {
+            _uiState.update {
+                it.copy(lastAckOrError = text(R.string.cal_zero_status_pending))
+            }
+            return
+        }
+        awaitingCalibrationZeroResult = true
+        calibrationZeroTimeoutJob?.cancel()
+        calibrationZeroTimeoutJob = viewModelScope.launch {
+            delay(CALIBRATION_REQUEST_TIMEOUT_MS)
+            if (!awaitingCalibrationZeroResult) return@launch
+            awaitingCalibrationZeroResult = false
+            appendSystemLog("[CAL_UI] calZero timeout after ${CALIBRATION_REQUEST_TIMEOUT_MS}ms")
+            _uiState.update { it.copy(lastAckOrError = text(R.string.cal_zero_status_timeout)) }
+        }
         appendSystemLog("[CAL_UI] calZeroRequested")
-        sendCommand(Command.CalibrationZero, "CAL:ZERO")
+        viewModelScope.launch {
+            runCatching {
+                client.send(Command.CalibrationZero)
+            }.onSuccess {
+                _uiState.update { it.copy(lastAckOrError = text(R.string.message_sent, "CAL:ZERO")) }
+            }.onFailure { error ->
+                awaitingCalibrationZeroResult = false
+                calibrationZeroTimeoutJob?.cancel()
+                calibrationZeroTimeoutJob = null
+                _uiState.update {
+                    it.copy(
+                        lastAckOrError = text(
+                            R.string.message_send_failed,
+                            "CAL:ZERO",
+                            error.message ?: text(R.string.common_not_available),
+                        ),
+                    )
+                }
+            }
+        }
     }
 
     fun startRecording() {
@@ -1245,6 +2603,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { state ->
             calibrationSessionStore.reset(state)
         }
+        persistSessions()
         appendSystemLog("[CAL_APP] points cleared count=$pointCount")
     }
 
@@ -1316,6 +2675,20 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         if (state.isMotionSamplingActive) return
 
         val now = System.currentTimeMillis()
+        if (!state.isConnected || state.protocolMode != ProtocolMode.PRIMARY ||
+            !state.deviceConfigVerified || !state.profileHistoryReady || profileHistoryOwner == null
+        ) {
+            _uiState.update { it.copy(motionSamplingStatus = text(R.string.motion_sampling_status_requires_primary_stream)) }
+            appendSystemLog("[MOTION_SAMPLE] start rejected reason=PRIMARY_CONNECTION_REQUIRED")
+            return
+        }
+        if (!state.notifyEnabled || !state.streamSubscriptionConfirmed || !state.profileDistanceReady ||
+            lastStreamAtMs <= 0L || now - lastStreamAtMs > NO_STREAM_WARNING_TIMEOUT_MS
+        ) {
+            _uiState.update { it.copy(motionSamplingStatus = text(R.string.motion_sampling_status_requires_primary_stream)) }
+            appendSystemLog("[MOTION_SAMPLE] start rejected reason=STREAM_NOT_READY lastStreamAtMs=$lastStreamAtMs")
+            return
+        }
         val sessionId = "motion_$now"
         val session = motionSamplingStore.start(
             state = state,
@@ -1333,6 +2706,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 motionSamplingStatus = text(R.string.motion_sampling_status_started, sessionId),
             )
         }
+        persistSessions()
         appendSystemLog("[MOTION_SAMPLE] session started id=$sessionId")
     }
 
@@ -1354,6 +2728,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 motionSamplingStatus = text(R.string.motion_sampling_status_cleared),
             )
         }
+        persistSessions()
         appendSystemLog("[MOTION_SAMPLE] session cleared id=$sessionId")
     }
 
@@ -1743,11 +3118,35 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
                 if (connection is ConnectionState.Error || connection is ConnectionState.Disconnected) {
+                    profileStreamSubscriptionGate.retire()
+                    profileRecoveryReadPending = false
+                    profileSnapshotRefreshGate.retire()
+                    stopMotionSamplingIfActive(text(R.string.motion_sampling_status_stopped_disconnect))
+                    flushPendingProfileHistory()?.let { profileHistoryFlushJob = it }
+                    profileHistoryOwner = null
+                    profileHistoryLoadJob?.cancel()
+                    profileConfigTransaction.clear()
+                    profileEmptyTransaction.clear()
+                    profileConfigTimeoutJob?.cancel()
+                    profileDistanceExpiryJob?.cancel()
+                    profileObservedSequence = null
+                    profileDistanceLastAcceptedAtMs = 0L
+                    consecutiveProfileSamples = 0
+                    profileEpoch = null
+                    profileEmptyReadFailedEpoch = null
+                    emptyModelRefreshEpoch = null
+                    emptyModelQuerySent = false
+                    emptyModelInvalidatedEpoch = null
+                    emptyModelReadbackTimeoutJob?.cancel()
+                    emptyModelReadbackTimeoutJob = null
                     hadConnectedSession = false
                     awaitingCalibrationCaptureResult = false
+                    awaitingCalibrationZeroResult = false
                     awaitingModelWriteResult = false
+                    awaitingModelReadback = false
                     clearPendingDeviceConfigWriteState()
                     pendingWriteModelType = null
+                    pendingModelReadback = null
                     wavePendingLifecycleStore.clearAll()
                     lastRequestedWaveParams = null
                     liveWaveParamSendJob?.cancel()
@@ -1761,13 +3160,28 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     stopRecordingIfActive(text(R.string.recording_stopped_disconnect))
                     stopMotionSamplingIfActive(text(R.string.motion_sampling_status_stopped_disconnect))
                     resetMeasurementDisplayState()
-                    resetSessionStores(clearTestSession = false)
+                    resetSessionStores(clearTestSession = false, clearMotionSamplingSession = true)
+                    motionSamplingSessionStore = null
                     degradedStartDialogSuppressed = false
                     _uiState.update { state ->
-                        calibrationSessionStore.reset(
-                            calibrationSessionStore.withCaptureAvailability(
+                        calibrationSessionStore.withCaptureAvailability(
                                 state.copy(
                                     devicePlatformModel = null,
+                                    deviceIdentity = null,
+                                    deviceSensorProfile = null,
+                                    deviceConfigGeneration = null,
+                                    deviceConfigVerified = false,
+                                    profileRuntimeRefreshPending = false,
+                                    emptyModelReadbackPending = false,
+                                    emptyModelReadbackNeedsReconnect = false,
+                                    profileHistoryReady = false,
+                                    deviceEmptyRevision = null,
+                                    selectedSensorProfile = SensorProfile.NONE,
+                                    profileDistanceReady = false,
+                                    profileDistanceFault = false,
+                                    streamSubscriptionConfirmed = false,
+                                    selectedPlatformModel = PlatformModel.BASE,
+                                    selectedLaserInstalled = false,
                                     deviceLaserInstalled = null,
                                     deviceLaserAvailable = null,
                                     deviceProtectionDegraded = null,
@@ -1788,6 +3202,15 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                     showDegradedStartDialog = false,
                                     captureStatus = null,
                                     writeModelStatus = null,
+                                    emptyDistance = EmptyDistanceState(),
+                                    calibrationPoints = emptyList(),
+                                    latestCalibrationPoint = null,
+                                    preparedModel = null,
+                                    comparisonResult = null,
+                                    motionSamplingSession = null,
+                                    emptyDistanceControlSupported = null,
+                                    weightModel = WeightModelState(),
+                                    weightModelClearSupported = null,
                                     deviceConfigStatus = null,
                                     isDeviceConfigWritePending = false,
                                     fallStopEnabled = true,
@@ -1802,8 +3225,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                     leaveProtectionCapabilityVerified = false,
                                     isLeaveProtectionSyncInProgress = false,
                                 ),
-                            ),
-                        ).resetWaveRuntime()
+                            ).resetWaveRuntime()
                     }
                     publishTestSessionPanel(force = true)
                 }
@@ -1811,10 +3233,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            client.rawLines.collect { line ->
-                handleSessionLogLine(line)
-                if (shouldAppendIncomingRawLine(line)) {
-                    appendRawLog("RX", line)
+            client.rawLinesWithEpoch.collect { incoming ->
+                if (incoming.epoch != client.currentConnectionEpoch) return@collect
+                handleSessionLogLine(incoming.line)
+                if (shouldAppendIncomingRawLine(incoming.line)) {
+                    appendRawLog("RX", incoming.line)
                 }
             }
         }
@@ -1840,9 +3263,25 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            client.events.collect { event ->
+            client.eventsWithEpoch.collect { stamped ->
+                if (stamped.epoch != client.currentConnectionEpoch) return@collect
+                val event = stamped.event
                 when (event) {
-                    is Event.StreamSample -> onStreamSample(event)
+                    is Event.DeviceIdentity -> handleDeviceIdentity(event, stamped.epoch)
+                    is Event.ProfileConfigResult -> handleProfileConfigResult(event, stamped.epoch)
+                    is Event.ProfileEmptyDistanceResult -> handleProfileEmptyDistanceResult(event, stamped.epoch)
+                    is Event.StreamSample -> {
+                        if (_uiState.value.deviceConfigVerified &&
+                            _uiState.value.streamSubscriptionConfirmed &&
+                            !profileConfigTransaction.isPending &&
+                            sampleMatchesVerifiedProfile(event)
+                        ) {
+                            onStreamSample(event, stamped.epoch)
+                        } else if (_uiState.value.deviceConfigVerified) {
+                            consecutiveProfileSamples = 0
+                            _uiState.update { it.copy(profileDistanceReady = false) }
+                        }
+                    }
 
                     is Event.BaselineMain -> {
                         sessionCaptureSignals = sessionCaptureSignals.copy(
@@ -2072,89 +3511,98 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
 
-                    is Event.Snapshot -> _uiState.update {
-                        val pendingDeviceConfigStatus = pendingDeviceConfigConfirmationStatus(
-                            observedPlatformModel = event.platformModel,
-                            observedLaserInstalled = event.laserInstalled,
-                        )
-                        val nextDeviceState = if (event.topState != DeviceState.UNKNOWN) {
-                            event.topState
-                        } else {
-                            it.deviceState
+                    is Event.Snapshot -> {
+                        val postWriteSnapshot = profileSnapshotRefreshGate.acceptSnapshot(stamped.epoch)
+                        _uiState.update {
+                            val pendingDeviceConfigStatus = pendingDeviceConfigConfirmationStatus(
+                                observedPlatformModel = event.platformModel,
+                                observedLaserInstalled = event.laserInstalled,
+                            )
+                            val nextDeviceState = if (event.topState != DeviceState.UNKNOWN) {
+                                event.topState
+                            } else {
+                                it.deviceState
+                            }
+                            val startReadyMergeContext = currentSnapshotStartReadyMergeContext()
+                            val nextWaveOutputActive = resolveAuthoritativeWaveOutput(
+                                currentWaveOutputActive = it.waveOutputActive,
+                                authoritativeTopState = nextDeviceState,
+                                authoritativeWaveOutputActive = event.waveOutputActive,
+                            )
+                            val snapshotLeaveStopEnabled = event.leaveStopEnabled
+                            val nextReasonCode = event.currentReasonCode ?: it.deviceReasonCode
+                            val nextSafetyEffectCode = event.currentSafetyEffect ?: it.deviceSafetyEffectCode
+                            syncDegradedStartUi(it.applyWaveOutputTransition(nextWaveOutputActive).copy(
+                                protocolMode = mergeProtocolMode(
+                                    currentMode = it.protocolMode,
+                                    observedMode = ProtocolMode.PRIMARY,
+                                ),
+                                deviceState = nextDeviceState,
+                                // Formal DEVICE:GET_CONFIG owns the confirmed model.
+                                // A queued pre-switch SNAPSHOT must not replace it.
+                                devicePlatformModel = if (it.deviceConfigVerified || it.isDeviceConfigWritePending) it.devicePlatformModel
+                                    else event.platformModel ?: it.devicePlatformModel,
+                                deviceLaserInstalled = if (it.deviceConfigVerified || it.isDeviceConfigWritePending) it.deviceLaserInstalled
+                                    else event.laserInstalled ?: it.deviceLaserInstalled,
+                                deviceLaserAvailable = event.laserAvailable,
+                                deviceProtectionDegraded = event.protectionDegraded,
+                                deviceDegradedStartAvailable = event.degradedStartAvailable,
+                                deviceDegradedStartEnabled = event.degradedStartEnabled,
+                                deviceRuntimeReady = event.runtimeReady,
+                                deviceStartReady = resolveSnapshotStartReady(
+                                    currentStartReady = it.deviceStartReady,
+                                    snapshotStartReady = event.startReady,
+                                    mergeContext = startReadyMergeContext,
+                                ),
+                                deviceBaselineReady = event.baselineReady,
+                                deviceReasonCode = nextReasonCode,
+                                deviceSafetyEffectCode = nextSafetyEffectCode,
+                                faultStatus = faultStatusFromReason(nextReasonCode),
+                                safetyStatus = safetyStatusFromSnapshot(
+                                    reasonCode = nextReasonCode,
+                                    effectCode = nextSafetyEffectCode,
+                                    runtimeState = nextDeviceState,
+                                    waveOutputActive = nextWaveOutputActive,
+                                ),
+                                deviceConfigStatus = pendingDeviceConfigStatus ?: it.deviceConfigStatus,
+                                stableWeight = event.stableWeightKg ?: it.stableWeight,
+                                stableWeightActive = event.baselineReady ?: it.stableWeightActive,
+                                isDeviceConfigWritePending = profileConfigTransaction.isPending ||
+                                    profileRecoveryReadPending || deviceConfigWriteTracker.isPending,
+                                leaveProtectionEnabled = snapshotLeaveStopEnabled ?: it.leaveProtectionEnabled,
+                                leaveProtectionSupported = if (snapshotLeaveStopEnabled != null) {
+                                    true
+                                } else {
+                                    it.leaveProtectionSupported
+                                },
+                                leaveProtectionStateKnown = snapshotLeaveStopEnabled != null ||
+                                    it.leaveProtectionStateKnown,
+                                leaveProtectionAckConfirmed = if (snapshotLeaveStopEnabled != null) {
+                                    false
+                                } else {
+                                    it.leaveProtectionAckConfirmed
+                                },
+                                leaveProtectionCapabilityVerified = snapshotLeaveStopEnabled != null ||
+                                    it.leaveProtectionCapabilityVerified,
+                                isLeaveProtectionSyncInProgress = if (snapshotLeaveStopEnabled != null) {
+                                    false
+                                } else {
+                                    it.isLeaveProtectionSyncInProgress
+                                },
+                            )).syncFormalWaveTruth().syncWaveControlFlags()
+                        }.also {
+                            reconcileTestSessionWithFormalWaveTruth(
+                                source = if (_uiState.value.waveOutputActive) {
+                                    "SNAPSHOT_WAVE_OUTPUT_ACTIVE"
+                                } else {
+                                    "SNAPSHOT_WAVE_OUTPUT_INACTIVE"
+                                },
+                                waveOutputActive = _uiState.value.waveOutputActive,
+                                freqHz = event.currentFrequencyHz,
+                                intensity = event.currentIntensity,
+                            )
                         }
-                        val startReadyMergeContext = currentSnapshotStartReadyMergeContext()
-                        val nextWaveOutputActive = resolveAuthoritativeWaveOutput(
-                            currentWaveOutputActive = it.waveOutputActive,
-                            authoritativeTopState = nextDeviceState,
-                            authoritativeWaveOutputActive = event.waveOutputActive,
-                        )
-                        val snapshotLeaveStopEnabled = event.leaveStopEnabled
-                        val nextReasonCode = event.currentReasonCode ?: it.deviceReasonCode
-                        val nextSafetyEffectCode = event.currentSafetyEffect ?: it.deviceSafetyEffectCode
-                        syncDegradedStartUi(it.applyWaveOutputTransition(nextWaveOutputActive).copy(
-                            protocolMode = mergeProtocolMode(
-                                currentMode = it.protocolMode,
-                                observedMode = ProtocolMode.PRIMARY,
-                            ),
-                            deviceState = nextDeviceState,
-                            devicePlatformModel = event.platformModel ?: it.devicePlatformModel,
-                            deviceLaserInstalled = event.laserInstalled ?: it.deviceLaserInstalled,
-                            deviceLaserAvailable = event.laserAvailable,
-                            deviceProtectionDegraded = event.protectionDegraded,
-                            deviceDegradedStartAvailable = event.degradedStartAvailable,
-                            deviceDegradedStartEnabled = event.degradedStartEnabled,
-                            deviceRuntimeReady = event.runtimeReady,
-                            deviceStartReady = resolveSnapshotStartReady(
-                                currentStartReady = it.deviceStartReady,
-                                snapshotStartReady = event.startReady,
-                                mergeContext = startReadyMergeContext,
-                            ),
-                            deviceBaselineReady = event.baselineReady,
-                            deviceReasonCode = nextReasonCode,
-                            deviceSafetyEffectCode = nextSafetyEffectCode,
-                            faultStatus = faultStatusFromReason(nextReasonCode),
-                            safetyStatus = safetyStatusFromSnapshot(
-                                reasonCode = nextReasonCode,
-                                effectCode = nextSafetyEffectCode,
-                                runtimeState = nextDeviceState,
-                                waveOutputActive = nextWaveOutputActive,
-                            ),
-                            deviceConfigStatus = pendingDeviceConfigStatus ?: it.deviceConfigStatus,
-                            stableWeight = event.stableWeightKg ?: it.stableWeight,
-                            stableWeightActive = event.baselineReady ?: it.stableWeightActive,
-                            isDeviceConfigWritePending = deviceConfigWriteTracker.isPending,
-                            leaveProtectionEnabled = snapshotLeaveStopEnabled ?: it.leaveProtectionEnabled,
-                            leaveProtectionSupported = if (snapshotLeaveStopEnabled != null) {
-                                true
-                            } else {
-                                it.leaveProtectionSupported
-                            },
-                            leaveProtectionStateKnown = snapshotLeaveStopEnabled != null ||
-                                it.leaveProtectionStateKnown,
-                            leaveProtectionAckConfirmed = if (snapshotLeaveStopEnabled != null) {
-                                false
-                            } else {
-                                it.leaveProtectionAckConfirmed
-                            },
-                            leaveProtectionCapabilityVerified = snapshotLeaveStopEnabled != null ||
-                                it.leaveProtectionCapabilityVerified,
-                            isLeaveProtectionSyncInProgress = if (snapshotLeaveStopEnabled != null) {
-                                false
-                            } else {
-                                it.isLeaveProtectionSyncInProgress
-                            },
-                        )).syncFormalWaveTruth().syncWaveControlFlags()
-                    }.also {
-                        reconcileTestSessionWithFormalWaveTruth(
-                            source = if (_uiState.value.waveOutputActive) {
-                                "SNAPSHOT_WAVE_OUTPUT_ACTIVE"
-                            } else {
-                                "SNAPSHOT_WAVE_OUTPUT_INACTIVE"
-                            },
-                            waveOutputActive = _uiState.value.waveOutputActive,
-                            freqHz = event.currentFrequencyHz,
-                            intensity = event.currentIntensity,
-                        )
+                        if (postWriteSnapshot) completeProfileRuntimeRefresh(stamped.epoch)
                     }
 
                     is Event.WaveOutput -> _uiState.update {
@@ -2210,34 +3658,293 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             ),
                         )
                     }.also {
+                        persistSessions()
                         appendSystemLog("[CAL_UI] pointRecorded count=${_uiState.value.calibrationPoints.size}")
                         _uiState.value.latestCalibrationPoint?.let { point ->
                             appendSystemLog(buildCalibrationCaptureResultLog(result = "success", point = point))
                         }
                     }
 
-                    is Event.CalibrationModel -> _uiState.update {
+                    is Event.EmptyDistanceResult -> {
+                        if (_uiState.value.deviceConfigVerified) {
+                            appendSystemLog("[EMPTY_DISTANCE_UI] ignored_legacy_reply raw=${event.raw}")
+                            return@collect
+                        }
+                        if (!event.supported) {
+                            emptyDistanceTimeoutJob?.cancel()
+                            emptyDistanceTimeoutJob = null
+                            _uiState.update {
+                                it.copy(
+                                    emptyDistance = EmptyDistanceState(),
+                                    emptyDistanceControlSupported = false,
+                                    lastAckOrError = event.raw,
+                                )
+                            }
+                            appendSystemLog("[EMPTY_DISTANCE_UI] unsupported raw=${event.raw}")
+                        } else if (!event.success) {
+                            emptyDistanceTimeoutJob?.cancel()
+                            emptyDistanceTimeoutJob = null
+                            _uiState.update {
+                                it.copy(
+                                    emptyDistance = it.emptyDistance.copy(
+                                        status = EmptyDistanceStatusUi.READBACK_MISMATCH,
+                                        updatedAtMs = System.currentTimeMillis(),
+                                    ),
+                                    emptyDistanceControlSupported = true,
+                                    lastAckOrError = formatNackMessage(event.reason ?: "UNKNOWN"),
+                                )
+                            }
+                            appendSystemLog("[EMPTY_DISTANCE_UI] failure op=${event.operation ?: "UNKNOWN"} reason=${event.reason ?: "UNKNOWN"}")
+                        } else {
+                            val status = event.status?.uppercase()
+                            val operation = event.operation?.uppercase()
+                            val isFinalReadback = operation == "GET"
+                            if (!isFinalReadback) {
+                                // SET/CLEAR ACK confirms command acceptance only.
+                                // The device record is authoritative after a
+                                // second EMPTY:GET readback.
+                                _uiState.update {
+                                    it.copy(
+                                        emptyDistance = it.emptyDistance.copy(
+                                            status = EmptyDistanceStatusUi.PENDING,
+                                            updatedAtMs = System.currentTimeMillis(),
+                                        ),
+                                        emptyDistanceControlSupported = true,
+                                        lastAckOrError = event.raw,
+                                    )
+                                }
+                                appendSystemLog(
+                                    "[EMPTY_DISTANCE_UI] commandAck op=${operation ?: "UNKNOWN"}; requesting GET readback",
+                                )
+                                sendEmptyDistanceGet()
+                            } else {
+                                emptyDistanceTimeoutJob?.cancel()
+                                emptyDistanceTimeoutJob = null
+                                val current = _uiState.value.emptyDistance
+                                val previousConfirmedDistanceMm = pendingEmptyDistancePreviousConfirmedMm
+                                pendingEmptyDistancePreviousConfirmedMm = null
+                                val expected = current.distanceMm
+                                val readbackDistanceMm = event.distanceMm
+                                val matchesPendingSet = status == "SET" &&
+                                    current.status == EmptyDistanceStatusUi.PENDING &&
+                                    expected != null && readbackDistanceMm != null &&
+                                    kotlin.math.abs(expected - readbackDistanceMm) <=
+                                        (event.toleranceMm ?: current.toleranceMm ?: 0.10f)
+                                val nextState = when {
+                                    status == "SET" && current.source == EmptyDistanceSourceUi.USER_SET &&
+                                        expected != null && !matchesPendingSet -> current.copy(
+                                            status = EmptyDistanceStatusUi.READBACK_MISMATCH,
+                                            updatedAtMs = System.currentTimeMillis(),
+                                        )
+                                    status == "SET" -> calibrationSessionStore.markEmptyDistanceReadback(
+                                        state = _uiState.value,
+                                        distanceMm = event.distanceMm,
+                                        backend = event.backend,
+                                        toleranceMm = event.toleranceMm,
+                                        nowMs = System.currentTimeMillis(),
+                                    ).emptyDistance
+                                    status == "UNSET" || status == "CLEARED" ||
+                                        status == "NOT_SET" || status == "LEGACY" -> EmptyDistanceState()
+                                    else -> EmptyDistanceState()
+                                }
+                                val emptyDistanceChanged = when {
+                                    status == "UNSET" || status == "CLEARED" || status == "NOT_SET" ->
+                                        previousConfirmedDistanceMm != null
+                                    status == "SET" && previousConfirmedDistanceMm != null && readbackDistanceMm != null ->
+                                        kotlin.math.abs(previousConfirmedDistanceMm - readbackDistanceMm) >
+                                            (event.toleranceMm ?: current.toleranceMm ?: 0.10f)
+                                    else -> false
+                                }
+                                _uiState.update { state ->
+                                    var updated = state.copy(
+                                        emptyDistance = nextState,
+                                        emptyDistanceControlSupported = true,
+                                        lastAckOrError = event.raw,
+                                    )
+                                    if (emptyDistanceChanged) {
+                                        // Firmware invalidates a weight model when D_e
+                                        // changes or is cleared. Mirror that fact in
+                                        // the APP before rebuilding the fit UI.
+                                        updated = calibrationSessionStore.rebuildComparison(
+                                            updated.copy(
+                                                latestModel = null,
+                                                weightModel = WeightModelState(),
+                                                preparedModel = null,
+                                                writeModelStatus = null,
+                                            ),
+                                        )
+                                    }
+                                    updated
+                                }
+                                persistSessions()
+                                appendSystemLog(
+                                    "[EMPTY_DISTANCE_UI] readback op=GET status=${status ?: "UNKNOWN"} distance_mm=${event.distanceMm ?: "-"}",
+                                )
+                            }
+                        }
+                    }
+
+                    is Event.WeightModelClearResult -> {
+                        if (event.success) {
+                            weightModelClearTimeoutJob?.cancel()
+                            weightModelClearTimeoutJob = null
+                            _uiState.update {
+                                it.copy(
+                                    weightModel = WeightModelState(),
+                                    latestModel = null,
+                                    weightModelClearSupported = true,
+                                    writeModelStatus = null,
+                                    lastAckOrError = event.raw,
+                                )
+                            }
+                            appendSystemLog("[CAL_UI] clearWeightModelResult=SUCCESS emptyDistancePreserved=true")
+                            persistSessions()
+                            sendCalibrationGetModel()
+                        } else {
+                            weightModelClearTimeoutJob?.cancel()
+                            weightModelClearTimeoutJob = null
+                            _uiState.update {
+                                it.copy(
+                                    weightModel = it.weightModel.copy(status = WeightModelStatusUi.INVALID),
+                                    weightModelClearSupported = event.supported,
+                                    lastAckOrError = formatNackMessage(event.reason ?: "UNKNOWN"),
+                                )
+                            }
+                            appendSystemLog("[CAL_UI] clearWeightModelResult=FAILURE reason=${event.reason ?: "UNKNOWN"}")
+                        }
+                    }
+
+                    is Event.CalibrationModel -> {
+                        if (_uiState.value.profileRuntimeRefreshPending ||
+                            _uiState.value.isDeviceConfigWritePending
+                        ) {
+                            appendSystemLog("[CAL_UI] ignored_model_during_profile_verification")
+                            return@collect
+                        }
+                        if (profileEmptyReadFailedEpoch == stamped.epoch) {
+                            appendSystemLog("[CAL_UI] ignored_model_after_empty_get_failure")
+                            return@collect
+                        }
+                        val explicitModelWriteReadback = awaitingModelReadback &&
+                            pendingModelReadback?.let { modelReadbackMatches(it, event) } == true
+                        if (shouldIgnoreModelReplyDuringEmptyRefresh(
+                                refreshEpoch = emptyModelRefreshEpoch,
+                                modelQuerySent = emptyModelQuerySent,
+                                invalidatedEpoch = emptyModelInvalidatedEpoch,
+                                replyEpoch = stamped.epoch,
+                                modelReady = event.ready,
+                                explicitModelWriteReadback = explicitModelWriteReadback,
+                            )
+                        ) {
+                            appendSystemLog("[CAL_UI] ignored_model_during_or_after_empty_mutation ready=${event.ready}")
+                            return@collect
+                        }
+                        if (emptyModelRefreshEpoch == stamped.epoch) {
+                            emptyModelRefreshEpoch = null
+                            emptyModelQuerySent = false
+                            emptyModelReadbackTimeoutJob?.cancel()
+                            emptyModelReadbackTimeoutJob = null
+                        }
+                        if (explicitModelWriteReadback) emptyModelInvalidatedEpoch = null
                         val type = event.type ?: CalibrationModelType.LINEAR
-                        calibrationSessionStore.synchronizeModelSelectionUi(
-                            it.copy(
-                            latestModel = CalibrationModelUi(
-                                type = type,
-                                referenceDistance = event.referenceDistance ?: 0.0f,
-                                c0 = event.c0 ?: 0.0f,
-                                c1 = event.c1 ?: 1.0f,
-                                c2 = event.c2 ?: 0.0f,
-                                raw = event.raw,
-                            ),
-                            lastAckOrError = event.raw,
-                            ),
+                        val latestModel = CalibrationModelUi(
+                            type = type,
+                            referenceDistance = event.referenceDistance ?: 0.0f,
+                            c0 = event.c0 ?: 0.0f,
+                            c1 = event.c1 ?: 1.0f,
+                            c2 = event.c2 ?: 0.0f,
+                            ready = event.ready,
+                            raw = event.raw,
                         )
-                    }.also {
-                        val model = _uiState.value.latestModel
-                        if (model != null) {
-                            appendSystemLog(
-                                "[CAL_UI] fetchedModel ref=${model.referenceDistance} c0=${model.c0} c1=${model.c1} c2=${model.c2}",
+                        val pending = pendingModelReadback
+                        val isReadback = awaitingModelReadback && pending != null
+                        val readbackMatches = isReadback && modelReadbackMatches(pending!!, event)
+                        val deviceWeightModel = if (isReadback && !readbackMatches) {
+                            WeightModelState(
+                                status = WeightModelStatusUi.READBACK_MISMATCH,
+                                type = event.type,
+                                a = event.c0,
+                                b = event.c1,
+                                c = event.c2,
+                                updatedAtMs = System.currentTimeMillis(),
+                            )
+                        } else if (
+                            event.ready == true &&
+                            event.type != null &&
+                            event.c0?.isFinite() == true &&
+                            event.c1?.isFinite() == true &&
+                            event.c2?.isFinite() == true
+                        ) {
+                            WeightModelState(
+                                status = WeightModelStatusUi.SET,
+                                type = event.type,
+                                a = event.c0,
+                                b = event.c1,
+                                c = event.c2,
+                                updatedAtMs = System.currentTimeMillis(),
+                            )
+                        } else {
+                            WeightModelState(
+                                status = WeightModelStatusUi.NOT_SET,
+                                type = event.type,
+                                a = event.c0,
+                                b = event.c1,
+                                c = event.c2,
+                                updatedAtMs = System.currentTimeMillis(),
                             )
                         }
+                        if (isReadback) {
+                            awaitingModelReadback = false
+                            modelReadbackTimeoutJob?.cancel()
+                            modelReadbackTimeoutJob = null
+                            pendingModelReadback = null
+                        }
+                        val readbackStatus = if (!isReadback) {
+                            null
+                        } else if (readbackMatches) {
+                            appendSystemLog(
+                                "[CAL_UI] readback result=success ref=${latestModel.referenceDistance} c0=${latestModel.c0} c1=${latestModel.c1} c2=${latestModel.c2} ready=${event.ready}",
+                            )
+                            writeModelFeedback(
+                                kind = WriteModelFeedbackKind.SUCCESS,
+                                message = text(
+                                    R.string.write_model_status_success,
+                                    modelTypeLabel(pending!!.type),
+                                ),
+                                modelType = pending.type,
+                                rawReason = event.raw,
+                            )
+                        } else {
+                            val reason = if (event.ready == false) "READBACK_NOT_READY" else "READBACK_MISMATCH"
+                            appendSystemLog(
+                                "[CAL_UI] readback result=failure reason=$reason expected=${pending!!.type} actual=${event.type} raw=${event.raw}",
+                            )
+                            writeModelFeedback(
+                                kind = WriteModelFeedbackKind.FAILURE,
+                                message = text(
+                                    R.string.write_model_status_failure_with_reason,
+                                    formatModelWriteFailure(reason),
+                                ),
+                                modelType = pending.type,
+                                rawReason = reason,
+                            )
+                        }
+                        _uiState.update { state ->
+                            calibrationSessionStore.synchronizeModelSelectionUi(
+                                state.copy(
+                                    latestModel = latestModel.takeIf { event.ready == true },
+                                    weightModel = deviceWeightModel,
+                                    emptyModelReadbackPending = false,
+                                    emptyModelReadbackNeedsReconnect = false,
+                                    weightModelClearSupported = true,
+                                    lastAckOrError = event.raw,
+                                    writeModelStatus = readbackStatus ?: state.writeModelStatus,
+                                ),
+                            )
+                        }
+                        appendSystemLog(
+                            "[CAL_UI] fetchedModel ref=${latestModel.referenceDistance} c0=${latestModel.c0} c1=${latestModel.c1} c2=${latestModel.c2} ready=${event.ready}",
+                        )
                     }
 
                     is Event.Capabilities -> _uiState.update { state ->
@@ -2259,10 +3966,16 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 observedMode = ProtocolMode.PRIMARY,
                             ),
                             capabilityInfo = formatCapabilities(event),
-                            devicePlatformModel = platformModel ?: state.devicePlatformModel,
-                            deviceLaserInstalled = laserInstalled ?: state.deviceLaserInstalled,
-                            selectedPlatformModel = platformModel ?: state.selectedPlatformModel,
-                            selectedLaserInstalled = laserInstalled ?: state.selectedLaserInstalled,
+                            // CAP is a bootstrap hint; verified DEVICE:GET_CONFIG
+                            // remains the model authority on the same BLE link.
+                            devicePlatformModel = if (state.deviceConfigVerified || state.isDeviceConfigWritePending) state.devicePlatformModel
+                                else platformModel ?: state.devicePlatformModel,
+                            deviceLaserInstalled = if (state.deviceConfigVerified || state.isDeviceConfigWritePending) state.deviceLaserInstalled
+                                else laserInstalled ?: state.deviceLaserInstalled,
+                            selectedPlatformModel = if (state.deviceConfigVerified || state.isDeviceConfigWritePending) state.selectedPlatformModel
+                                else platformModel ?: state.selectedPlatformModel,
+                            selectedLaserInstalled = if (state.deviceConfigVerified || state.isDeviceConfigWritePending) state.selectedLaserInstalled
+                                else laserInstalled ?: state.selectedLaserInstalled,
                             motionSamplingModeEnabled = isMotionSamplingModeEnabled(event),
                             fallStopEnabled = fallStopEnabled ?: state.fallStopEnabled,
                             fallStopStateKnown = fallStopEnabled != null || state.fallStopStateKnown,
@@ -2278,7 +3991,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 leaveProtectionEnabled != null,
                             isLeaveProtectionSyncInProgress = false,
                             deviceConfigStatus = pendingDeviceConfigStatus ?: state.deviceConfigStatus,
-                            isDeviceConfigWritePending = deviceConfigWriteTracker.isPending,
+                            isDeviceConfigWritePending = profileConfigTransaction.isPending ||
+                                profileRecoveryReadPending || deviceConfigWriteTracker.isPending,
                         )
                     }
 
@@ -2294,6 +4008,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     is Event.DeviceConfig -> {
+                        if (_uiState.value.deviceIdentity != null) {
+                            appendSystemLog("[DEVICE_CONFIG] ignored_legacy_config_reply raw=${event.raw}")
+                            return@collect
+                        }
                         val devicePlatformModel = event.platformModel
                         val eventLaserInstalled = event.laserInstalled
                         if (devicePlatformModel != null && devicePlatformModel != PlatformModel.BASE) {
@@ -2319,7 +4037,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 selectedPlatformModel = devicePlatformModel ?: it.selectedPlatformModel,
                                 selectedLaserInstalled = eventLaserInstalled ?: it.selectedLaserInstalled,
                                 deviceConfigStatus = status ?: it.deviceConfigStatus,
-                                isDeviceConfigWritePending = deviceConfigWriteTracker.isPending,
+                                isDeviceConfigWritePending = profileConfigTransaction.isPending ||
+                                    profileRecoveryReadPending || deviceConfigWriteTracker.isPending,
                                 lastAckOrError = event.raw,
                             )
                         }
@@ -2380,6 +4099,46 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
 
+                    is Event.CalibrationZeroResult -> {
+                        awaitingCalibrationZeroResult = false
+                        calibrationZeroTimeoutJob?.cancel()
+                        calibrationZeroTimeoutJob = null
+                        awaitingModelWriteResult = false
+                        awaitingModelReadback = false
+                        pendingWriteModelType = null
+                        pendingModelReadback = null
+                        if (event.success) {
+                            _uiState.update { state ->
+                                calibrationSessionStore.reset(state).copy(
+                                    // Legacy CAL:ZERO may still be emitted by an
+                                    // older operator tool. Preserve independent
+                                    // D_e while clearing the local weight truth.
+                                    weightModel = WeightModelState(),
+                                    latestModel = null,
+                                    lastAckOrError = event.raw,
+                                    captureStatus = captureFeedback(
+                                        kind = CaptureFeedbackKind.SUCCESS,
+                                        message = text(R.string.action_device_zero),
+                                        rawReason = "CAL_ZERO",
+                                    ),
+                                )
+                            }
+                            appendSystemLog("[CAL_UI] calZeroResult=SUCCESS parametersCleared=true")
+                        } else {
+                            _uiState.update {
+                                it.copy(
+                                    lastAckOrError = formatNackMessage(event.reason ?: "UNKNOWN"),
+                                    captureStatus = captureFeedback(
+                                        kind = CaptureFeedbackKind.FAILURE,
+                                        message = formatNackMessage(event.reason ?: "UNKNOWN"),
+                                        rawReason = event.reason,
+                                    ),
+                                )
+                            }
+                            appendSystemLog("[CAL_UI] calZeroResult=FAILURE reason=${event.reason ?: "UNKNOWN"}")
+                        }
+                    }
+
                     is Event.CalibrationSetModelResult -> {
                         val systemLogs = mutableListOf<String>()
                         val activeModelType = event.type ?: pendingWriteModelType
@@ -2387,22 +4146,32 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             awaitingModelWriteResult = false
                             pendingWriteModelType = null
                             if (event.success) {
-                                systemLogs += "[CAL_UI] writeModel ack success selected=${activeModelType?.name ?: "UNKNOWN"} raw=${event.raw}"
-                                systemLogs += "[CAL_UI_BIND] buttonTextSource=writeModelStatus value=SUCCESS"
-                                systemLogs += "[CAL_UI_BIND] buttonVisualSource=writeModelStatus value=SUCCESS"
-                                systemLogs += "[CAL_UI_BIND] resultCardSource=writeModelStatus value=SUCCESS"
-                                systemLogs += "[CAL_UI] writeResult state=SUCCESS visible=true model=${activeModelType?.name ?: "UNKNOWN"}"
-                                writeModelFeedback(
-                                    kind = WriteModelFeedbackKind.SUCCESS,
-                                    message = text(
-                                        R.string.write_model_status_success,
-                                        modelTypeLabel(activeModelType),
-                                    ),
-                                    modelType = activeModelType,
-                                    rawReason = event.raw,
-                                )
+                                val expected = pendingModelReadback
+                                if (expected != null) {
+                                    systemLogs += "[CAL_UI] writeModel ack success selected=${activeModelType?.name ?: "UNKNOWN"} raw=${event.raw}; readback pending"
+                                    beginModelReadback(expected)
+                                    writeModelFeedback(
+                                        kind = WriteModelFeedbackKind.PENDING,
+                                        message = text(R.string.write_model_status_verifying),
+                                        modelType = expected.type,
+                                        rawReason = event.raw,
+                                    )
+                                } else {
+                                    systemLogs += "[CAL_UI] writeModel ack success but no pending model for readback"
+                                    writeModelFeedback(
+                                        kind = WriteModelFeedbackKind.FAILURE,
+                                        message = text(
+                                            R.string.write_model_status_failure_with_reason,
+                                            formatModelWriteFailure("READBACK_MISMATCH"),
+                                        ),
+                                        modelType = activeModelType,
+                                        rawReason = "READBACK_MISMATCH",
+                                    )
+                                }
                             } else {
                                 val reason = event.reason ?: "UNKNOWN"
+                                pendingModelReadback = null
+                                awaitingModelReadback = false
                                 systemLogs += "[CAL_UI] writeModel ack failure selected=${activeModelType?.name ?: "UNKNOWN"} reason=$reason"
                                 systemLogs += "[CAL_UI_BIND] buttonTextSource=writeModelStatus value=FAILURE"
                                 systemLogs += "[CAL_UI_BIND] buttonVisualSource=writeModelStatus value=FAILURE"
@@ -2440,6 +4209,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             event.raw.equals("ACK:OK", ignoreCase = true)
                         val captureStatus = if (awaitingCalibrationCaptureResult) {
                             awaitingCalibrationCaptureResult = false
+                            calibrationCaptureTimeoutJob?.cancel()
+                            calibrationCaptureTimeoutJob = null
                             systemLogs += "[CAL_AUDIT] captureAckUnexpected raw=${event.raw}"
                             captureFeedback(
                                 kind = CaptureFeedbackKind.FAILURE,
@@ -2453,19 +4224,28 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             val modelType = pendingWriteModelType
                             awaitingModelWriteResult = false
                             pendingWriteModelType = null
-                            systemLogs += "[CAL_UI] writeModel result=success model=${modelType?.name ?: "UNKNOWN"}"
-                            systemLogs += "[CAL_UI_BIND] buttonTextSource=writeModelStatus value=SUCCESS"
-                            systemLogs += "[CAL_UI_BIND] buttonVisualSource=writeModelStatus value=SUCCESS"
-                            systemLogs += "[CAL_UI_BIND] resultCardSource=writeModelStatus value=SUCCESS"
-                            writeModelFeedback(
-                                kind = WriteModelFeedbackKind.SUCCESS,
-                                message = text(
-                                    R.string.write_model_status_success,
-                                    modelTypeLabel(modelType),
-                                ),
-                                modelType = modelType,
-                                rawReason = event.raw,
-                            )
+                            val expected = pendingModelReadback
+                            if (expected != null) {
+                                systemLogs += "[CAL_UI] generic write ACK received model=${modelType?.name ?: "UNKNOWN"}; readback pending"
+                                beginModelReadback(expected)
+                                writeModelFeedback(
+                                    kind = WriteModelFeedbackKind.PENDING,
+                                    message = text(R.string.write_model_status_verifying),
+                                    modelType = expected.type,
+                                    rawReason = event.raw,
+                                )
+                            } else {
+                                systemLogs += "[CAL_UI] generic write ACK has no pending model for readback"
+                                writeModelFeedback(
+                                    kind = WriteModelFeedbackKind.FAILURE,
+                                    message = text(
+                                        R.string.write_model_status_failure_with_reason,
+                                        formatModelWriteFailure("READBACK_MISMATCH"),
+                                    ),
+                                    modelType = modelType,
+                                    rawReason = "READBACK_MISMATCH",
+                                )
+                            }
                         } else {
                             null
                         }
@@ -2505,7 +4285,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 captureStatus = captureStatus ?: nextState.captureStatus,
                                 writeModelStatus = writeModelStatus ?: nextState.writeModelStatus,
                                 deviceConfigStatus = deviceConfigStatus ?: nextState.deviceConfigStatus,
-                                isDeviceConfigWritePending = deviceConfigWriteTracker.isPending,
+                                isDeviceConfigWritePending = profileConfigTransaction.isPending ||
+                                    profileRecoveryReadPending || deviceConfigWriteTracker.isPending,
                             ).syncFormalWaveTruth().syncWaveControlFlags()
                         }
                         if (acknowledgedManualStop) {
@@ -2525,6 +4306,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         val systemLogs = mutableListOf<String>()
                         val captureStatus = if (awaitingCalibrationCaptureResult) {
                             awaitingCalibrationCaptureResult = false
+                            calibrationCaptureTimeoutJob?.cancel()
+                            calibrationCaptureTimeoutJob = null
                             systemLogs += "[CAL_AUDIT] captureFailed reason=$reason"
                             captureFeedback(
                                 kind = CaptureFeedbackKind.FAILURE,
@@ -2567,7 +4350,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 captureStatus = captureStatus ?: it.captureStatus,
                                 writeModelStatus = writeModelStatus ?: it.writeModelStatus,
                                 deviceConfigStatus = deviceConfigStatus ?: it.deviceConfigStatus,
-                                isDeviceConfigWritePending = deviceConfigWriteTracker.isPending,
+                                isDeviceConfigWritePending = profileConfigTransaction.isPending ||
+                                    profileRecoveryReadPending || deviceConfigWriteTracker.isPending,
                             )
                         }
                         systemLogs.forEach(::appendSystemLog)
@@ -2579,6 +4363,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         val systemLogs = mutableListOf<String>()
                         val captureStatus = if (awaitingCalibrationCaptureResult) {
                             awaitingCalibrationCaptureResult = false
+                            calibrationCaptureTimeoutJob?.cancel()
+                            calibrationCaptureTimeoutJob = null
                             systemLogs += "[CAL_AUDIT] captureError reason=${event.reason}"
                             captureFeedback(
                                 kind = CaptureFeedbackKind.FAILURE,
@@ -2615,13 +4401,51 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         } else {
                             null
                         }
+                        val unknownCommand = event.reason.contains("UNKNOWN", ignoreCase = true) ||
+                            event.reason.contains("UNSUPPORTED", ignoreCase = true)
+                        val emptyDistanceUnsupported = unknownCommand &&
+                            _uiState.value.emptyDistanceControlSupported == null
+                        val weightModelClearUnsupported = unknownCommand &&
+                            _uiState.value.weightModel.status == WeightModelStatusUi.PENDING
+                        if (emptyDistanceUnsupported ||
+                            _uiState.value.emptyDistance.status == EmptyDistanceStatusUi.PENDING
+                        ) {
+                            emptyDistanceTimeoutJob?.cancel()
+                            emptyDistanceTimeoutJob = null
+                        }
+                        if (weightModelClearUnsupported ||
+                            _uiState.value.weightModel.status == WeightModelStatusUi.PENDING
+                        ) {
+                            weightModelClearTimeoutJob?.cancel()
+                            weightModelClearTimeoutJob = null
+                        }
+                        val emptyDistancePending =
+                            _uiState.value.emptyDistance.status == EmptyDistanceStatusUi.PENDING
+                        val weightModelClearPending =
+                            _uiState.value.weightModel.status == WeightModelStatusUi.PENDING
+                        if (emptyDistancePending) {
+                            pendingEmptyDistancePreviousConfirmedMm = null
+                        }
                         _uiState.update {
                             it.copy(
                                 lastAckOrError = text(R.string.message_error, event.reason),
                                 captureStatus = captureStatus ?: it.captureStatus,
                                 writeModelStatus = writeModelStatus ?: it.writeModelStatus,
+                                emptyDistance = when {
+                                    emptyDistanceUnsupported -> EmptyDistanceState()
+                                    emptyDistancePending -> it.emptyDistance.copy(status = EmptyDistanceStatusUi.INVALID)
+                                    else -> it.emptyDistance
+                                },
+                                emptyDistanceControlSupported = if (emptyDistanceUnsupported) false else it.emptyDistanceControlSupported,
+                                weightModel = when {
+                                    weightModelClearUnsupported -> WeightModelState()
+                                    weightModelClearPending -> it.weightModel.copy(status = WeightModelStatusUi.INVALID)
+                                    else -> it.weightModel
+                                },
+                                weightModelClearSupported = if (weightModelClearUnsupported) false else it.weightModelClearSupported,
                                 deviceConfigStatus = deviceConfigStatus ?: it.deviceConfigStatus,
-                                isDeviceConfigWritePending = deviceConfigWriteTracker.isPending,
+                                isDeviceConfigWritePending = profileConfigTransaction.isPending ||
+                                    profileRecoveryReadPending || deviceConfigWriteTracker.isPending,
                             )
                         }
                         systemLogs.forEach(::appendSystemLog)
@@ -2679,16 +4503,38 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val displayState = measurementDisplayStore.currentSnapshot().state
 
         _measurementDisplayState.value = displayState
-        _uiState.update {
-            calibrationSessionStore.withCaptureAvailability(
-                it.copy(
-                    distance = displayState.distance,
-                    weight = displayState.weight,
-                    ma12 = displayState.ma12,
-                    measurementValid = displayState.measurementValid,
-                    lastMeasurementSequence = displayState.lastMeasurementSequence,
-                ),
+        _uiState.update { current ->
+            val backendChanged = !current.sensorBackend.isNullOrBlank() &&
+                !displayState.sensorBackend.isNullOrBlank() &&
+                !current.sensorBackend.equals(displayState.sensorBackend, ignoreCase = true)
+            var next = current.copy(
+                distance = displayState.distance,
+                weight = displayState.weight,
+                ma12 = displayState.ma12,
+                measurementValid = displayState.measurementValid,
+                distanceValid = displayState.distanceValid,
+                weightValid = displayState.weightValid,
+                distanceInvalidReason = displayState.distanceReason,
+                weightInvalidReason = displayState.weightReason,
+                sensorBackend = displayState.sensorBackend,
+                lastMeasurementSequence = displayState.lastMeasurementSequence,
             )
+            if (backendChanged) {
+                next = calibrationSessionStore.invalidateEmptyDistanceForBackend(next, displayState.sensorBackend)
+                // A backend switch invalidates the device-owned D_e and any
+                // deployed weight model tied to that coordinate system. Keep
+                // recorded points for later review, but do not show the old
+                // model as current-device truth.
+                next = calibrationSessionStore.rebuildComparison(
+                    next.copy(
+                        latestModel = null,
+                        weightModel = WeightModelState(),
+                        preparedModel = null,
+                        writeModelStatus = null,
+                    ),
+                )
+            }
+            calibrationSessionStore.withCaptureAvailability(next)
         }
     }
 
@@ -2825,7 +4671,69 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    private fun onStreamSample(sample: Event.StreamSample) {
+    private fun startProfileDistanceExpiryWatchdog(epoch: Long) {
+        profileDistanceExpiryJob = viewModelScope.launch {
+            val startedAtMs = System.currentTimeMillis()
+            while (client.currentConnectionEpoch == epoch && profileEpoch == epoch) {
+                delay(1_000L)
+                val last = profileDistanceLastAcceptedAtMs
+                val now = System.currentTimeMillis()
+                if ((last == 0L && now - startedAtMs > NO_STREAM_WARNING_TIMEOUT_MS) ||
+                    (last != 0L && now - last > NO_STREAM_WARNING_TIMEOUT_MS)
+                ) {
+                    consecutiveProfileSamples = 0
+                    _uiState.update { it.copy(profileDistanceReady = false, profileDistanceFault = true) }
+                }
+            }
+        }
+    }
+
+    private fun sampleMatchesVerifiedProfile(sample: Event.StreamSample): Boolean {
+        if (sample.carrier != MeasurementCarrier.FORMAL_EVT_STREAM) return false
+        val expectedBackend = when (_uiState.value.deviceSensorProfile) {
+            SensorProfile.J100_485 -> "LASER_485"
+            SensorProfile.CYD3S1612_IIC -> "CYD3S1612_IIC"
+            else -> return false
+        }
+        return sample.sensorBackend.equals(expectedBackend, ignoreCase = true)
+    }
+
+    /** Setup feedback only. ESP32 remains the authority for EMPTY:SET_CURRENT freshness. */
+    private fun updateProfileDistanceReadiness(sample: Event.StreamSample, epoch: Long, nowMs: Long) {
+        val state = _uiState.value
+        val expectedBackend = when (state.deviceSensorProfile) {
+            SensorProfile.J100_485 -> "LASER_485"
+            SensorProfile.CYD3S1612_IIC -> "CYD3S1612_IIC"
+            else -> null
+        }
+        val sequence = sample.sequence
+        val measuredDistance = sample.distance
+        val acceptable = profileEpoch == epoch && state.deviceConfigVerified &&
+            state.devicePlatformModel == PlatformModel.PLUS &&
+            state.streamSubscriptionConfirmed && expectedBackend != null &&
+            sample.carrier == MeasurementCarrier.FORMAL_EVT_STREAM &&
+            sample.sensorBackend.equals(expectedBackend, ignoreCase = true) &&
+            sample.distanceValid && measuredDistance?.isFinite() == true && measuredDistance > 0f &&
+            sequence != null && (profileObservedSequence == null || sequence > profileObservedSequence!!)
+        if (!acceptable) {
+            consecutiveProfileSamples = 0
+            _uiState.update { it.copy(profileDistanceReady = false, profileDistanceFault = true) }
+            return
+        }
+        if (profileDistanceLastAcceptedAtMs == 0L ||
+            nowMs - profileDistanceLastAcceptedAtMs > NO_STREAM_WARNING_TIMEOUT_MS
+        ) consecutiveProfileSamples = 0
+        profileObservedSequence = sequence
+        profileDistanceLastAcceptedAtMs = nowMs
+        consecutiveProfileSamples++
+        val ready = consecutiveProfileSamples >= SETUP_DISTANCE_CONFIRM_SAMPLES
+        if (state.profileDistanceReady != ready || state.profileDistanceFault) {
+            _uiState.update { it.copy(profileDistanceReady = ready, profileDistanceFault = false) }
+            appendSystemLog("[SENSOR_SETUP] distance_ready=$ready profile=${state.deviceSensorProfile} backend=${sample.sensorBackend} seq=$sequence")
+        }
+    }
+
+    private fun onStreamSample(sample: Event.StreamSample, epoch: Long) {
         if (!shouldConsumeMeasurementCarrier(sample)) {
             val ignoredSequence = sample.sequence
             val ignoredSnapshot = measurementTrace.recordIgnored(
@@ -2847,6 +4755,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val now = System.currentTimeMillis()
+        updateProfileDistanceReadiness(sample, epoch, now)
         if (telemetrySessionStartMs == 0L) {
             telemetrySessionStartMs = now
         }
@@ -2855,13 +4764,15 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         if (_uiState.value.streamWarning != null) {
             _uiState.update { it.copy(streamWarning = null) }
         }
-        if (!sample.valid || sample.distance == null || sample.weight == null) {
+        val distance = sample.distance
+            ?.takeIf { sample.distanceValid && it.isFinite() }
+        if (distance == null) {
             val invalidSequence = sample.sequence
             val invalidSnapshot = measurementTrace.recordInvalid(
                 sequence = invalidSequence,
                 distance = sample.distance,
                 weight = sample.weight,
-                reason = sample.reason,
+                reason = sample.distanceReason ?: sample.reason,
             )
             measurementDisplayStore.applyInvalid(sample)
             publishMeasurementDisplay(force = true)
@@ -2880,8 +4791,13 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val distance = sample.distance ?: return
-        val weight = sample.weight ?: return
+        // Distance remains consumable when the firmware has no usable weight
+        // model (for example immediately after CAL:ZERO). The combined
+        // measurement is then invalid, but the distance is still displayed,
+        // recorded and eligible for the 0 kg calibration anchor.
+        val weight = sample.weight
+            ?.takeIf { sample.weightValid && it.isFinite() }
+        val completeSample = sample.valid && weight != null
         val sampleSequence = sample.sequence
         val currentState = _uiState.value
         val currentSignals = sessionCaptureSignals
@@ -2893,7 +4809,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         )
         motionSamplingSessionStore = samplingAppendResult.session
         val samplingRow = samplingAppendResult.row
-        val displaySnapshot = measurementDisplayStore.applyValid(
+        val displaySnapshot = measurementDisplayStore.applySample(
             sample = sample,
             nowMs = now,
             telemetrySessionStartMs = telemetrySessionStartMs,
@@ -2901,11 +4817,20 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             stableWeightActive = currentState.stableWeightActive,
         )
         val point = displaySnapshot.latestPoint ?: return
-        val validSnapshot = measurementTrace.recordValid(
-            sequence = sampleSequence,
-            distance = distance,
-            weight = weight,
-        )
+        val measurementSnapshot = if (completeSample && weight != null) {
+            measurementTrace.recordValid(
+                sequence = sampleSequence,
+                distance = distance,
+                weight = weight,
+            )
+        } else {
+            measurementTrace.recordInvalid(
+                sequence = sampleSequence,
+                distance = distance,
+                weight = weight,
+                reason = sample.weightReason ?: sample.reason ?: "WEIGHT_INVALID",
+            )
+        }
         val trackTestSessions = shouldTrackTestSessionAutomation(currentState)
         val testSessionSample = if (trackTestSessions) {
             buildTestSessionSample(
@@ -2920,6 +4845,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { state ->
                 state.copy(motionSamplingSession = motionSamplingSessionStore)
             }
+            persistSessions()
         }
         publishMeasurementDisplay()
         if (trackTestSessions) {
@@ -2940,13 +4866,14 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             sampleSequence % MEASUREMENT_CONSUME_LOG_INTERVAL == 0L
         ) {
             appendSystemLog(
-                "[LAYER:MEASUREMENT_CONSUME] seq=$sampleSequence valid=1 distance=$distance weight=$weight ma12=${sample.ma12?.toString() ?: "-"}",
+                "[LAYER:MEASUREMENT_CONSUME] seq=$sampleSequence distance_valid=1 weight_valid=${if (weight != null) 1 else 0} distance=$distance weight=${weight ?: "-"} ma12=${sample.ma12?.toString() ?: "-"}",
             )
         }
         maybeLogMeasurementConsumeSummary(
-            snapshot = validSnapshot,
-            source = "valid_sample",
-            force = sampleSequence == null || validSnapshot.validCount == 1L,
+            snapshot = measurementSnapshot,
+            source = if (completeSample) "valid_sample" else "distance_only_sample",
+            force = sampleSequence == null ||
+                measurementSnapshot.validCount + measurementSnapshot.invalidCount == 1L,
         )
 
         if (_uiState.value.isRecording) {
@@ -3474,6 +5401,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun enableDemoRealtimeStreamIfSupported(capabilities: Event.Capabilities?) {
+        val epoch = client.currentConnectionEpoch ?: return
+        if (_uiState.value.streamSubscriptionConfirmed || profileStreamSubscriptionGate.isPendingFor(epoch)) return
+        _uiState.update { it.copy(streamSubscriptionConfirmed = false, profileDistanceReady = false) }
         if (!isStreamControlSupported(capabilities)) {
             appendSystemLog("[STREAM_CONTROL] skip reason=capability_not_supported")
             appendSystemLog(
@@ -3481,6 +5411,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             )
             return
         }
+        val requestSerial = profileStreamSubscriptionGate.start(epoch)
         viewModelScope.launch {
             runCatching {
                 appendSystemLog("[STREAM_CONTROL] request enabled=true rate_hz=$DEMO_STREAM_RATE_HZ source=connect")
@@ -3489,10 +5420,17 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     rateHz = DEMO_STREAM_RATE_HZ,
                 )
             }.onSuccess { ack ->
-                _uiState.update {
-                    it.copy(
-                        lastAckOrError = ack.raw,
-                    )
+                if (client.currentConnectionEpoch != epoch ||
+                    !profileStreamSubscriptionGate.complete(epoch, requestSerial)
+                ) {
+                    return@onSuccess
+                }
+                val confirmed = ack.enabled && ack.supported && ack.rateHz == DEMO_STREAM_RATE_HZ
+                _uiState.update { it.copy(lastAckOrError = ack.raw,
+                    streamSubscriptionConfirmed = confirmed, profileDistanceReady = false) }
+                if (confirmed && _uiState.value.deviceSensorProfile != SensorProfile.NONE) {
+                    profileDistanceExpiryJob?.cancel()
+                    startProfileDistanceExpiryWatchdog(epoch)
                 }
                 appendSystemLog(
                     "[STREAM_CONTROL] enabled=${ack.enabled} supported=${ack.supported} rate_hz=${ack.rateHz ?: "-"} source=connect",
@@ -3501,6 +5439,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     "[STREAM_SUBSCRIPTION_RESULT] enabled=${ack.enabled} rate_hz=${ack.rateHz ?: "-"} acked=true source=connect supported=${ack.supported}",
                 )
             }.onFailure { throwable ->
+                if (client.currentConnectionEpoch != epoch ||
+                    !profileStreamSubscriptionGate.complete(epoch, requestSerial)
+                ) {
+                    return@onFailure
+                }
+                _uiState.update { it.copy(streamSubscriptionConfirmed = false, profileDistanceReady = false) }
                 appendSystemLog("[STREAM_CONTROL] enable_failed reason=${throwable.message ?: throwable.javaClass.simpleName}")
                 appendSystemLog(
                     "[STREAM_SUBSCRIPTION_RESULT] enabled=false rate_hz=$DEMO_STREAM_RATE_HZ acked=false source=connect reason=${throwable.message ?: throwable.javaClass.simpleName}",
@@ -3564,15 +5508,38 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         return retryProbe ?: firstProbe
     }
 
-    private fun refreshCapabilityAndSnapshot() {
+    private fun refreshCapabilityAndSnapshot(resubscribeStream: Boolean = false) {
         if (!_uiState.value.isConnected) return
+        val epoch = client.currentConnectionEpoch ?: return
+        if (resubscribeStream) {
+            // This capability is stable on this link. Restore the firmware's
+            // reset subscription before the slower CAP retry completes.
+            enableDemoRealtimeStreamIfSupported(lastConnectionCapabilities)
+        }
         viewModelScope.launch {
             val probe = probeCapabilitiesWithRetry(source = "refresh")
+            if (client.currentConnectionEpoch != epoch || !_uiState.value.isConnected) return@launch
+            lastConnectionCapabilities = probe?.capabilities ?: lastConnectionCapabilities
+            if (resubscribeStream && !_uiState.value.streamSubscriptionConfirmed) {
+                enableDemoRealtimeStreamIfSupported(lastConnectionCapabilities)
+            }
+
+            // Only a real current-link ACK:CAP can form the receive-order
+            // fence before the requested post-write SNAPSHOT.
+            if (resubscribeStream && profileSnapshotRefreshGate.needsRequestFor(epoch)) {
+                if (probe?.mode == ProtocolMode.PRIMARY && probe.capabilities != null) {
+                    requestProfileSnapshotRefresh(epoch)
+                } else {
+                    appendSystemLog("[DEVICE_CONFIG] post_write_cap_unverified epoch=$epoch")
+                    _uiState.update { it.copy(deviceConfigStatus = "设备能力回读失败；请重新连接确认") }
+                }
+            }
 
             val nextProtocolMode = mergeProtocolMode(
                 currentMode = _uiState.value.protocolMode,
                 observedMode = probe?.mode,
             )
+            if (resubscribeStream) return@launch
             if (shouldAttemptPrimarySnapshotRefresh(nextProtocolMode)) {
                 requestSnapshotRefresh()
             } else if (_uiState.value.isConnected) {
@@ -3580,6 +5547,30 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 requestSnapshotRefresh(force = true)
             }
         }
+    }
+
+    private fun requestProfileSnapshotRefresh(epoch: Long) {
+        if (client.currentConnectionEpoch != epoch || !profileSnapshotRefreshGate.beginRequest(epoch)) return
+        viewModelScope.launch {
+            runCatching { client.send(Command.SnapshotQuery, expectedEpoch = epoch) }
+                .onSuccess {
+                    if (profileSnapshotRefreshGate.requestCompleted(epoch)) {
+                        completeProfileRuntimeRefresh(epoch)
+                    }
+                }
+                .onFailure { error ->
+                    profileSnapshotRefreshGate.requestFailed(epoch)
+                    appendSystemLog("[DEVICE_CONFIG] post_write_snapshot_send_failed reason=${error.message ?: "UNKNOWN"}")
+                    _uiState.update { it.copy(deviceConfigStatus = "设备状态回读失败；请重新连接确认") }
+                }
+        }
+    }
+
+    private fun completeProfileRuntimeRefresh(epoch: Long) {
+        if (client.currentConnectionEpoch != epoch || !_uiState.value.profileRuntimeRefreshPending) return
+        profileConfigTimeoutJob?.cancel()
+        _uiState.update { it.copy(profileRuntimeRefreshPending = false) }
+        sendCalibrationGetModel()
     }
 
     private fun requestSnapshotRefresh(force: Boolean = false) {
@@ -3605,6 +5596,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun scheduleDeviceConfigWriteWatchdog() {
         pendingDeviceConfigWatchdogJob?.cancel()
+        calibrationCaptureTimeoutJob?.cancel()
+        calibrationZeroTimeoutJob?.cancel()
+        modelWriteTimeoutJob?.cancel()
+        modelReadbackTimeoutJob?.cancel()
         pendingDeviceConfigWatchdogJob = viewModelScope.launch {
             delay(DEVICE_CONFIG_WRITE_CONFIRM_REFRESH_DELAY_MS)
             if (deviceConfigWriteTracker.shouldRefreshConfirmation(_uiState.value.isConnected)) {
@@ -3721,6 +5716,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         return when (reason.uppercase()) {
             "INVALID_MODEL" -> text(R.string.message_invalid_model_values)
             "NON_MONOTONIC" -> text(R.string.write_model_status_non_monotonic)
+            "READBACK_MISMATCH" -> text(R.string.write_model_status_readback_mismatch)
+            "READBACK_NOT_READY" -> text(R.string.write_model_status_readback_not_ready)
+            "READBACK_SEND_FAILED" -> text(R.string.write_model_status_send_failed_reason, "readback")
             "INVALID_PARAM" -> text(R.string.message_invalid_model_values)
             else -> formatNackMessage(reason)
         }
@@ -3729,7 +5727,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private fun describeCaptureUnavailable(state: UiState): String {
         return when {
             !state.isConnected -> text(R.string.capture_unavailable_disconnected)
-            !state.isRecording -> text(R.string.message_capture_requires_recording)
             !isCaptureReferenceValid(state.captureReferenceInput) -> text(R.string.capture_status_invalid_reference)
             !hasCaptureDistanceSnapshot(state) -> text(R.string.capture_unavailable_no_live_distance)
             else -> text(R.string.capture_unavailable_generic)
@@ -3757,7 +5754,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val distance = state.distance
         return distance != null &&
             distance.isFinite() &&
-            state.measurementValid
+            state.distanceValid
     }
 
     private fun hasVisibleCaptureQuality(state: UiState): Boolean {
@@ -4116,6 +6113,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
+        persistSessions()
         stopResult.stoppedSessionId?.let { sessionId ->
             appendSystemLog("[MOTION_SAMPLE] session stopped id=$sessionId rows=${stopResult.stoppedRowCount}")
         }
@@ -4197,10 +6195,24 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        stopMotionSamplingIfActive(text(R.string.motion_sampling_status_stopped_disconnect))
+        persistenceWriteJob?.cancel()
+        runBlocking(Dispatchers.IO) {
+            profileHistoryFlushJobs.toList().joinAll()
+            val remaining = synchronized(inFlightProfileFlushes) { inFlightProfileFlushes.values.toList() }
+            (remaining + listOfNotNull(pendingPersistence)).sortedBy { it.serial }.forEach { pending ->
+                saveProfileSnapshot(pending)
+            }
+        }
+        pendingPersistence = null
+        profileConfigTimeoutJob?.cancel()
+        profileDistanceExpiryJob?.cancel()
+        profileHistoryLoadJob?.cancel()
         streamWatchdogJob?.cancel()
         waveTruthRefreshJob?.cancel()
         liveWaveParamSendJob?.cancel()
         pendingDeviceConfigWatchdogJob?.cancel()
+        emptyModelReadbackTimeoutJob?.cancel()
         runCatching {
             recordingSession?.let { recorder.stopSession(it) }
         }
@@ -4210,8 +6222,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     companion object {
+        private const val CALIBRATION_REQUEST_TIMEOUT_MS = 10_000L
+        private const val PERSISTENCE_DEBOUNCE_MS = 250L
+        private const val PERSISTENCE_MAX_DELAY_MS = 5_000L
         private val NAME_KEYWORDS = listOf("sonicwave", "vibrate")
         private const val NO_STREAM_WARNING_TIMEOUT_MS = 3_000L
+        private const val SETUP_DISTANCE_CONFIRM_SAMPLES = 2
         private const val DEMO_STREAM_RATE_HZ = 10
         private const val DISPLAY_THROTTLE_MS = 125L
         private const val RAW_LOG_PUBLISH_INTERVAL_MS = 200L

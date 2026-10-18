@@ -58,9 +58,18 @@ data class TelemetryPointUi(
     // The live EVT:STREAM distance is exposed in the telemetry UI as "rhythm distance".
     val distance: Float,
     // The live EVT:STREAM weight is the app-side "rhythm weight"/"unstable weight" signal.
-    val unstableWeight: Float,
+    val unstableWeight: Float?,
     val measurementValid: Boolean = true,
+    val distanceValid: Boolean = true,
+    val weightValid: Boolean = unstableWeight?.isFinite() == true,
+    val distanceReason: String? = null,
+    val weightReason: String? = null,
+    val sensorBackend: String? = null,
     val ma12: Float? = null,
+    val maDistance3: Float? = null,
+    val maDistance5: Float? = null,
+    val maDistance7: Float? = null,
+    val maDistance12: Float? = null,
     val stableWeight: Float? = null,
     val ma3: Float? = null,
     val ma5: Float? = null,
@@ -70,10 +79,10 @@ data class TelemetryPointUi(
     val rhythmDistance: Float
         get() = distance
 
-    val rhythmWeight: Float
+    val rhythmWeight: Float?
         get() = unstableWeight
 
-    val weight: Float
+    val weight: Float?
         get() = unstableWeight
 }
 
@@ -81,10 +90,81 @@ data class MeasurementDisplayUiState(
     val distance: Float? = null,
     val weight: Float? = null,
     val ma12: Float? = null,
+    val maDistance12: Float? = null,
     val measurementValid: Boolean = false,
+    val distanceValid: Boolean = false,
+    val weightValid: Boolean = false,
+    val distanceReason: String? = null,
+    val weightReason: String? = null,
+    val sensorBackend: String? = null,
     val lastMeasurementSequence: Long? = null,
     val telemetryPoints: List<TelemetryPointUi> = emptyList(),
 )
+
+enum class EmptyDistanceStatusUi {
+    NOT_SET,
+    PENDING,
+    SET,
+    INVALID,
+    READBACK_MISMATCH,
+}
+
+enum class EmptyDistanceSourceUi {
+    DEVICE_READBACK,
+    USER_SET,
+    LOCAL_ONLY,
+}
+
+/** Only a device readback can establish the distance used by the calibration fit. */
+data class EmptyDistanceState(
+    val status: EmptyDistanceStatusUi = EmptyDistanceStatusUi.NOT_SET,
+    val distanceMm: Float? = null,
+    val toleranceMm: Float? = null,
+    val backend: String? = null,
+    val source: EmptyDistanceSourceUi? = null,
+    val updatedAtMs: Long? = null,
+) {
+    val confirmedDistanceMm: Float?
+        get() = distanceMm?.takeIf {
+            status == EmptyDistanceStatusUi.SET &&
+                source == EmptyDistanceSourceUi.DEVICE_READBACK &&
+                it.isFinite() && it > 0.0f
+        }
+
+    /** A stored value is only a local cache until the ESP32 answers GET again. */
+    fun withoutDeviceConfirmation(): EmptyDistanceState = copy(
+        status = EmptyDistanceStatusUi.NOT_SET,
+        source = distanceMm?.let { EmptyDistanceSourceUi.LOCAL_ONLY },
+    )
+}
+
+enum class WeightModelStatusUi {
+    NOT_SET,
+    PENDING,
+    SET,
+    INVALID,
+    READBACK_MISMATCH,
+}
+
+data class WeightModelState(
+    val status: WeightModelStatusUi = WeightModelStatusUi.NOT_SET,
+    val type: CalibrationModelType? = null,
+    val a: Float? = null,
+    val b: Float? = null,
+    val c: Float? = null,
+    val updatedAtMs: Long? = null,
+) {
+    val c0: Float? get() = a
+    val c1: Float? get() = b
+    val c2: Float? get() = c
+
+    val isDeviceConfirmed: Boolean
+        get() = status == WeightModelStatusUi.SET && type != null &&
+            a?.isFinite() == true && b?.isFinite() == true && c?.isFinite() == true
+
+    /** Prepared coefficients and last known device coefficients are not current device truth. */
+    fun withoutDeviceConfirmation(): WeightModelState = copy(status = WeightModelStatusUi.NOT_SET)
+}
 
 data class RawConsoleUiState(
     val rawLogLines: List<String> = emptyList(),
@@ -102,10 +182,15 @@ data class MotionSamplingRowUi(
     val timestampMs: Long,
     val elapsedMs: Long,
     val distanceMm: Float,
-    val liveWeightKg: Float,
+    val liveWeightKg: Float?,
     val ma12WeightKg: Float? = null,
     val stableWeightKg: Float? = null,
     val measurementValid: Boolean,
+    val distanceValid: Boolean = true,
+    val weightValid: Boolean = liveWeightKg?.isFinite() == true,
+    val distanceReason: String? = null,
+    val weightReason: String? = null,
+    val sensorBackend: String? = null,
     val stableVisible: Boolean,
     val runtimeStateCode: String,
     val waveStateCode: String,
@@ -206,6 +291,7 @@ data class CalibrationModelUi(
     val c0: Float = 0.0f,
     val c1: Float = 1.0f,
     val c2: Float = 0.0f,
+    val ready: Boolean? = null,
     val raw: String = "",
 )
 
@@ -383,6 +469,7 @@ fun UiState.waveStartAvailability(): WaveStartAvailabilityUi {
         isWaveStopPending -> WaveStartAvailabilityUi.STOP_PENDING
         isWaveStartPending -> WaveStartAvailabilityUi.START_PENDING
         waveOutputActive -> WaveStartAvailabilityUi.RUNNING
+        isDeviceConfigWritePending || profileRuntimeRefreshPending -> WaveStartAvailabilityUi.NOT_READY
         !hasValidWaveInputs() -> WaveStartAvailabilityUi.INVALID_PARAMETERS
         leftPlatformBlocked -> WaveStartAvailabilityUi.LEFT_PLATFORM_BLOCKED
         abnormalStopBlocked -> WaveStartAvailabilityUi.ABNORMAL_STOP_BLOCKED
@@ -393,6 +480,13 @@ fun UiState.waveStartAvailability(): WaveStartAvailabilityUi {
 }
 
 fun UiState.canStartWave(): Boolean = waveStartAvailability() == WaveStartAvailabilityUi.READY
+
+/** Device model writes and clears must wait for profile and empty-distance truth. */
+fun UiState.calibrationModelMutationBlocked(): Boolean =
+    isDeviceConfigWritePending || profileRuntimeRefreshPending ||
+        emptyDistance.status == EmptyDistanceStatusUi.PENDING || emptyModelReadbackPending ||
+        weightModel.status == WeightModelStatusUi.PENDING ||
+        writeModelStatus?.kind == WriteModelFeedbackKind.PENDING
 
 internal fun isBaseDeliveryProfile(state: UiState): Boolean {
     return state.devicePlatformModel == PlatformModel.BASE

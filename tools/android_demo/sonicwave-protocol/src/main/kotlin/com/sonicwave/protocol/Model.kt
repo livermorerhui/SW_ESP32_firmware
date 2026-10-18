@@ -3,6 +3,13 @@ package com.sonicwave.protocol
 sealed class Command {
     data object CapabilityQuery : Command()
     data object SnapshotQuery : Command()
+    data object DeviceIdentityQuery : Command()
+    data object DeviceGetConfig : Command()
+    /** Schema-1 configuration; the legacy laser_installed command remains separate. */
+    data class DeviceSetProfileConfig(
+        val platformModel: PlatformModel,
+        val sensorProfile: SensorProfile,
+    ) : Command()
     data class DeviceSetConfig(
         val platformModel: PlatformModel,
         val laserInstalled: Boolean,
@@ -19,6 +26,14 @@ sealed class Command {
     ) : Command()
     data class CalibrationCapture(val referenceWeightKg: Float) : Command()
     data object CalibrationGetModel : Command()
+    /** Independent empty-distance owner; does not touch the weight model. */
+    data object EmptyDistanceGet : Command()
+    /** The ESP32 captures its own current fresh distance; no APP value is sent. */
+    data object EmptyDistanceSetCurrent : Command()
+    data class EmptyDistanceSet(val distanceMm: Float) : Command()
+    data object EmptyDistanceClear : Command()
+    /** Clears only the weight model a/b/c; the independent empty-distance anchor is preserved. */
+    data object CalibrationClearWeightModel : Command()
     data class CalibrationSetModel(
         val type: CalibrationModelType,
         val referenceDistance: Float,
@@ -78,12 +93,50 @@ enum class PlatformModel {
     ULTRA,
 }
 
+/** Stable schema-1 sensor identity, separate from transport backend names. */
+enum class SensorProfile {
+    NONE,
+    J100_485,
+    CYD3S1612_IIC,
+}
+
 enum class MeasurementCarrier {
     FORMAL_EVT_STREAM,
     LEGACY_CSV_FALLBACK,
 }
 
 sealed class Event {
+    data class DeviceIdentity(
+        val id: String,
+        val version: Int,
+        val raw: String,
+    ) : Event()
+    /** Only a fully validated schema-1 ACK may have success=true. */
+    data class ProfileConfigResult(
+        val operation: String,
+        val success: Boolean,
+        val schema: Int?,
+        val platformModel: PlatformModel?,
+        val sensorProfile: SensorProfile?,
+        val laserInstalled: Boolean?,
+        val generation: Long?,
+        val reason: String?,
+        val raw: String,
+    ) : Event()
+    /** Profile-aware D_e reply; legacy EMPTY results use EmptyDistanceResult. */
+    data class ProfileEmptyDistanceResult(
+        val operation: String,
+        val success: Boolean,
+        val status: String?,
+        val distanceMm: Float?,
+        val toleranceMm: Float?,
+        val sensorProfile: SensorProfile?,
+        val generation: Long?,
+        val emptyRevision: Long?,
+        val supported: Boolean?,
+        val reason: String?,
+        val raw: String,
+    ) : Event()
     data class State(val state: DeviceState) : Event()
     data class Snapshot(
         val topState: DeviceState,
@@ -164,6 +217,15 @@ sealed class Event {
         val valid: Boolean,
         val reason: String?,
         val raw: String,
+        // The combined `valid` bit is retained for old firmware and old
+        // clients.  New firmware reports the two measurement qualities
+        // independently so a valid distance is still usable when the weight
+        // model is unavailable.
+        val distanceValid: Boolean = distance?.isFinite() == true,
+        val weightValid: Boolean = weight?.isFinite() == true,
+        val distanceReason: String? = null,
+        val weightReason: String? = null,
+        val sensorBackend: String? = null,
     ) : Event()
     data class CalibrationPoint(
         val index: Int?,
@@ -181,11 +243,36 @@ sealed class Event {
         val c0: Float?,
         val c1: Float?,
         val c2: Float?,
+        val ready: Boolean? = null,
         val raw: String,
     ) : Event()
     data class CalibrationSetModelResult(
         val success: Boolean,
         val type: CalibrationModelType?,
+        val ready: Boolean? = null,
+        val reason: String?,
+        val raw: String,
+    ) : Event()
+    data class CalibrationZeroResult(
+        val success: Boolean,
+        val reason: String?,
+        val raw: String,
+    ) : Event()
+    data class EmptyDistanceResult(
+        val operation: String?,
+        val success: Boolean,
+        val supported: Boolean,
+        val status: String?,
+        val distanceMm: Float?,
+        val toleranceMm: Float?,
+        val backend: String?,
+        val reason: String?,
+        val raw: String,
+    ) : Event()
+    data class WeightModelClearResult(
+        val success: Boolean,
+        val supported: Boolean,
+        val ready: Boolean?,
         val reason: String?,
         val raw: String,
     ) : Event()

@@ -31,7 +31,9 @@ class TelemetryRecorder(private val context: Context) {
     fun appendRow(session: RecordingSession, point: TelemetryPointUi) {
         session.writer.append(
             "${point.measurementSeq ?: ""},${point.deviceTimestampMs ?: ""},${point.timestampMs},${if (point.measurementValid) 1 else 0}," +
-                "${point.distance},${point.unstableWeight},${point.ma12 ?: ""}," +
+                "${if (point.distanceValid) 1 else 0},${if (point.weightValid) 1 else 0}," +
+                "${point.distanceReason ?: ""},${point.weightReason ?: ""},${point.sensorBackend ?: ""}," +
+                "${point.distance},${point.unstableWeight ?: ""},${point.ma12 ?: ""}," +
                 "${point.ma3 ?: ""},${point.ma5 ?: ""},${point.ma7 ?: ""},${point.stableWeight ?: ""},${if (point.stableFlag) 1 else 0}\n",
         )
         session.writer.flush()
@@ -65,7 +67,7 @@ class TelemetryRecorder(private val context: Context) {
         val stream = resolver.openOutputStream(uri)
             ?: error("Failed to open output stream for $uri")
         val writer = BufferedWriter(OutputStreamWriter(stream))
-        writer.append("sampleSeq,deviceTimestampMs,receiveTimestampMs,measurementValid,distance,unstableWeight,ma12,ma3,ma5,ma7,stableWeight,stable\n")
+        writer.append("sampleSeq,deviceTimestampMs,receiveTimestampMs,measurementValid,distanceValid,weightValid,distanceReason,weightReason,sensorBackend,distance,unstableWeight,ma12,ma3,ma5,ma7,stableWeight,stable\n")
         writer.flush()
         return RecordingSession(
             displayName = fileName,
@@ -83,7 +85,7 @@ class TelemetryRecorder(private val context: Context) {
         }
         val file = File(dir, fileName)
         val writer = file.bufferedWriter()
-        writer.append("sampleSeq,deviceTimestampMs,receiveTimestampMs,measurementValid,distance,unstableWeight,ma12,ma3,ma5,ma7,stableWeight,stable\n")
+        writer.append("sampleSeq,deviceTimestampMs,receiveTimestampMs,measurementValid,distanceValid,weightValid,distanceReason,weightReason,sensorBackend,distance,unstableWeight,ma12,ma3,ma5,ma7,stableWeight,stable\n")
         writer.flush()
         return RecordingSession(
             displayName = fileName,

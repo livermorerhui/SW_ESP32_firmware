@@ -9,6 +9,50 @@ enum class PlatformModel : uint8_t {
   ULTRA = 3
 };
 
+// Stable on-wire and persisted sensor identity. Keep these values separate
+// from LaserSensorProfileId, whose older J100-only enum starts at zero.
+enum class SensorProfileId : uint8_t {
+  NONE = 0,
+  J100_485 = 1,
+  CYD3S1612_IIC = 2,
+};
+
+inline const char* sensorProfileName(SensorProfileId profile) {
+  switch (profile) {
+    case SensorProfileId::NONE: return "NONE";
+    case SensorProfileId::J100_485: return "J100_485";
+    case SensorProfileId::CYD3S1612_IIC: return "CYD3S1612_IIC";
+  }
+  return "UNKNOWN";
+}
+
+inline bool isKnownSensorProfile(SensorProfileId profile) {
+  switch (profile) {
+    case SensorProfileId::NONE:
+    case SensorProfileId::J100_485:
+    case SensorProfileId::CYD3S1612_IIC:
+      return true;
+  }
+  return false;
+}
+
+inline bool parseSensorProfile(const String& raw, SensorProfileId& out) {
+  // Schema 1 IDs are exact protocol tokens, not case-insensitive UI labels.
+  if (raw == "NONE") {
+    out = SensorProfileId::NONE;
+    return true;
+  }
+  if (raw == "J100_485") {
+    out = SensorProfileId::J100_485;
+    return true;
+  }
+  if (raw == "CYD3S1612_IIC") {
+    out = SensorProfileId::CYD3S1612_IIC;
+    return true;
+  }
+  return false;
+}
+
 enum class LaserInstallConstraint : uint8_t {
   FORBIDDEN = 0,
   REQUIRED = 1,
@@ -102,6 +146,9 @@ inline bool platformModelImpliesLaserInstalled(PlatformModel model) {
 }
 
 struct DeviceConfigSnapshot {
-  PlatformModel platformModel = PlatformModel::PLUS;
-  bool laserInstalled = true;
+  PlatformModel platformModel = PlatformModel::BASE;
+  bool laserInstalled = false;
+  SensorProfileId sensorProfile = SensorProfileId::NONE;
+  uint32_t generation = 0;
+  bool schema1Managed = false;
 };

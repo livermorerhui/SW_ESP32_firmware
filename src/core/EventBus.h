@@ -42,11 +42,16 @@ struct Event {
   // Formal continuous measurement plane payload.
   uint32_t sampleSeq = 0;
   bool measurementValid = false;
+  bool distanceValid = false;
+  bool weightValid = false;
   bool ma12Ready = false;
   float distance = 0.0f;
   float weightKg = 0.0f;
   float ma12WeightKg = 0.0f;
   char measurementReason[32] = {0};
+  char distanceReason[32] = {0};
+  char weightReason[32] = {0};
+  char sensorBackend[24] = {0};
 };
 
 class EventSink {

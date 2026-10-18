@@ -9,19 +9,26 @@ namespace FirmwareLogPolicy {
 static constexpr uint32_t kBleTxSendSkipLogIntervalMs = 2000UL;
 static constexpr uint32_t kBleTxPressureSnapshotIntervalMs = 2000UL;
 
+struct RateLimitState {
+  uint32_t lastMs = 0;
+  bool initialized = false;
+};
+
 inline bool shouldLogNow(
     uint32_t nowMs,
-    uint32_t& lastLogMs,
+    RateLimitState& state,
     uint32_t intervalMs,
     bool force = false) {
   if (force) {
-    lastLogMs = nowMs;
+    state.lastMs = nowMs;
+    state.initialized = true;
     return true;
   }
-  if (lastLogMs != 0 && nowMs - lastLogMs < intervalMs) {
+  if (state.initialized && nowMs - state.lastMs < intervalMs) {
     return false;
   }
-  lastLogMs = nowMs;
+  state.lastMs = nowMs;
+  state.initialized = true;
   return true;
 }
 

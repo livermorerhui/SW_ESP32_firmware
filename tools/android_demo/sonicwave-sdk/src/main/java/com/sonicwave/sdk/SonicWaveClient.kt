@@ -10,6 +10,7 @@ import com.sonicwave.transport.BleScanResult
 import com.sonicwave.transport.BleTransportConfig
 import com.sonicwave.transport.BluetoothGattTransport
 import com.sonicwave.transport.ConnectionState
+import kotlinx.coroutines.CoroutineStart
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -37,22 +38,28 @@ class SonicWaveClient(
     val connection: StateFlow<ConnectionState> = transport.connection
     val scanResults: StateFlow<List<BleScanResult>> = transport.scanResults
     val rawLines: SharedFlow<String> = transport.incomingLines
+    val rawLinesWithEpoch = transport.incomingStampedLines
     val rawChunks: SharedFlow<String> = transport.incomingRawChunks
     val transportLogs: SharedFlow<String> = transport.transportLogs
+    val currentConnectionEpoch: Long?
+        get() = transport.activeConnectionEpoch
 
     private val _outgoingLines = MutableSharedFlow<String>(extraBufferCapacity = 128)
     val outgoingLines: SharedFlow<String> = _outgoingLines.asSharedFlow()
 
     private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 128)
     val events: SharedFlow<Event> = _events.asSharedFlow()
+    private val _eventsWithEpoch = MutableSharedFlow<StampedEvent>(extraBufferCapacity = 128)
+    val eventsWithEpoch: SharedFlow<StampedEvent> = _eventsWithEpoch.asSharedFlow()
 
     private val _mode = MutableStateFlow(ProtocolMode.UNKNOWN)
     val mode: StateFlow<ProtocolMode> = _mode.asStateFlow()
 
     init {
         scope.launch {
-            transport.incomingLines.collect { line ->
-                val event = ProtocolCodec.decode(line)
+            transport.incomingStampedLines.collect { incoming ->
+                if (!incoming.isFromCurrentRequest(incoming.epoch, currentConnectionEpoch)) return@collect
+                val event = ProtocolCodec.decode(incoming.line)
                 if (event != null) {
                     if (
                         event is Event.Capabilities ||
@@ -61,7 +68,8 @@ class SonicWaveClient(
                     ) {
                         _mode.value = ProtocolMode.PRIMARY
                     }
-                    _events.emit(event)
+                    _eventsWithEpoch.emit(StampedEvent(incoming.epoch, event))
+                    if (currentConnectionEpoch == incoming.epoch) _events.emit(event)
                 }
             }
         }
@@ -88,25 +96,34 @@ class SonicWaveClient(
         transport.disconnect()
     }
 
-    suspend fun send(command: Command) {
+    suspend fun send(command: Command, expectedEpoch: Long? = null) {
         val effectiveCommand = when (_mode.value) {
             ProtocolMode.LEGACY -> command.toLegacyFallback()
             else -> command
         }
         val line = ProtocolCodec.encode(effectiveCommand)
         _outgoingLines.tryEmit(line)
-        transport.writeLine(line)
+        transport.writeLine(line, expectedEpoch = expectedEpoch)
+    }
+
+    private fun requireCurrentConnection(requestEpoch: Long) {
+        if (currentConnectionEpoch != requestEpoch) {
+            throw IllegalStateException("BLE 连接已变化，请重新读取设备状态")
+        }
     }
 
     suspend fun capabilityProbe(timeoutMs: Long = 1_500): CapabilityResult {
+        val requestEpoch = currentConnectionEpoch
+            ?: throw IllegalStateException("BLE 尚未建立当前连接")
         _mode.value = ProtocolMode.UNKNOWN
         return coroutineScope {
             val rawObserved = AtomicBoolean(false)
             val semanticResult = CompletableDeferred<Event?>()
-            val collector = launch {
-                transport.incomingLines.collect { line ->
+            val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+                transport.incomingStampedLines.collect { incoming ->
+                    if (!incoming.isFromCurrentRequest(requestEpoch, currentConnectionEpoch)) return@collect
                     rawObserved.set(true)
-                    val event = ProtocolCodec.decode(line) ?: return@collect
+                    val event = ProtocolCodec.decode(incoming.line) ?: return@collect
                     if (!semanticResult.isCompleted &&
                         (event is Event.Capabilities ||
                             event is Event.Nack ||
@@ -120,9 +137,11 @@ class SonicWaveClient(
             try {
                 val line = ProtocolCodec.encode(Command.CapabilityQuery)
                 _outgoingLines.tryEmit(line)
-                transport.writeLine(line)
+                transport.writeLine(line, expectedEpoch = requestEpoch)
 
-                when (val semanticEvent = withTimeoutOrNull(timeoutMs) { semanticResult.await() }) {
+                val semanticEvent = withTimeoutOrNull(timeoutMs) { semanticResult.await() }
+                requireCurrentConnection(requestEpoch)
+                when (semanticEvent) {
                     is Event.Capabilities -> {
                         _mode.value = ProtocolMode.PRIMARY
                         CapabilityResult(
@@ -173,10 +192,14 @@ class SonicWaveClient(
         enabled: Boolean,
         timeoutMs: Long = 1_500,
     ): Event.FallStopProtection = coroutineScope {
+        val requestEpoch = currentConnectionEpoch
+            ?: throw IllegalStateException("BLE 尚未建立当前连接")
         val semanticResult = CompletableDeferred<Event?>()
-        val collector = launch {
-            transport.incomingLines.collect { line ->
-                val event = ProtocolCodec.decode(line) ?: return@collect
+        val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+            transport.incomingStampedLines.collect { incoming ->
+                if (!incoming.isFromCurrentRequest(requestEpoch, currentConnectionEpoch)) return@collect
+                val event = ProtocolCodec.decode(incoming.line) ?: return@collect
+                if (event is Event.FallStopProtection && event.enabled != enabled) return@collect
                 if (!semanticResult.isCompleted &&
                     (event is Event.FallStopProtection ||
                         event is Event.Nack ||
@@ -188,8 +211,10 @@ class SonicWaveClient(
         }
 
         try {
-            send(Command.FallStopProtectionSet(enabled))
-            when (val event = withTimeoutOrNull(timeoutMs) { semanticResult.await() }) {
+            send(Command.FallStopProtectionSet(enabled), expectedEpoch = requestEpoch)
+            val event = withTimeoutOrNull(timeoutMs) { semanticResult.await() }
+            requireCurrentConnection(requestEpoch)
+            when (event) {
                 is Event.FallStopProtection -> {
                     _mode.value = ProtocolMode.PRIMARY
                     event
@@ -216,10 +241,14 @@ class SonicWaveClient(
         enabled: Boolean,
         timeoutMs: Long = 1_500,
     ): Event.LeaveProtection = coroutineScope {
+        val requestEpoch = currentConnectionEpoch
+            ?: throw IllegalStateException("BLE 尚未建立当前连接")
         val semanticResult = CompletableDeferred<Event?>()
-        val collector = launch {
-            transport.incomingLines.collect { line ->
-                val event = ProtocolCodec.decode(line) ?: return@collect
+        val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+            transport.incomingStampedLines.collect { incoming ->
+                if (!incoming.isFromCurrentRequest(requestEpoch, currentConnectionEpoch)) return@collect
+                val event = ProtocolCodec.decode(incoming.line) ?: return@collect
+                if (event is Event.LeaveProtection && event.enabled != enabled) return@collect
                 if (!semanticResult.isCompleted &&
                     (event is Event.LeaveProtection ||
                         event is Event.Nack ||
@@ -231,8 +260,10 @@ class SonicWaveClient(
         }
 
         try {
-            send(Command.LeaveProtectionSet(enabled))
-            when (val event = withTimeoutOrNull(timeoutMs) { semanticResult.await() }) {
+            send(Command.LeaveProtectionSet(enabled), expectedEpoch = requestEpoch)
+            val event = withTimeoutOrNull(timeoutMs) { semanticResult.await() }
+            requireCurrentConnection(requestEpoch)
+            when (event) {
                 is Event.LeaveProtection -> {
                     _mode.value = ProtocolMode.PRIMARY
                     event
@@ -259,10 +290,14 @@ class SonicWaveClient(
         enabled: Boolean,
         timeoutMs: Long = 1_500,
     ): Event.DegradedStart = coroutineScope {
+        val requestEpoch = currentConnectionEpoch
+            ?: throw IllegalStateException("BLE 尚未建立当前连接")
         val semanticResult = CompletableDeferred<Event?>()
-        val collector = launch {
-            transport.incomingLines.collect { line ->
-                val event = ProtocolCodec.decode(line) ?: return@collect
+        val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+            transport.incomingStampedLines.collect { incoming ->
+                if (!incoming.isFromCurrentRequest(requestEpoch, currentConnectionEpoch)) return@collect
+                val event = ProtocolCodec.decode(incoming.line) ?: return@collect
+                if (event is Event.DegradedStart && event.enabled != enabled) return@collect
                 if (!semanticResult.isCompleted &&
                     (event is Event.DegradedStart ||
                         event is Event.Nack ||
@@ -274,8 +309,10 @@ class SonicWaveClient(
         }
 
         try {
-            send(Command.DegradedStartSet(enabled))
-            when (val event = withTimeoutOrNull(timeoutMs) { semanticResult.await() }) {
+            send(Command.DegradedStartSet(enabled), expectedEpoch = requestEpoch)
+            val event = withTimeoutOrNull(timeoutMs) { semanticResult.await() }
+            requireCurrentConnection(requestEpoch)
+            when (event) {
                 is Event.DegradedStart -> {
                     _mode.value = ProtocolMode.PRIMARY
                     event
@@ -303,10 +340,17 @@ class SonicWaveClient(
         rateHz: Int = 10,
         timeoutMs: Long = 1_500,
     ): Event.StreamSubscription = coroutineScope {
+        val requestEpoch = currentConnectionEpoch
+            ?: throw IllegalStateException("BLE 尚未建立当前连接")
         val semanticResult = CompletableDeferred<Event?>()
-        val collector = launch {
-            transport.incomingLines.collect { line ->
-                val event = ProtocolCodec.decode(line) ?: return@collect
+        val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+            transport.incomingStampedLines.collect { incoming ->
+                if (!incoming.isFromCurrentRequest(requestEpoch, currentConnectionEpoch)) return@collect
+                val event = ProtocolCodec.decode(incoming.line) ?: return@collect
+                if (event is Event.StreamSubscription &&
+                    (event.enabled != enabled || event.supported != true ||
+                        (enabled && event.rateHz != rateHz))
+                ) return@collect
                 if (!semanticResult.isCompleted &&
                     (event is Event.StreamSubscription ||
                         event is Event.Nack ||
@@ -318,9 +362,16 @@ class SonicWaveClient(
         }
 
         try {
-            send(Command.StreamSet(enabled = enabled, rateHz = rateHz))
-            when (val event = withTimeoutOrNull(timeoutMs) { semanticResult.await() }) {
+            send(Command.StreamSet(enabled = enabled, rateHz = rateHz), expectedEpoch = requestEpoch)
+            val event = withTimeoutOrNull(timeoutMs) { semanticResult.await() }
+            requireCurrentConnection(requestEpoch)
+            when (event) {
                 is Event.StreamSubscription -> {
+                    if (event.enabled != enabled || event.supported != true ||
+                        (enabled && event.rateHz != rateHz)
+                    ) {
+                        throw IllegalStateException("STREAM 确认值与请求不一致")
+                    }
                     _mode.value = ProtocolMode.PRIMARY
                     event
                 }

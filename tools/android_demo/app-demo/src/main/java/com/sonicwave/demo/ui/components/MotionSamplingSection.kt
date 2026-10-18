@@ -61,6 +61,7 @@ fun MotionSamplingSection(
 ) {
     val notAvailable = stringResource(R.string.common_not_available)
     val session = uiState.motionSamplingSession
+    val legacySession = uiState.legacyUnattributedSamplingSession
     val rows = session?.rows.orEmpty()
     val rowCount = rows.size
     val latestRow = rows.lastOrNull()
@@ -152,10 +153,14 @@ fun MotionSamplingSection(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            uiState.profileHistoryError?.let { error ->
+                Text(error, color = MaterialTheme.colorScheme.error)
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = actions.onStartSampling,
-                    enabled = !uiState.isMotionSamplingActive,
+                    enabled = !uiState.isMotionSamplingActive &&
+                        uiState.deviceConfigVerified && uiState.profileHistoryReady,
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(stringResource(R.string.action_start_motion_sampling))
@@ -402,6 +407,42 @@ fun MotionSamplingSection(
                 }
             }
 
+            if (legacySession != null) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            RoundedCornerShape(10.dp),
+                        )
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.section_legacy_unattributed_sampling),
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = stringResource(R.string.hint_legacy_unattributed_sampling),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(stringResource(R.string.label_motion_sampling_session_id, legacySession.sessionId))
+                    Text(stringResource(R.string.label_motion_sampling_started_at, formatTimestamp(legacySession.startedAtMs)))
+                    Text(stringResource(R.string.label_motion_sampling_row_count, legacySession.rows.size))
+                    legacySession.rows.takeLast(3).forEach { row ->
+                        Text(
+                            text = stringResource(
+                                R.string.label_legacy_unattributed_sampling_row,
+                                row.elapsedMs / 1000.0,
+                                row.distanceMm.format2(),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+
             Text(
                 text = stringResource(R.string.label_motion_sampling_chart_title),
                 fontWeight = FontWeight.Bold,
@@ -492,7 +533,7 @@ fun MotionSamplingSection(
                         text = stringResource(
                             R.string.label_motion_sampling_last_values_summary,
                             latestRow.distanceMm.format2(),
-                            latestRow.liveWeightKg.format2(),
+                            latestRow.liveWeightKg?.format2() ?: notAvailable,
                             latestRow.stableWeightKg?.format2() ?: notAvailable,
                             safetyEffectLabel(latestRow.safetyStateCode),
                         ),
@@ -776,15 +817,12 @@ private fun MotionSamplingChart(
     rows: List<MotionSamplingRowUi>,
     appliedMaPoints: Int,
     distanceAverageSeries: List<MotionChartPoint>,
-    liveWeightAverageSeries: List<MotionChartPoint>,
+    @Suppress("UNUSED_PARAMETER") liveWeightAverageSeries: List<MotionChartPoint>,
 ) {
     val distanceColor = Color(0xFF0284C7)
-    val weightColor = Color(0xFFC2410C)
     val gridColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
     val distanceRawSeries = rows.map { MotionChartPoint(elapsedMs = it.elapsedMs, value = it.distanceMm) }
-    val liveWeightRawSeries = rows.map { MotionChartPoint(elapsedMs = it.elapsedMs, value = it.liveWeightKg) }
     val distanceRange = motionValueRange((distanceRawSeries + distanceAverageSeries).map { it.value })
-    val weightRange = motionValueRange((liveWeightRawSeries + liveWeightAverageSeries).map { it.value })
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -792,12 +830,6 @@ private fun MotionSamplingChart(
                 label = stringResource(R.string.legend_distance),
                 detail = formatRange(distanceRange.first, distanceRange.second),
                 color = distanceColor,
-                modifier = Modifier.weight(1f),
-            )
-            MotionLegendChip(
-                label = stringResource(R.string.legend_weight),
-                detail = formatRange(weightRange.first, weightRange.second),
-                color = weightColor,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -861,31 +893,6 @@ private fun MotionSamplingChart(
                         style = Stroke(width = 4f),
                     )
 
-                    drawPath(
-                        path = buildMotionPath(
-                            points = liveWeightRawSeries,
-                            width = width,
-                            height = height,
-                            maxElapsed = lastElapsed,
-                            minValue = weightRange.first,
-                            maxValue = weightRange.second,
-                        ),
-                        color = weightColor.copy(alpha = 0.42f),
-                        style = Stroke(width = 2f),
-                    )
-
-                    drawPath(
-                        path = buildMotionPath(
-                            points = liveWeightAverageSeries,
-                            width = width,
-                            height = height,
-                            maxElapsed = lastElapsed,
-                            minValue = weightRange.first,
-                            maxValue = weightRange.second,
-                        ),
-                        color = weightColor,
-                        style = Stroke(width = 4f),
-                    )
                 }
             }
         }
@@ -962,14 +969,14 @@ private fun formatTimestamp(timestampMs: Long): String {
 private fun buildMovingAverageSeries(
     rows: List<MotionSamplingRowUi>,
     pointCount: Int,
-    selector: (MotionSamplingRowUi) -> Float,
+    selector: (MotionSamplingRowUi) -> Float?,
 ): List<MotionChartPoint> {
     if (rows.isEmpty()) return emptyList()
     val windowSize = pointCount.coerceIn(MOTION_MA_MIN_POINTS, MOTION_MA_MAX_POINTS)
     val window = ArrayDeque<Float>(windowSize)
     var runningSum = 0f
-    return rows.map { row ->
-        val value = selector(row)
+    return rows.mapNotNull { row ->
+        val value = selector(row) ?: return@mapNotNull null
         window.addLast(value)
         runningSum += value
         if (window.size > windowSize) {

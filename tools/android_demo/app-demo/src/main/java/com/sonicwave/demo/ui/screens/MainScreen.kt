@@ -53,11 +53,13 @@ import com.sonicwave.demo.ui.components.CalibrationToolsSection
 import com.sonicwave.demo.ui.components.CalibrationToolsActions
 import com.sonicwave.demo.ui.components.DeviceToolsActions
 import com.sonicwave.demo.ui.components.DeviceProfileSection
+import com.sonicwave.demo.ui.components.EmptyDistanceSection
 import com.sonicwave.demo.ui.components.FallStopProtectionSection
 import com.sonicwave.demo.ui.components.MotionSamplingActions
 import com.sonicwave.demo.ui.components.MotionSamplingSection
 import com.sonicwave.demo.ui.components.RawConsoleActions
 import com.sonicwave.demo.ui.components.RawConsoleSection
+import com.sonicwave.demo.ui.components.SensorProfileSection
 import com.sonicwave.demo.ui.components.SystemStatusSection
 import com.sonicwave.demo.ui.components.TelemetryChartSection
 import com.sonicwave.demo.ui.components.TestSessionActions
@@ -65,6 +67,8 @@ import com.sonicwave.demo.ui.components.TestSessionSection
 import com.sonicwave.demo.ui.components.WaveControlActions
 import com.sonicwave.demo.ui.components.WaveControlBottomBar
 import com.sonicwave.transport.BleScanResult
+import com.sonicwave.protocol.PlatformModel
+import com.sonicwave.protocol.SensorProfile
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -94,8 +98,10 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
     }
     val calibrationActions = buildCalibrationToolsActions(
         viewModel = viewModel,
-        onZero = { pendingCalibrationDeviceWrite = PendingCalibrationDeviceWrite.SCALE_ZERO },
-        onCalibrationZero = { pendingCalibrationDeviceWrite = PendingCalibrationDeviceWrite.CAL_ZERO },
+        // The visible calibration action is the product-level parameter reset;
+        // it clears only the weight model and never the independent D_e.
+        onZero = { pendingCalibrationDeviceWrite = PendingCalibrationDeviceWrite.CLEAR_WEIGHT_MODEL },
+        onCalibrationZero = { pendingCalibrationDeviceWrite = PendingCalibrationDeviceWrite.CLEAR_WEIGHT_MODEL },
     )
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions(),
@@ -156,6 +162,8 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
                 DemoMainTab.DEVICE -> DeviceToolsContent(
                     uiState = uiState,
                     actions = deviceToolsActions,
+                    onSensorProfileSelected = viewModel::updateSelectedSensorProfile,
+                    onWriteSensorProfile = viewModel::sendSensorProfileConfig,
                 )
 
                 DemoMainTab.CALIBRATION -> CalibrationToolsSection(
@@ -237,7 +245,7 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
                         pendingCalibrationDeviceWrite = null
                         when (pending) {
                             PendingCalibrationDeviceWrite.SCALE_ZERO -> viewModel.sendZero()
-                            PendingCalibrationDeviceWrite.CAL_ZERO -> viewModel.sendCalibrationZero()
+                            PendingCalibrationDeviceWrite.CLEAR_WEIGHT_MODEL -> viewModel.sendCalibrationClearWeightModel()
                         }
                     },
                 ) {
@@ -269,7 +277,7 @@ private enum class PendingCalibrationDeviceWrite(
         titleRes = R.string.confirm_scale_zero_title,
         messageRes = R.string.confirm_scale_zero_message,
     ),
-    CAL_ZERO(
+    CLEAR_WEIGHT_MODEL(
         titleRes = R.string.confirm_cal_zero_title,
         messageRes = R.string.confirm_cal_zero_message,
     ),
@@ -318,23 +326,39 @@ private fun RunDashboardContent(
 private fun DeviceToolsContent(
     uiState: UiState,
     actions: DeviceToolsActions,
+    onSensorProfileSelected: (SensorProfile) -> Unit,
+    onWriteSensorProfile: () -> Unit,
 ) {
     DeviceProfileSection(
         uiState = uiState,
         onPlatformModelSelected = actions.onPlatformModelSelected,
         onWriteDeviceConfig = actions.onWriteDeviceConfig,
     )
-    FallStopProtectionSection(
-        uiState = uiState,
-        onToggleEnabled = actions.onToggleFallStopEnabled,
-        onToggleLeaveEnabled = actions.onToggleLeaveProtectionEnabled,
-    )
+    if (uiState.devicePlatformModel == PlatformModel.PLUS) {
+        SensorProfileSection(
+            uiState = uiState,
+            onSensorProfileSelected = onSensorProfileSelected,
+            onWriteSensorProfile = onWriteSensorProfile,
+        )
+        EmptyDistanceSection(
+            uiState = uiState,
+            onSetEmptyDistance = actions.onSetEmptyDistance,
+            onClearEmptyDistance = actions.onClearEmptyDistance,
+        )
+        FallStopProtectionSection(
+            uiState = uiState,
+            onToggleEnabled = actions.onToggleFallStopEnabled,
+            onToggleLeaveEnabled = actions.onToggleLeaveProtectionEnabled,
+        )
+    }
 }
 
 private fun buildDeviceToolsActions(viewModel: DemoViewModel): DeviceToolsActions {
     return DeviceToolsActions(
         onPlatformModelSelected = viewModel::updateSelectedPlatformModel,
         onWriteDeviceConfig = viewModel::sendDeviceConfig,
+        onSetEmptyDistance = viewModel::sendEmptyDistanceSet,
+        onClearEmptyDistance = viewModel::sendEmptyDistanceClear,
         onToggleFallStopEnabled = viewModel::setFallStopProtectionEnabled,
         onToggleLeaveProtectionEnabled = viewModel::setLeaveProtectionEnabled,
     )

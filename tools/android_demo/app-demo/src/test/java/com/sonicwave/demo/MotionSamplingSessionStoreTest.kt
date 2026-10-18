@@ -14,6 +14,46 @@ class MotionSamplingSessionStoreTest {
     private val store = MotionSamplingSessionStore()
 
     @Test
+    fun distanceRowRemainsValidWhenWeightIsUnavailable() {
+        val state = UiState(isMotionSamplingActive = true)
+        val started = store.start(
+            state = state,
+            metadata = MotionSamplingStartMetadata(
+                sessionId = "sampling_1",
+                startedAtMs = 1_000L,
+                appVersion = "test",
+            ),
+        )
+        val result = store.appendRow(
+            session = started,
+            state = state,
+            sample = Event.StreamSample(
+                carrier = MeasurementCarrier.FORMAL_EVT_STREAM,
+                sequence = 1L,
+                timestampMs = 10L,
+                distance = 112.56f,
+                weight = null,
+                ma12 = null,
+                ma12Ready = false,
+                valid = false,
+                distanceValid = true,
+                weightValid = false,
+                reason = "WEIGHT_MODEL_UNAVAILABLE",
+                raw = "EVT:STREAM",
+                distanceReason = null,
+                weightReason = "WEIGHT_MODEL_UNAVAILABLE",
+                sensorBackend = "LASER_485",
+            ),
+            nowMs = 1_100L,
+        )
+
+        assertEquals(1, result.session?.rows?.size)
+        assertEquals(true, result.row?.distanceValid)
+        assertEquals(false, result.row?.weightValid)
+        assertEquals(true, result.row?.measurementValid)
+    }
+
+    @Test
     fun startFreezesSessionMetadataFromCurrentState() {
         val session = store.start(
             state = activeReadyState().copy(

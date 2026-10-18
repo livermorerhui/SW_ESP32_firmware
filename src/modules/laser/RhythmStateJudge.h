@@ -40,6 +40,17 @@ struct RhythmStateJudgeInput {
   float distance = 0.0f;
   float weightKg = 0.0f;
   bool sampleValid = false;
+  // Laser installs use distance as the primary state signal. BASE/legacy
+  // paths keep the original weight-based behavior.
+  bool useDistance = false;
+  float distanceSafeBand = 0.01f;
+  float distanceDangerBand = 0.03f;
+  float distanceAdvisoryBand = 0.02f;
+  float distanceNearDangerBand = 0.025f;
+  // Distance-mode fall thresholds use runtime distance units (mm / 100),
+  // rather than the legacy kg/s and kg-drop thresholds.
+  float distanceFallRateThreshold = 0.10f;
+  float distanceMinimumCumulativeDrop = 0.10f;
   bool userPresent = false;
   TopState topState = TopState::IDLE;
 };

@@ -41,17 +41,21 @@ import androidx.compose.ui.unit.dp
 import com.sonicwave.demo.CaptureFeedbackKind
 import com.sonicwave.demo.CaptureFeedbackUi
 import com.sonicwave.demo.CalibrationModelOptionUi
+import com.sonicwave.demo.WeightModelStatusUi
 import com.sonicwave.demo.PreparedCalibrationModelSourceUi
 import com.sonicwave.demo.PreparedCalibrationModelUi
 import com.sonicwave.demo.R
 import com.sonicwave.demo.UiState
 import com.sonicwave.demo.WriteModelFeedbackKind
 import com.sonicwave.demo.WriteModelFeedbackUi
+import com.sonicwave.demo.calibrationModelMutationBlocked
 import com.sonicwave.protocol.CalibrationComparisonResult
 import com.sonicwave.protocol.CalibrationCurvePoint
 import com.sonicwave.protocol.CalibrationFitResult
 import com.sonicwave.protocol.CalibrationModelType
 import java.util.Locale
+import java.text.DateFormat
+import java.util.Date
 import kotlin.math.max
 
 @Composable
@@ -73,6 +77,11 @@ fun CalibrationToolsSection(
             modifier = Modifier.padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            WeightModelSummary(uiState = uiState)
+            uiState.profileHistoryError?.let { error ->
+                Text(error, color = MaterialTheme.colorScheme.error)
+            }
+            SectionDivider()
             SectionTitleRow(
                 title = stringResource(R.string.label_calibration_flow_start),
                 onInfo = { infoTopic = CalibrationInfoTopic.START },
@@ -83,7 +92,9 @@ fun CalibrationToolsSection(
             ) {
                 Button(
                     onClick = actions.commands.onStartRecording,
-                    enabled = uiState.isConnected && !uiState.isRecording,
+                    enabled = uiState.isConnected &&
+                        uiState.sensorBackend?.equals("LASER_485", ignoreCase = true) == true &&
+                        !uiState.isRecording,
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(
@@ -98,11 +109,21 @@ fun CalibrationToolsSection(
                 }
                 OutlinedButton(
                     onClick = actions.commands.onZero,
-                    enabled = uiState.isConnected,
+                    enabled = uiState.isConnected &&
+                        uiState.protocolMode == com.sonicwave.protocol.ProtocolMode.PRIMARY &&
+                        uiState.weightModelClearSupported == true &&
+                        !uiState.calibrationModelMutationBlocked(),
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(stringResource(R.string.action_device_zero))
                 }
+            }
+            if (uiState.weightModelClearSupported != true) {
+                Text(
+                    text = stringResource(R.string.weight_model_clear_protocol_pending),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             if (uiState.isRecording) {
                 OutlinedButton(
@@ -166,6 +187,33 @@ fun CalibrationToolsSection(
             )
             CalibrationPointSummary(uiState = uiState)
             CalibrationPointTable(points = uiState.calibrationPoints)
+            if (uiState.legacyUnattributedCalibrationPoints.isNotEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            RoundedCornerShape(10.dp),
+                        )
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    SectionTitle(stringResource(R.string.section_legacy_unattributed_calibration))
+                    Text(
+                        text = stringResource(R.string.hint_legacy_unattributed_calibration),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = stringResource(
+                            R.string.label_legacy_unattributed_point_count,
+                            uiState.legacyUnattributedCalibrationPoints.size,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    CalibrationPointTable(points = uiState.legacyUnattributedCalibrationPoints)
+                }
+            }
 
             SectionDivider()
             SectionTitle(stringResource(R.string.label_calibration_flow_chart))
@@ -199,7 +247,10 @@ fun CalibrationToolsSection(
             }
             Button(
                 onClick = actions.commands.onSetModel,
-                enabled = uiState.preparedModel != null,
+                enabled = uiState.isConnected &&
+                    uiState.protocolMode == com.sonicwave.protocol.ProtocolMode.PRIMARY &&
+                    uiState.canDeployCalibrationModel &&
+                    !uiState.calibrationModelMutationBlocked(),
                 colors = writeButtonColors,
                 modifier = Modifier.fillMaxWidth(),
             ) {
@@ -208,6 +259,16 @@ fun CalibrationToolsSection(
                         WriteModelFeedbackKind.PENDING -> stringResource(R.string.action_set_model_pending)
                         else -> stringResource(R.string.action_set_model)
                     },
+                )
+            }
+            if (uiState.emptyModelReadbackPending) {
+                Text(
+                    text = stringResource(
+                        if (uiState.emptyModelReadbackNeedsReconnect) R.string.message_model_empty_readback_reconnect
+                        else R.string.message_model_wait_empty_readback,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
@@ -229,7 +290,12 @@ fun CalibrationToolsSection(
                     Button(onClick = actions.commands.onGetModel) {
                         Text(stringResource(R.string.action_get_model))
                     }
-                    Button(onClick = actions.commands.onCalibrationZero) {
+                    Button(
+                        onClick = actions.commands.onCalibrationZero,
+                        enabled = uiState.isConnected &&
+                            uiState.protocolMode == com.sonicwave.protocol.ProtocolMode.PRIMARY &&
+                            uiState.weightModelClearSupported == true,
+                    ) {
                         Text(stringResource(R.string.action_cal_zero))
                     }
                 }
@@ -306,6 +372,70 @@ fun CalibrationToolsSection(
             topic = topic,
             onDismiss = { infoTopic = null },
         )
+    }
+}
+
+@Composable
+private fun WeightModelSummary(uiState: UiState) {
+    val model = uiState.weightModel
+    val statusRes = when (model.status) {
+        WeightModelStatusUi.NOT_SET -> R.string.weight_model_status_unset
+        WeightModelStatusUi.PENDING -> R.string.weight_model_status_pending
+        WeightModelStatusUi.SET -> R.string.weight_model_status_set
+        WeightModelStatusUi.INVALID -> R.string.weight_model_status_invalid
+        WeightModelStatusUi.READBACK_MISMATCH -> R.string.weight_model_status_mismatch
+    }
+    val modelType = when (model.type) {
+        CalibrationModelType.LINEAR -> stringResource(R.string.model_type_linear)
+        CalibrationModelType.QUADRATIC -> stringResource(R.string.model_type_quadratic)
+        null -> stringResource(R.string.common_not_available)
+    }
+    val verified = model.isDeviceConfirmed
+
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = stringResource(R.string.section_weight_calibration),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            text = stringResource(R.string.weight_calibration_supported_sensor),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = stringResource(R.string.weight_model_status, stringResource(statusRes)),
+            fontWeight = FontWeight.SemiBold,
+        )
+        if (verified) {
+            Text(stringResource(R.string.weight_model_type, modelType))
+            Text(
+                text = stringResource(
+                    R.string.weight_model_coefficients,
+                    model.a!!.format6(),
+                    model.b!!.format6(),
+                    model.c!!.format6(),
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            model.updatedAtMs?.let { updatedAt ->
+                Text(
+                    text = stringResource(
+                        R.string.weight_model_updated_at,
+                        DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+                            .format(Date(updatedAt)),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            Text(
+                text = stringResource(R.string.weight_model_unavailable_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -519,7 +649,13 @@ private fun ModelSelectionCard(
 @Composable
 private fun fitStatusLabel(fit: CalibrationFitResult?): String {
     return when {
-        fit?.isAvailable != true -> stringResource(R.string.label_fit_status_insufficient)
+        fit == null -> stringResource(R.string.label_fit_status_insufficient)
+        fit.isAvailable -> stringResource(R.string.label_fit_status_pass)
+        fit.failureReason == "MISSING_EMPTY_ANCHOR" -> stringResource(R.string.label_fit_status_missing_empty_anchor)
+        fit.failureReason == "EMPTY_ANCHOR_CONFLICT" -> stringResource(R.string.label_fit_status_empty_anchor_conflict)
+        fit.failureReason == "DISTANCE_OUT_OF_RANGE" -> stringResource(R.string.label_fit_status_distance_out_of_range)
+        fit.failureReason == "NON_MONOTONIC" -> stringResource(R.string.label_fit_status_non_monotonic)
+        fit.failureReason == "SINGULAR_FIT" -> stringResource(R.string.label_fit_status_singular)
         fit.monotonic == true -> stringResource(R.string.label_fit_status_pass)
         else -> stringResource(R.string.label_fit_status_fail)
     }
@@ -677,9 +813,11 @@ private fun CapturePreconditionChecklist(uiState: UiState) {
         uiState.distance.isFinite() &&
         uiState.weight.isFinite() &&
         uiState.streamWarning == null
+    val j100Selected = uiState.sensorBackend?.equals("LASER_485", ignoreCase = true) == true
     val requiredItems = listOf(
         stringResource(R.string.label_capture_condition_recording) to uiState.isRecording,
         stringResource(R.string.label_capture_condition_connected) to uiState.isConnected,
+        stringResource(R.string.label_capture_condition_j100) to j100Selected,
         stringResource(R.string.label_capture_condition_reference) to referenceValid,
         stringResource(R.string.label_capture_condition_live_distance) to liveDistanceAvailable,
     )
@@ -1213,11 +1351,7 @@ private fun ModelSummaryCard(
             )
         } else {
             Text(
-                text = stringResource(
-                    R.string.label_model_fit_insufficient,
-                    fit.sampleCount,
-                    fit.requiredPointCount,
-                ),
+                text = fitStatusLabel(fit),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

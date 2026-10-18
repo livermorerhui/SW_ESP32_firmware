@@ -18,6 +18,15 @@ public:
       float distance,
       float weight,
       const char* reason);
+  MeasurementPlaneRecordResult record(
+      uint32_t now,
+      bool distanceValid,
+      bool weightValid,
+      float distance,
+      float weight,
+      const char* distanceReason,
+      const char* weightReason,
+      const char* sensorBackend);
   void notePublished(const MeasurementPlaneRecordResult& result);
   void logLatest(const char* trigger);
 
@@ -44,6 +53,8 @@ private:
   const char* lastInvalidEventReason = nullptr;
   bool hasLatestSample = false;
   bool latestSampleValid = false;
+  bool latestDistanceValid = false;
+  bool latestWeightValid = false;
   float latestSampleDistance = 0.0f;
   float latestSampleWeight = 0.0f;
   bool latestSampleMa12Ready = false;

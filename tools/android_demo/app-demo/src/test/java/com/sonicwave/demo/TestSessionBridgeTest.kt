@@ -172,6 +172,38 @@ class TestSessionBridgeTest {
         assertEquals(finished?.sessionId, finishedClear.clearedSessionId)
     }
 
+    @Test
+    fun distanceOnlySampleIsRecordedWhenWeightModelIsUnavailable() {
+        val session = bridge.startSession(
+            freq = 20,
+            intensity = 80,
+            fallStopEnabled = true,
+            signals = SessionCaptureSignals(baselineReady = true),
+        )
+        val sample = bridge.buildSample(
+            session = session,
+            telemetryPoint = TelemetryPointUi(
+                elapsedMs = 10L,
+                timestampMs = 1_010L,
+                distance = 112.56f,
+                unstableWeight = null,
+                measurementValid = false,
+                distanceValid = true,
+                weightValid = false,
+                stableFlag = false,
+            ),
+            signals = SessionCaptureSignals(
+                baselineReady = true,
+                mainState = "BASELINE_READY",
+            ),
+        )
+
+        assertNotNull(sample)
+        assertEquals(112.56f, sample.distance)
+        assertNull(sample.weight)
+        assertFalse(sample.measurementValid)
+    }
+
     private fun sample(
         stableWeight: Float? = null,
         mainState: String = "RUNNING",

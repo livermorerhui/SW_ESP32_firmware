@@ -764,8 +764,8 @@ void test_laser_sensor_profile_wang_wtx_j100_decode_contract() {
   assert(profile.modbus.distanceRegister == 0x0064);
   assert(profile.modbus.distanceRegisterCount == 1);
   assert(profile.decode.signedRaw16);
-  assert(profile.decode.scaleDivisor == 100.0f);
-  assert(profile.decode.offset == 0.0f);
+  assert(profile.decode.scaleDivisor == -10000.0f);
+  assert(profile.decode.offset == 1.0f);
   assert(profile.decode.validMinRaw == -3570);
   assert(profile.decode.validMaxRaw == 3570);
   assert(profile.decode.sentinelOverRangeRaw == 32767);
@@ -774,31 +774,31 @@ void test_laser_sensor_profile_wang_wtx_j100_decode_contract() {
   assert(decoded.validDistance);
   assert(!decoded.sentinel);
   assert(decoded.signedRaw == 0);
-  expect_float_close(decoded.scaledDistance, 0.0f);
+  expect_float_close(decoded.scaledDistance, 1.0f);
   assert(decoded.invalidReason == nullptr);
 
   decoded = decodeLaserDistanceRaw(profile, static_cast<uint16_t>(static_cast<int16_t>(-2200)));
   assert(decoded.validDistance);
   assert(decoded.signedRaw == -2200);
-  expect_float_close(decoded.scaledDistance, -22.0f);
+  expect_float_close(decoded.scaledDistance, 1.22f);
 
   decoded = decodeLaserDistanceRaw(profile, static_cast<uint16_t>(static_cast<int16_t>(-3570)));
   assert(decoded.validDistance);
   assert(!decoded.sentinel);
   assert(decoded.signedRaw == -3570);
-  expect_float_close(decoded.scaledDistance, -35.70f);
+  expect_float_close(decoded.scaledDistance, 1.357f);
   assert(decoded.invalidReason == nullptr);
 
   decoded = decodeLaserDistanceRaw(profile, 3500);
   assert(decoded.validDistance);
   assert(decoded.signedRaw == 3500);
-  expect_float_close(decoded.scaledDistance, 35.0f);
+  expect_float_close(decoded.scaledDistance, 0.65f);
 
   decoded = decodeLaserDistanceRaw(profile, 3570);
   assert(decoded.validDistance);
   assert(!decoded.sentinel);
   assert(decoded.signedRaw == 3570);
-  expect_float_close(decoded.scaledDistance, 35.70f);
+  expect_float_close(decoded.scaledDistance, 0.643f);
   assert(decoded.invalidReason == nullptr);
 
   decoded = decodeLaserDistanceRaw(profile, static_cast<uint16_t>(static_cast<int16_t>(-3571)));
@@ -815,7 +815,7 @@ void test_laser_sensor_profile_wang_wtx_j100_decode_contract() {
   assert(!decoded.validDistance);
   assert(decoded.sentinel);
   expect_reason(decoded.invalidReason, "SENTINEL_OVER_RANGE");
-  expect_float_close(decoded.scaledDistance, 327.67f);
+  expect_float_close(decoded.scaledDistance, -2.2767f);
 }
 
 void test_fall_stop_action_decision() {
@@ -1263,6 +1263,16 @@ void test_protocol_parse_core_commands() {
   assert(ProtocolCodec::parseCommand("WAVE:STOP", command, error));
   assert(command.type == CmdType::WAVE_STOP);
 
+  assert(ProtocolCodec::parseCommand("AUDIO:CUE id=CONNECT", command, error));
+  assert(command.type == CmdType::AUDIO_CUE);
+  assert(command.audioCue.id == AudioCueId::CONNECT);
+  assert(ProtocolCodec::parseCommand("AUDIO:CUE id=DISCONNECT", command, error));
+  assert(command.audioCue.id == AudioCueId::DISCONNECT);
+  assert(!ProtocolCodec::parseCommand("AUDIO:CUE id=UNKNOWN", command, error));
+  expect_reason(error.c_str(), "INVALID_PARAM");
+  assert(!ProtocolCodec::parseCommand("AUDIO:CUE", command, error));
+  expect_reason(error.c_str(), "INVALID_PARAM");
+
   assert(ProtocolCodec::parseCommand("STREAM:SET enabled=1,rate_hz=10", command, error));
   assert(command.type == CmdType::STREAM_SET);
   assert(command.streamSubscription.enabled);
@@ -1284,6 +1294,49 @@ void test_protocol_parse_config_and_safety_commands() {
   Command command{};
   String error;
 
+  assert(ProtocolCodec::parseCommand("DEVICE:GET_CONFIG", command, error));
+  assert(command.type == CmdType::DEVICE_GET_CONFIG);
+  assert(!ProtocolCodec::parseCommand("DEVICE:GET_CONFIG unexpected=1", command, error));
+  expect_reason(error.c_str(), "DEVICE_CONFIG op=GET reason=INVALID_PARAM");
+
+  assert(ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG platform_model=BASE,sensor_profile=NONE", command, error));
+  assert(command.type == CmdType::DEVICE_SET_PROFILE_CONFIG);
+  assert(command.deviceProfileConfig.platformModel == PlatformModel::BASE);
+  assert(command.deviceProfileConfig.sensorProfile == SensorProfileId::NONE);
+
+  assert(ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG sensor_profile=J100_485,platform_model=PLUS", command, error));
+  assert(command.type == CmdType::DEVICE_SET_PROFILE_CONFIG);
+  assert(command.deviceProfileConfig.platformModel == PlatformModel::PLUS);
+  assert(command.deviceProfileConfig.sensorProfile == SensorProfileId::J100_485);
+
+  assert(ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG platform_model=PLUS,sensor_profile=CYD3S1612_IIC", command, error));
+  assert(command.deviceProfileConfig.sensorProfile == SensorProfileId::CYD3S1612_IIC);
+
+  assert(!ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG platform_model=PRO,sensor_profile=NONE", command, error));
+  expect_reason(error.c_str(), "DEVICE_CONFIG op=SET reason=UNSUPPORTED_MODEL");
+  assert(!ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG platform_model=PLUS,sensor_profile=UNKNOWN", command, error));
+  expect_reason(error.c_str(), "DEVICE_CONFIG op=SET reason=UNSUPPORTED_PROFILE");
+  assert(!ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG platform_model=BASE,sensor_profile=J100_485", command, error));
+  expect_reason(error.c_str(), "DEVICE_CONFIG op=SET reason=INVALID_COMBINATION");
+  assert(!ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG platform_model=PLUS,sensor_profile=J100_485,laser_installed=1",
+      command, error));
+  expect_reason(error.c_str(), "DEVICE_CONFIG op=SET reason=INVALID_PARAM");
+  assert(!ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG platform_model=PLUS,sensor_profile=J100_485,sensor_profile=NONE",
+      command, error));
+  expect_reason(error.c_str(), "DEVICE_CONFIG op=SET reason=INVALID_PARAM");
+  assert(!ProtocolCodec::parseCommand(
+      "DEVICE:SET_CONFIG platform_model=PLUS,laser_installed=1,SENSOR_PROFILE=J100_485",
+      command, error));
+  expect_reason(error.c_str(), "DEVICE_CONFIG op=SET reason=INVALID_PARAM");
+
   assert(ProtocolCodec::parseCommand(
       "DEVICE:SET_CONFIG platform_model=PLUS,laser_installed=1",
       command,
@@ -1291,6 +1344,14 @@ void test_protocol_parse_config_and_safety_commands() {
   assert(command.type == CmdType::DEVICE_SET_CONFIG);
   assert(command.deviceConfig.platformModel == PlatformModel::PLUS);
   assert(command.deviceConfig.laserInstalled);
+
+  assert(ProtocolCodec::parseCommand("EMPTY:SET_CURRENT", command, error));
+  assert(command.type == CmdType::EMPTY_DISTANCE_SET_CURRENT);
+  assert(!ProtocolCodec::parseCommand("EMPTY:SET_CURRENT distance_mm=112.55", command, error));
+  expect_reason(error.c_str(), "INVALID_PARAM");
+  assert(ProtocolCodec::parseCommand("EMPTY:SET distance_mm=112.55", command, error));
+  assert(command.type == CmdType::EMPTY_DISTANCE_SET);
+  expect_float_close(command.emptyDistance.distanceMm, 112.55f);
 
   assert(ProtocolCodec::parseCommand("DEBUG:DEGRADED_START enabled=true", command, error));
   assert(command.type == CmdType::DEGRADED_START_SET);
@@ -1486,7 +1547,8 @@ void test_protocol_encode_stream_contract() {
   event.ma12WeightKg = 66.543f;
   encoded = ProtocolCodec::encodeEvent(event);
   expect_contains(encoded, "valid=1");
-  expect_contains(encoded, "distance=12.35");
+  expect_contains(encoded, "distance_mm=1234.50");
+  expect_not_contains(encoded, "distance=");
   expect_contains(encoded, "weight=67.89");
   expect_contains(encoded, "ma12=66.54");
   expect_not_contains(encoded, "reason=");
@@ -1527,10 +1589,10 @@ void test_protocol_encode_stop_and_safety_contract() {
 
 void test_hub_ack_builder_core_contracts() {
   String encoded = HubAckBuilder::cap("1.2.3", "build-1", "sonicwave_esp32s3_n16r8", 1, PlatformModel::PLUS, true);
-  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 build=build-1 board=sonicwave_esp32s3_n16r8 proto=1 platform_model=PLUS laser_installed=1 leave_stop_supported=1 stream_control_supported=1");
+  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 build=build-1 board=sonicwave_esp32s3_n16r8 proto=1 platform_model=PLUS laser_installed=1 leave_stop_supported=1 stream_control_supported=1 cue_supported=1");
 
   encoded = HubAckBuilder::cap("1.2.3", "build-1", "sonicwave_esp32s3_n16r8", 1, PlatformModel::BASE, false);
-  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 build=build-1 board=sonicwave_esp32s3_n16r8 proto=1 platform_model=BASE laser_installed=0 leave_stop_supported=1 stream_control_supported=1");
+  expect_reason(encoded.c_str(), "ACK:CAP fw=1.2.3 build=build-1 board=sonicwave_esp32s3_n16r8 proto=1 platform_model=BASE laser_installed=0 leave_stop_supported=1 stream_control_supported=1 cue_supported=1");
   expect_not_contains(encoded, "measurement_health=");
   expect_not_contains(encoded, "degraded_start_available=");
   expect_not_contains(encoded, "degraded_start_enabled=");
@@ -1542,6 +1604,23 @@ void test_hub_ack_builder_core_contracts() {
 
   encoded = HubAckBuilder::deviceConfig(PlatformModel::PLUS, true);
   expect_reason(encoded.c_str(), "ACK:DEVICE_CONFIG platform_model=PLUS laser_installed=1");
+
+  encoded = HubAckBuilder::deviceProfileConfig(
+      "GET", PlatformModel::BASE, SensorProfileId::NONE, 0);
+  expect_reason(encoded.c_str(),
+      "ACK:DEVICE_CONFIG op=GET schema=1 platform_model=BASE sensor_profile=NONE laser_installed=0 generation=0");
+  assert(encoded.length() + 1 <= ProtocolCodec::kSingleNotifyPayloadBudget);
+
+  encoded = HubAckBuilder::deviceProfileConfig(
+      "SET", PlatformModel::PLUS, SensorProfileId::CYD3S1612_IIC, UINT32_MAX);
+  expect_reason(encoded.c_str(),
+      "ACK:DEVICE_CONFIG op=SET schema=1 platform_model=PLUS sensor_profile=CYD3S1612_IIC laser_installed=1 generation=4294967295");
+  assert(encoded.length() + 1 <= ProtocolCodec::kSingleNotifyPayloadBudget);
+
+  encoded = HubAckBuilder::deviceProfileConfigNack("SET", "INVALID_COMBINATION");
+  expect_reason(encoded.c_str(), "NACK:DEVICE_CONFIG op=SET reason=INVALID_COMBINATION");
+  encoded = HubAckBuilder::deviceProfileConfigNack("GET", "CONFIG_ERROR");
+  expect_reason(encoded.c_str(), "NACK:DEVICE_CONFIG op=GET reason=CONFIG_ERROR");
 
   PlatformSnapshot snapshot{};
   snapshot.degradedStartEnabled = true;
@@ -1641,12 +1720,12 @@ void test_hub_ack_builder_calibration_contracts() {
   encoded = HubAckBuilder::calibrationModel(model);
   expect_reason(
       encoded.c_str(),
-      "ACK:CAL_MODEL type=QUADRATIC ref=10.1235 c0=1.234567 c1=2.345678 c2=3.456789");
+      "ACK:CAL_MODEL type=QUADRATIC ref=10.1235 c0=1.234567 c1=2.345678 c2=3.456789 ready=1");
 
   encoded = HubAckBuilder::calibrationSetModel(model);
   expect_reason(
       encoded.c_str(),
-      "ACK:CAL_SET_MODEL type=QUADRATIC ref=10.1235 c0=1.234567 c1=2.345678 c2=3.456789");
+      "ACK:CAL_SET_MODEL type=QUADRATIC ref=10.1235 c0=1.234567 c1=2.345678 c2=3.456789 ready=1");
 
   encoded = HubAckBuilder::calibrationSetModelRejected(CalibrationModelType::LINEAR, "NON_MONOTONIC");
   expect_reason(encoded.c_str(), "NACK:CAL_SET_MODEL type=LINEAR reason=NON_MONOTONIC");

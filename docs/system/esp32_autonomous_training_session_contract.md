@@ -1,28 +1,31 @@
-# ESP32 Autonomous Training Session Contract
+# ESP32 Autonomous Training Session Contract (Historical Proposal; Not Applicable)
 
-状态：当前正式目标合同，尚未实施
-文档类型：firmware / BLE 合同 / 回归清单
-适用范围：ESP32 主路由的 manual、expert、custom 律动会话执行和对 SW APP 的状态同步
-Owner：ESP32 firmware session runtime
-更新日期：2026-07-18
-真相源：本文、`src/core/SystemStateMachine.*`、`src/core/ProtocolCodec.h`、[SW 主仓跨端合同](../../../SW/docs/system/ESP32自主律动会话执行合同.md)
+状态：历史提案；不代表当前固件合同、产品目标或施工授权
+文档类型：历史 firmware / BLE 架构讨论
+适用范围：仅用于理解曾讨论过的 DEVICE_OWNED_SESSION 方案
+Owner：无当前实现 Owner
+更新日期：2026-10-15（状态标注修正）
+当前产品真相源：[SW APP 与 ESP32 会话执行模型](../../../SW/docs/system/安卓APP与ESP32律动会话执行模型说明.md)
+当前专题施工入口：[手动律动实时调参蓝图](../../../SW/docs/system/安卓APP手动律动实时调参不中断施工蓝图-20261015.md)
 证据源：现有 protocol 代码、[SW 倒计时后台调度审计](../../../SW/reports/task_20260718_android_countdown_background_execution_audit.md)
 
-## 1. Purpose
+> 用户已确认 APP 持有会话生命周期、倒计时和方案步骤调度；APP 下发参数，ESP32执行输出并保留独立安全判断。ESP32不持有律动会话。以下章节仅记录历史方案，不得作为当前固件实现依据或施工授权。
 
-`DEVICE_OWNED_SESSION` makes ESP32 the sole owner of training timing, expert/custom step execution, and countdown-complete output stop. Android/iOS submit plans and render reported facts; neither platform owns the device deadline.
+## 1. Original proposal purpose
 
-Current firmware is still `APP_DRIVEN_SESSION`. This document is a target contract and must be implemented behind an explicit capability/version gate. It must not silently change legacy `WAVE:*`, current `SNAPSHOT?`, safety, or disconnect behavior.
+The historical proposal described DEVICE_OWNED_SESSION as an ESP32-owned training timeline, with Android/iOS submitting plans and rendering device-reported facts.
 
-## 2. Capability and compatibility gate
+The current product contract remains APP_DRIVEN_SESSION: the APP owns session lifecycle, countdown, and plan scheduling; ESP32 executes APP parameters and keeps its independent safety behavior. The historical proposal was not adopted and does not authorize a firmware runtime, capability gate, or protocol change.
 
-New firmware exposes capability fields only after the session runtime is actually available:
+## 2. Historical capability and compatibility gate proposal
+
+The proposal required new firmware to expose capability fields only after a session runtime became available:
 
 ```text
 ACK:CAP ... session_execution_model=DEVICE_OWNED_SESSION session_runtime_version=1 plan_upload_supported=1
 ```
 
-New App behavior is allowed only when all three values are present and supported. Otherwise the App remains on the legacy `APP_DRIVEN_SESSION` path.
+Under that proposal, new App behavior would require all three values to be present and supported. Otherwise the App would remain on the APP_DRIVEN_SESSION path.
 
 ## 3. Plan ownership and validation
 
@@ -125,4 +128,4 @@ No feature is considered delivered before firmware validation, Android/iOS mappe
 
 ## 10. Runtime implementation boundary
 
-The future `TrainingSessionRuntime` owns the accepted plan, current step, scale, deadline, sequence and terminal state. It calculates remaining time from a monotonic `esp_timer_get_time()` deadline rather than accumulating one-second decrements. ESP Timer callbacks remain short and only wake/notify the runtime; wave changes, state-machine calls, hashing and BLE formatting occur in the runtime/control queues. Existing `BleTransport` queues and `FirmwareOtaManager` mbedTLS SHA-256 transaction pattern are reusable evidence, not a reason to alter legacy `WAVE:*` or `SNAPSHOT?` semantics.
+The historical proposal assigned the accepted plan, current step, scale, deadline, sequence and terminal state to a future TrainingSessionRuntime. This description is retained for history only; it is not the current firmware architecture or an implementation instruction.

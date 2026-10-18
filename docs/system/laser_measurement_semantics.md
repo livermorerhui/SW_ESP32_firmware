@@ -1,84 +1,35 @@
-# Laser Measurement Semantics
+# J100-485 当前测量语义与距离换算
 
-## Summary
+状态：按当前工作区代码和随项目保存的 WTX-J 资料复核，2026-09-23。本文记录 J100-485 的当前数据含义；较早的 Laser Audit-1 报告保留当时审计证据，不再作为现行换算规则。
 
-Laser Audit-1 documents the current firmware semantics for the laser path in the live worktree.
+## 当前结论
 
-Current contract:
+J100-485 寄存器输出在固件中按“带符号位移计数”解释；固件再将它换算成传感器到被测目标的物理距离。APP 的 `distance_mm` 是物理距离，不能把寄存器数或有符号位移直接当作真实距离。
 
-- Modbus register `REG_DISTANCE` is read as a 16-bit register
-- firmware keeps both forms:
-  - `uint16_t rawRegister`
-  - `int16_t signedDistanceRaw`
-- runtime distance is derived as `signedDistanceRaw / 100.0`
-- sentinel handling runs before generic range checks
-- valid measurements feed the formal continuous measurement plane:
-  - `distance`
-  - `weight`
-  - `MA12`
-- invalid measurements clear the `MA12` window and emit a formal invalid carrier
-
-## Evidence Levels
-
-Confirmed from code:
-
-- the parser uses `int16_t`
-- the runtime scaling divisor is `100.0`
-- the laser stream path publishes the scaled signed value
-
-Confirmed from repo artifacts:
-
-- the default persisted zero baseline is negative (`-22.0`)
-- protocol documentation includes a negative stream example
-- calibration command examples accept a negative zero distance
-
-Inferred from bench evidence:
-
-- the device display behaves like a signed displacement range centered near zero
-- the observed working display range is approximately `-35.70 .. +35.70`
-- `32767` behaves like an over-range / invalid sentinel rather than a physical measured value
-
-## End-to-End Path
+设 `r` 为 ESP32 将 16 位寄存器解释成有符号整数后的值，单位为计数；当前固件的换算是：
 
 ```text
-Modbus register read
--> rawRegister (uint16_t)
--> signedDistanceRaw (int16_t)
--> sentinel check
--> signed valid-range gate
--> scaled runtime distance = signedDistanceRaw / 100.0
--> calibration/weight evaluation
--> MA12 rolling window (12 valid weight samples)
--> EVT:STREAM seq/ts/valid/distance/weight/ma12
--> stable-state update
--> EVT:STABLE
+位移(mm) = r × 0.01
+真实距离 D(mm) = 100.0 - 位移(mm)
+固件内部距离 = D(mm) × 0.01
 ```
 
-## Corrected Semantics
+例如，`r = -1225`，表示位移 `-12.25 mm`，则真实距离为 `100 - (-12.25) = 112.25 mm`。`EVT:STREAM distance_mm` 由 ESP32 输出真实距离，按毫米保留两位小数。
 
-The live fix made in Laser Audit-1 establishes these rules:
+## 证据与适用边界
 
-- signed negative measurements are not inherently invalid
-- `32767` is treated as a sentinel before generic range classification
-- the valid working window is a signed raw range inferred from the observed device display:
-  - `-3570 .. +3570`
-- rate-limited diagnostics now expose raw, signed, scaled, and sentinel fields for bench confirmation
+- 当前代码：`LaserSensorProfile.cpp` 将原始寄存器转换为 `int16_t`，以 `0.01 mm/count` 得到位移，再按 100 mm 机械中心和负方向换算物理距离；`LaserMeasurementReader.cpp` 保存物理毫米值及内部值；`ProtocolCodec.h` 将内部值乘回 100 后输出 `distance_mm`。
+- 项目内《JD系列485通讯操作流程 V1.0》的示例中，寄存器值 3207 对应传感器显示 32.07，支持 `0.01 mm/count` 的量级。该手册说明 WTX-J 使用 Modbus RTU 输入寄存器读取流程，但没有明确描述负数的编码形式，也没有给出 `-12.25 mm` 到绝对距离的完整换算公式。
+- 项目内《WTX-J系列说明书 V3.0》列出 J100(P) 测量中心 100 mm、测量范围 ±35 mm。固件当前有效原始值范围却是 `-3570..+3570`，对应物理距离 `64.3..135.7 mm`，比手册所列的 `65..135 mm` 更宽。该差异尚未用边界实测和供应商资料解释，不能把 ±35.7 mm 写成已确认的产品规格，也不能在本次逻辑设计中擅自改写硬件门限。
+- 目前“负位移表示目标更远”以及用户提供的 `-12.25 mm → 112.25 mm` 是本项目的既定使用语义；改动原始值编码、符号方向、100 mm 参考中心或有效范围前，应先保留一组原始寄存器、模块显示值、ESP32 `distance_mm` 的同步实测记录。
 
-## Measurement Plane Notes
+## 当前有效性限制
 
-- `LaserModule` is the formal owner of the continuous measurement plane.
-- `RhythmStateJudge` remains the owner of baseline-main evidence, not `MA12`.
-- The firmware now publishes every formal measurement sample in order; BLE no longer uses latest-only stream overwrite.
-- The current internal poll interval is `20ms` in code, so the formal plane is continuous and ordered, but still below the frozen `200Hz` target. That gap remains explicit technical debt.
+- 当前代码先将 `32767` 识别为越量程哨兵，再做有符号计数和物理距离范围校验。
+- `-3570..+3570` 与 `64.3..135.7 mm` 是当前固件门限，不等同于已由手册或计量验证确认的工作边界。
+- 这份测量语义只解决“读数怎样成为真实距离”，不证明空载、站稳、律动、离台或摔倒阈值已经完成验证。
+- J100 律动的正式距离比例规则见[施工蓝图第 13.25 节](./esp32_iic_preserve_all_function施工蓝图.md)；运行中的传感器距离归一化和 16%/28% 状态阈值仍需实现及 J100 实测验收。
 
-## Important Non-Changes
+## 关联历史审计
 
-- the weight model shape was not redesigned
-- stable-state logic was not redesigned
-- calibration workflow was not broadly redesigned
-
-## Remaining Verification
-
-- confirm on hardware that the true valid range is exactly `-35.70 .. +35.70` and not a nearby boundary
-- confirm whether any additional sentinel values exist besides `32767`
-- confirm whether legacy names such as `distanceMm` in calibration capture should be renamed in a future compatibility-managed cleanup
+[Laser Audit-1 测量语义记录](../../reports/laser_audit_1/measurement_semantics.md)与[审计报告](../../reports/laser_audit_1/audit_report.md)保存了较早版本的 signed runtime distance 结论。它们记录的是当时的代码状态与修复背景；若其中 `/100` 被描述为当前真实物理距离，应以本文和当前代码为准。

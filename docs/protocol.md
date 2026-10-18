@@ -32,6 +32,7 @@
 - 示例：
   - 请求：`CAP?`
   - 响应：`ACK:CAP fw=SW-HUB-1.0.0 proto=1`
+- 当前固件还会在能力字段中返回 `cue_supported=1`，表示支持 ESP32 侧连接/断开提示音。连接成功提示音由 ESP32 在有效 BLE_CONNECTED 生命周期事件中本地触发；APP 不再发送连接提示音命令。旧 APP 仍可能发送 `AUDIO:CUE id=CONNECT`，固件保留该入口作为兼容请求，并按当前 session 去重，不会重复播放或影响正常连接和控制。
 - 错误情况：一般无参数错误；若链路异常可能无响应。
 
 ### 2.2 `WAVE:SET`
@@ -40,6 +41,7 @@
 - 参数：
   - `f` / `freq`: 0 ~ 50
   - `i` / `amp`: 0 ~ 120
+- 强度的数字样本、PCM5102A 名义电压和 0.8V 峰值推导见 [ESP32 到 PCM5102A 输出幅值设计说明](audio_output_amplitude_design.md)。
 - 示例：
   - 请求：`WAVE:SET f=40,i=80`
   - 响应：`ACK:OK`
@@ -63,7 +65,14 @@
   - 请求：`WAVE:STOP`
   - 响应：`ACK:OK`
 
-### 2.5 `STREAM:SET`
+### 2.5 `AUDIO:CUE`
+- 格式：`AUDIO:CUE id=CONNECT`
+- 作用：兼容入口，用于请求当前 BLE session 播放一次连接成功提示音。正式连接链路由 ESP32 在有效 BLE_CONNECTED 生命周期事件中本地触发；APP 不再发送该命令。收到旧 APP 的同 session 请求时，固件按 session 去重并返回 `ACCEPTED` 或 `DUPLICATE`。断开提示音由 ESP32 的真实 BLE 断开事件本地触发，不由 APP 发送。
+- 响应：`ACK:AUDIO_CUE id=CONNECT result=ACCEPTED|DUPLICATE`
+- 拒绝：`NACK:AUDIO_CUE id=CONNECT reason=BUSY_WAVE|BUSY_CUE|INVALID`；`DISCONNECT` 仅由固件 BLE 生命周期内部触发，APP 发送时返回 `reason=LOCAL_ONLY`。
+- CUE 与 `WAVE:SET` 的 0~50 Hz、0~120 强度范围无关，也不改变 WAVE 状态。
+
+### 2.6 `STREAM:SET`
 - 格式：`STREAM:SET enabled=<0|1>,rate_hz=<1..20>`
 - 参数：
   - `enabled`: 是否通过 BLE 上行实时 `EVT:STREAM`。
@@ -79,14 +88,14 @@
 - 错误情况：
   - 缺失参数、布尔值无效或 `rate_hz` 越界：`NACK:INVALID_PARAM`
 
-### 2.6 `SCALE:ZERO`
+### 2.7 `SCALE:ZERO`
 - 格式：`SCALE:ZERO`
 - 作用：触发零点校准。
 - 示例：
   - 请求：`SCALE:ZERO`
   - 响应：`ACK:OK`
 
-### 2.7 `SCALE:CAL`
+### 2.8 `SCALE:CAL`
 - 格式：`SCALE:CAL z=<float> k=<float>`
 - 参数：
   - `z`: zeroDistance
@@ -97,6 +106,40 @@
   - 响应：`ACK:OK`
 - 错误情况：
   - 缺失 `z` 或 `k`：`NACK:INVALID_PARAM`
+
+### 2.9 激光校准模型命令
+
+- `CAL:ZERO`
+  - 兼容入口：清空体重模型和运行时体重状态；独立空载距离 `D_e` 不受影响。
+  - 不读取当前距离，也不自动生成 0kg 定点。
+  - 新 Demo APP 的“参数归零”使用 `CAL:CLEAR_WEIGHT_MODEL`，以便明确表达只清除 `a/b/c`。
+- `CAL:CAPTURE w=<referenceWeightKg>`
+  - 作用：由 ESP32 返回当前稳定的物理距离快照。
+  - `w=0` 时只要求距离稳定，作为体重拟合样本；独立空载距离由 `EMPTY:SET` 设置，不由录点隐式写入。
+  - 成功响应：`ACK:CAL_POINT idx=<n> ts=<ms> d_mm=<physicalMm> ref_kg=<kg> pred_kg=<kg> stable=1 valid=1`。
+- `CAL:GET_MODEL`
+  - 成功响应：`ACK:CAL_MODEL type=<LINEAR|QUADRATIC> ref=<runtimeDistance> c0=<...> c1=<...> c2=<...> ready=<0|1>`。
+- `CAL:SET_MODEL type=<LINEAR|QUADRATIC>,ref=<runtimeDistance>,c0=<...>,c1=<...>,c2=<...>`
+  - 固件重复校验有限值、`c2=0` 和选定传感器范围内的单调性。
+  - 必须先由型号页 `EMPTY:SET` 设置并回读独立 `D_e`；`ref` 只用于校验模型坐标，不会反向创建空载距离。
+  - 成功响应：`ACK:CAL_SET_MODEL ... ready=1`；失败响应：`NACK:CAL_SET_MODEL ... reason=<...>`。
+  - Demo APP 收到成功响应后必须再发 `CAL:GET_MODEL`，逐项比对后才显示模型部署成功。
+
+### 2.10 独立空载距离与体重模型清除
+
+- `EMPTY:GET`
+  - 读取独立空载距离、容差和传感器后端。
+  - 示例：`ACK:EMPTY op=GET supported=1 status=SET distance_mm=112.56 tolerance_mm=0.10 backend=LASER_485`。
+- `EMPTY:SET distance_mm=<finite>`
+  - 把用户确认的当前真实距离写入 `D_e`；运行中拒绝。
+  - 成功后必须再用 `EMPTY:GET` 回读确认。
+- `EMPTY:CLEAR`
+  - 清除 `D_e` 及其运行时引用，并使依赖该 `D_e` 的已部署体重模型失效；不清除其他 BLE/波形状态，运行中拒绝。需要保留 `D_e` 时，应使用 `CAL:CLEAR_WEIGHT_MODEL`。
+- `CAL:CLEAR_WEIGHT_MODEL`
+  - 只清除体重模型 `a/b/c`，保留 `D_e`。
+  - 成功响应：`ACK:CAL_CLEAR_WEIGHT_MODEL ready=0`；不支持或失败响应为 `NACK:CAL_CLEAR_WEIGHT_MODEL ...`。
+
+没有 `D_e` 时，距离仍可作为有效测量上报和保存，但固件不应把状态链报告为已就绪；没有体重模型时，`weight_valid=0`，不应把距离改写成无效。
 
 ## 3. Legacy 协议
 
@@ -122,7 +165,9 @@
   - 命令执行成功。
 - `ACK:CAP fw=<ver> proto=<ver>`
   - 能力查询成功返回。
-  - 当前包含 `stream_control_supported=1`，表示设备支持 `STREAM:SET` 显式实时流订阅。
+- 当前包含 `stream_control_supported=1`，表示设备支持 `STREAM:SET` 显式实时流订阅；支持提示音的固件还包含 `cue_supported=1`。
+- `ACK:AUDIO_CUE id=CONNECT result=ACCEPTED|DUPLICATE`
+  - 兼容请求已接受或已在当前 BLE session 播放过；APP 不需要发送该命令。
 - `ACK:STREAM enabled=<0|1> supported=1 rate_hz=<rate>`
   - 实时测量流订阅设置成功。
 - 线上传输示例（含帧结尾）：
@@ -132,6 +177,8 @@
 ### 4.2 NACK
 - `NACK:INVALID_PARAM`
   - 参数缺失、格式错误或越界。
+- `NACK:AUDIO_CUE id=CONNECT reason=BUSY_WAVE|BUSY_CUE|INVALID`（APP 的 `DISCONNECT` 还会返回 `reason=LOCAL_ONLY`）
+  - 提示音请求被拒绝；不影响连接、WAVE 或安全停波主链。
 - `NACK:FAULT_LOCKED`
   - 当前处于故障锁定窗口。
 - 常见补充：
@@ -164,19 +211,21 @@
 ### 5.5 `EVT:STREAM`
 - 正式格式：
   - valid sample:
-    - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=1 ma12_ready=<0|1> distance=<distance> weight=<weightKg> [ma12=<ma12Kg>]`
+    - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=<0|1> distance_valid=1 weight_valid=<0|1> ma12_ready=<0|1> distance=<legacyRuntimeDistance> distance_mm=<physicalMillimetres> [weight=<weightKg>] [ma12=<ma12Kg>] backend=<...>`
   - invalid sample:
-    - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=0 ma12_ready=0 reason=<READ_FAIL|OUT_OF_RANGE_LOW|...>`
+    - `EVT:STREAM seq=<n> ts_ms=<deviceMs> valid=0 distance_valid=0 weight_valid=0 ma12_ready=0 reason=<READ_FAIL|DISTANCE_OUT_OF_RANGE|...> backend=<...>`
 - 含义：measurement plane 的唯一正式 continuous carrier。
 - 说明：
   - 只有当前 BLE session 通过 `STREAM:SET enabled=1` 订阅后，固件才通过 BLE 上行该实时流。
   - stream 订阅关闭时，固件内部测量、baseline、安全判断仍继续运行。
-  - `distance / weight / ma12 / valid / reason / seq` 属于同一 formal sample。
+  - `distance` 保留旧运行时单位，用于兼容既有协议；`distance_mm` 是 ESP32 输出的统一物理毫米字段。Demo APP 只读取并记录 `distance_mm`，不按传感器类型自行换算；缺少该字段时样本视为不完整。
+  - `distance_valid`、`weight_valid`、`distance_reason`、`weight_reason` 和 `backend` 是新增的分离质量字段。距离有效但体重模型未准备时，距离仍可进入 Demo 显示、采样和日志。
+  - `distance / distance_mm / weight / ma12 / valid / reason / seq` 属于同一 formal sample。
   - 裸 CSV `<dist>,<weight>` 仅保留为 legacy/fallback，不再是 primary 协议的正式载体。
 
 常见 uplink 示例（解析前原始帧）：
-- `EVT:STREAM seq=42 ts_ms=1234 valid=1 ma12_ready=1 distance=-22.58 weight=7.42 ma12=7.31\n`
-- `EVT:STREAM seq=43 ts_ms=1260 valid=0 ma12_ready=0 reason=READ_FAIL\n`
+- `EVT:STREAM seq=42 ts_ms=1234 valid=1 distance_valid=1 weight_valid=1 ma12_ready=1 distance=1.12 distance_mm=112.25 weight=0.00 ma12=0.00 backend=LASER_485\n`
+- `EVT:STREAM seq=43 ts_ms=1260 valid=0 distance_valid=0 weight_valid=0 ma12_ready=0 reason=READ_FAIL backend=LASER_485\n`
 - `EVT:STABLE:65.20\n`
 - `EVT:PARAM:-22.00,1.0000\n`
 - `EVT:STATE RUNNING\n`

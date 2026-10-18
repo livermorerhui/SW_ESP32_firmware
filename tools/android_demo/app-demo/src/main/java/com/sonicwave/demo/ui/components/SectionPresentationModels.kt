@@ -44,6 +44,8 @@ data class MotionSamplingActions(
 data class DeviceToolsActions(
     val onPlatformModelSelected: (PlatformModel) -> Unit,
     val onWriteDeviceConfig: () -> Unit,
+    val onSetEmptyDistance: () -> Unit,
+    val onClearEmptyDistance: () -> Unit,
     val onToggleFallStopEnabled: (Boolean) -> Unit,
     val onToggleLeaveProtectionEnabled: (Boolean) -> Unit,
 )

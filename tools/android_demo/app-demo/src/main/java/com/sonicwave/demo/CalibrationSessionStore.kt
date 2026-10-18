@@ -5,16 +5,189 @@ import com.sonicwave.protocol.CalibrationComparisonResult
 import com.sonicwave.protocol.CalibrationFitResult
 import com.sonicwave.protocol.CalibrationFitSample
 import com.sonicwave.protocol.CalibrationModelType
+import com.sonicwave.protocol.calibrationDistanceRangeForBackend
+import com.sonicwave.protocol.calibrationEmptyDistanceToleranceForBackend
+import kotlin.math.abs
 
 internal class CalibrationSessionStore {
-    fun withCaptureAvailability(state: UiState): UiState {
+    fun markEmptyDistancePending(
+        state: UiState,
+        distanceMm: Float?,
+        backend: String?,
+        toleranceMm: Float?,
+        nowMs: Long,
+    ): UiState {
+        val validDistance = distanceMm?.takeIf { it.isFinite() && it > 0.0f }
         return state.copy(
-            canCaptureCalibrationPoint = state.isConnected &&
-                state.isRecording &&
-                isCaptureReferenceValid(state.captureReferenceInput) &&
-                hasCaptureDistanceSnapshot(state),
+            emptyDistance = EmptyDistanceState(
+                status = if (validDistance == null) EmptyDistanceStatusUi.INVALID else EmptyDistanceStatusUi.PENDING,
+                distanceMm = validDistance,
+                toleranceMm = toleranceMm?.takeIf { it.isFinite() && it >= 0.0f },
+                backend = backend,
+                source = EmptyDistanceSourceUi.USER_SET,
+                updatedAtMs = nowMs,
+            ),
         )
     }
+
+    fun markEmptyDistanceReadback(
+        state: UiState,
+        distanceMm: Float?,
+        backend: String?,
+        toleranceMm: Float?,
+        nowMs: Long,
+    ): UiState {
+        val validDistance = distanceMm?.takeIf { it.isFinite() && it > 0.0f }
+        return state.copy(
+            emptyDistance = EmptyDistanceState(
+                status = if (validDistance == null) EmptyDistanceStatusUi.INVALID else EmptyDistanceStatusUi.SET,
+                distanceMm = validDistance,
+                toleranceMm = toleranceMm?.takeIf { it.isFinite() && it >= 0.0f },
+                backend = backend,
+                source = EmptyDistanceSourceUi.DEVICE_READBACK.takeIf { validDistance != null },
+                updatedAtMs = nowMs,
+            ),
+        )
+    }
+
+    /** A requested EMPTY mutation may have reached the ESP32 even if its reply is lost. */
+    fun markModelUnverifiedForEmptyMutation(state: UiState): UiState = state.copy(
+        latestModel = null,
+        weightModel = if (state.weightModel.isDeviceConfirmed ||
+            state.weightModel.status == WeightModelStatusUi.INVALID
+        ) {
+            state.weightModel.copy(status = WeightModelStatusUi.INVALID)
+        } else {
+            WeightModelState()
+        },
+        preparedModel = null,
+        canDeployCalibrationModel = false,
+        writeModelStatus = null,
+        emptyModelReadbackPending = true,
+        emptyModelReadbackNeedsReconnect = false,
+    )
+
+    /** EMPTY:GET failed, so no model reply can establish this link's new empty revision. */
+    fun markEmptyVerificationNeedsReconnect(state: UiState): UiState =
+        markModelUnverifiedForEmptyMutation(state).copy(emptyModelReadbackNeedsReconnect = true)
+
+    /** A matched SET_CURRENT/CLEAR readback revokes the old model, even for the same D_e. */
+    fun applyProfileEmptyReadback(
+        state: UiState,
+        emptyDistance: EmptyDistanceState,
+        revision: Long,
+        raw: String,
+        modelInvalidated: Boolean,
+    ): UiState {
+        val readback = state.copy(
+            emptyDistance = emptyDistance,
+            deviceEmptyRevision = revision,
+            emptyDistanceControlSupported = true,
+            lastAckOrError = raw,
+        )
+        return if (modelInvalidated) {
+            rebuildComparison(readback.copy(
+                latestModel = null,
+                weightModel = WeightModelState(),
+                preparedModel = null,
+                writeModelStatus = null,
+                emptyModelReadbackPending = true,
+                emptyModelReadbackNeedsReconnect = false,
+            ))
+        } else {
+            readback
+        }
+    }
+
+    fun clearEmptyDistance(state: UiState): UiState = state.copy(
+        emptyDistance = EmptyDistanceState(),
+    )
+
+    fun invalidateEmptyDistanceForBackend(state: UiState, backend: String?): UiState {
+        val current = state.emptyDistance
+        if (backend.isNullOrBlank() || current.backend.isNullOrBlank() ||
+            current.backend.equals(backend, ignoreCase = true)
+        ) {
+            return state
+        }
+        return state.copy(
+            emptyDistance = current.copy(
+                status = EmptyDistanceStatusUi.NOT_SET,
+                backend = backend,
+                source = current.distanceMm?.let { EmptyDistanceSourceUi.LOCAL_ONLY },
+            ),
+        )
+    }
+
+    fun markEmptyDistanceReadbackMismatch(state: UiState, nowMs: Long): UiState = state.copy(
+        emptyDistance = state.emptyDistance.copy(
+            status = EmptyDistanceStatusUi.READBACK_MISMATCH,
+            updatedAtMs = nowMs,
+        ),
+    )
+
+    fun markWeightModelPending(state: UiState, model: PreparedCalibrationModelUi, nowMs: Long): UiState =
+        state.copy(
+            weightModel = WeightModelState(
+                status = WeightModelStatusUi.PENDING,
+                type = model.type,
+                a = model.c0,
+                b = model.c1,
+                c = model.c2,
+                updatedAtMs = nowMs,
+            ),
+        )
+
+    fun markWeightModelReadback(
+        state: UiState,
+        model: PreparedCalibrationModelUi?,
+        ready: Boolean,
+        nowMs: Long,
+    ): UiState = state.copy(
+        weightModel = if (model == null || !ready) {
+            WeightModelState(
+                status = if (model == null) WeightModelStatusUi.NOT_SET else WeightModelStatusUi.INVALID,
+                type = model?.type,
+                a = model?.c0,
+                b = model?.c1,
+                c = model?.c2,
+                updatedAtMs = nowMs,
+            )
+        } else {
+            WeightModelState(
+                status = WeightModelStatusUi.SET,
+                type = model.type,
+                a = model.c0,
+                b = model.c1,
+                c = model.c2,
+                updatedAtMs = nowMs,
+            )
+        },
+    )
+
+    fun markWeightModelReadbackMismatch(state: UiState, nowMs: Long): UiState = state.copy(
+        weightModel = state.weightModel.copy(
+            status = WeightModelStatusUi.READBACK_MISMATCH,
+            updatedAtMs = nowMs,
+        ),
+    )
+
+    fun clearWeightModel(state: UiState): UiState = state.copy(
+        weightModel = WeightModelState(),
+    )
+
+    fun withCaptureAvailability(state: UiState): UiState {
+        return state.copy(
+            canCaptureCalibrationPoint = captureAvailable(state),
+        )
+    }
+
+    private fun captureAvailable(state: UiState): Boolean =
+        state.isConnected && state.deviceConfigVerified && state.profileHistoryReady &&
+            state.isRecording &&
+            state.sensorBackend?.equals("LASER_485", ignoreCase = true) == true &&
+            isCaptureReferenceValid(state.captureReferenceInput) &&
+            hasCaptureDistanceSnapshot(state)
 
     fun reset(state: UiState): UiState {
         return synchronizeModelSelectionUi(
@@ -23,6 +196,7 @@ internal class CalibrationSessionStore {
                     latestCalibrationPoint = null,
                     calibrationPoints = emptyList(),
                     comparisonResult = null,
+                    latestModel = null,
                     selectedComparisonModel = state.modelType,
                     captureStatus = null,
                     writeModelStatus = null,
@@ -101,12 +275,21 @@ internal class CalibrationSessionStore {
                 comparisonResult = if (samples.isEmpty()) {
                     null
                 } else {
-                    CalibrationComparisonEngine.compare(samples)
+                    CalibrationComparisonEngine.compare(
+                        samples = samples,
+                        // Passing NaN deliberately blocks the protocol engine's legacy
+                        // "infer anchor from 0 kg point" fallback. A fit may use only
+                        // the independently confirmed device empty distance.
+                        emptyDistanceMm = emptyDistanceMm(state) ?: Float.NaN,
+                        emptyDistanceToleranceMm = calibrationEmptyDistanceToleranceForBackend(
+                            state.sensorBackend,
+                        ),
+                        validationDistanceRangeMm = calibrationDistanceRangeForBackend(
+                            state.sensorBackend,
+                        ),
+                    )
                 },
-                canCaptureCalibrationPoint = state.isConnected &&
-                    state.isRecording &&
-                    isCaptureReferenceValid(state.captureReferenceInput) &&
-                    hasCaptureDistanceSnapshot(state),
+                canCaptureCalibrationPoint = captureAvailable(state),
             ),
         )
     }
@@ -161,7 +344,11 @@ internal class CalibrationSessionStore {
     }
 
     fun synchronizeModelSelectionUi(state: UiState): UiState {
+        val deployable = state.preparedModel?.let { model ->
+            canDeployModel(state, model)
+        } == true
         return state.copy(
+            canDeployCalibrationModel = deployable,
             modelOptions = SUPPORTED_CALIBRATION_MODEL_TYPES.map { type ->
                 CalibrationModelOptionUi(
                     type = type,
@@ -204,11 +391,27 @@ internal class CalibrationSessionStore {
         }
     }
 
+    /** A 0 kg calibration sample does not set the device's empty-distance anchor. */
+    fun emptyDistanceMm(state: UiState): Float? {
+        return state.emptyDistance.confirmedDistanceMm
+    }
+
+    fun canDeployModel(state: UiState, model: PreparedCalibrationModelUi): Boolean {
+        if (!state.sensorBackend.equals("LASER_485", ignoreCase = true)) return false
+        val emptyDistance = emptyDistanceMm(state) ?: return false
+        val expectedReference = emptyDistance / 100.0f
+        val referenceMatches = abs(model.referenceDistance - expectedReference) <=
+            calibrationEmptyDistanceToleranceForBackend(state.sensorBackend) / 100.0f
+        val fixedIntercept = abs(model.c2) <= 0.0001f
+        val fit = fitForType(state.comparisonResult, model.type)
+        return referenceMatches && fixedIntercept && fit?.isAvailable == true
+    }
+
     private fun isCaptureReferenceValid(input: String): Boolean {
         return input.toFloatOrNull()?.let { it >= 0.0f } == true
     }
 
     private fun hasCaptureDistanceSnapshot(state: UiState): Boolean {
-        return state.distance?.isFinite() == true
+        return state.distanceValid && state.distance?.isFinite() == true
     }
 }

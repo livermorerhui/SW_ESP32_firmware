@@ -60,24 +60,15 @@ fun TelemetryChartSection(
     stableWeightActive: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    var showStableWeight by rememberSaveable { mutableStateOf(true) }
-    // Test operators mostly focus on the stable baseline plus MA overlays first,
-    // so the noisier live rhythm channels start hidden until explicitly enabled.
-    var showRhythmDistance by rememberSaveable { mutableStateOf(false) }
-    var showRhythmWeight by rememberSaveable { mutableStateOf(false) }
+    // Distance is the only primary chart axis. Weight remains a reference value
+    // in the summary and is never mixed into the millimetre chart scale.
+    var showRhythmDistance by rememberSaveable { mutableStateOf(true) }
     var showMa12 by rememberSaveable { mutableStateOf(true) }
-    var showMa3 by rememberSaveable { mutableStateOf(true) }
-    var showMa5 by rememberSaveable { mutableStateOf(true) }
-    var showMa7 by rememberSaveable { mutableStateOf(true) }
+    var showMa3 by rememberSaveable { mutableStateOf(false) }
+    var showMa5 by rememberSaveable { mutableStateOf(false) }
+    var showMa7 by rememberSaveable { mutableStateOf(false) }
     var showChartSettings by rememberSaveable { mutableStateOf(false) }
 
-    val stableWeightSeries = TelemetrySeriesDefinition(
-        labelRes = R.string.legend_stable_weight,
-        color = Color(0xFF15803D),
-        unit = TelemetryUnit.KG,
-        strokeWidth = 2.8f,
-        selector = { it.stableWeight },
-    )
     val rhythmDistanceSeries = TelemetrySeriesDefinition(
         labelRes = R.string.legend_rhythm_distance,
         color = Color(0xFF0284C7),
@@ -85,56 +76,50 @@ fun TelemetryChartSection(
         strokeWidth = 3.2f,
         selector = { it.rhythmDistance },
     )
-    val rhythmWeightSeries = TelemetrySeriesDefinition(
-        labelRes = R.string.legend_rhythm_weight,
-        color = Color(0xFFC2410C),
-        unit = TelemetryUnit.KG,
-        strokeWidth = 3.2f,
-        selector = { it.rhythmWeight },
-    )
     val ma12Series = TelemetrySeriesDefinition(
-        labelRes = R.string.legend_ma12,
+        labelRes = R.string.legend_distance_ma12,
         color = Color(0xFF7C3AED),
-        unit = TelemetryUnit.KG,
+        unit = TelemetryUnit.MM,
         strokeWidth = 2.8f,
-        selector = { it.ma12 },
+        selector = { it.maDistance12 },
     )
     val ma3Series = TelemetrySeriesDefinition(
-        labelRes = R.string.legend_ma3,
+        labelRes = R.string.legend_distance_ma3,
         color = Color(0xFFEA580C),
-        unit = TelemetryUnit.KG,
+        unit = TelemetryUnit.MM,
         strokeWidth = 2.4f,
-        selector = { it.ma3 },
+        selector = { it.maDistance3 },
     )
     val ma5Series = TelemetrySeriesDefinition(
-        labelRes = R.string.legend_ma5,
+        labelRes = R.string.legend_distance_ma5,
         color = Color(0xFFDC2626),
-        unit = TelemetryUnit.KG,
+        unit = TelemetryUnit.MM,
         strokeWidth = 2.4f,
-        selector = { it.ma5 },
+        selector = { it.maDistance5 },
     )
     val ma7Series = TelemetrySeriesDefinition(
-        labelRes = R.string.legend_ma7,
+        labelRes = R.string.legend_distance_ma7,
         color = Color(0xFF0F766E),
-        unit = TelemetryUnit.KG,
+        unit = TelemetryUnit.MM,
         strokeWidth = 2.4f,
-        selector = { it.ma7 },
+        selector = { it.maDistance7 },
     )
 
-    // Keep the stable-weight box bound to the active baseline latch so it stays
-    // visible through vibration, but clears as soon as leave-platform semantics
-    // explicitly clear the current baseline in view-model state.
     val rhythmDistanceSummary = TelemetrySummaryDefinition(
         series = rhythmDistanceSeries,
         latestValue = telemetryPoints.lastNotNullOfOrNull(rhythmDistanceSeries.selector),
     )
-    val rhythmWeightSummary = TelemetrySummaryDefinition(
-        series = rhythmWeightSeries,
-        latestValue = telemetryPoints.lastNotNullOfOrNull(rhythmWeightSeries.selector),
+    val weightReferenceSeries = TelemetrySeriesDefinition(
+        labelRes = R.string.legend_weight_reference,
+        color = Color(0xFF15803D),
+        unit = TelemetryUnit.KG,
+        strokeWidth = 2.8f,
+        selector = { it.stableWeight ?: it.rhythmWeight },
     )
-    val stableWeightSummary = TelemetrySummaryDefinition(
-        series = stableWeightSeries,
-        latestValue = stableWeight.takeIf { stableWeightActive },
+    val weightReferenceSummary = TelemetrySummaryDefinition(
+        series = weightReferenceSeries,
+        latestValue = stableWeight.takeIf { stableWeightActive }
+            ?: telemetryPoints.lastNotNullOfOrNull(weightReferenceSeries.selector),
         showsWindow = false,
     )
     val ma12Summary = TelemetrySummaryDefinition(
@@ -154,16 +139,14 @@ fun TelemetryChartSection(
         latestValue = telemetryPoints.lastNotNullOfOrNull(ma7Series.selector),
     )
     val summaryRows = listOf(
-        listOf(rhythmDistanceSummary, rhythmWeightSummary),
-        listOf(stableWeightSummary, ma12Summary),
+        listOf(rhythmDistanceSummary, ma12Summary),
         listOf(ma3Summary, ma5Summary),
-        listOf(ma7Summary),
+        listOf(ma7Summary, weightReferenceSummary),
     )
 
     val showDistanceFamily = showRhythmDistance
-    val visibleWeightSeries = buildList {
-        if (showStableWeight) add(stableWeightSeries)
-        if (showRhythmWeight) add(rhythmWeightSeries)
+    val visibleDistanceSeries = buildList {
+        if (showRhythmDistance) add(rhythmDistanceSeries)
         if (showMa12) add(ma12Series)
         if (showMa3) add(ma3Series)
         if (showMa5) add(ma5Series)
@@ -171,9 +154,8 @@ fun TelemetryChartSection(
     }
 
     val gridColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
-    val distanceRange = valueRange(telemetryPoints.mapNotNull(rhythmDistanceSeries.selector))
-    val weightRange = valueRange(
-        visibleWeightSeries.flatMap { series ->
+    val distanceRange = valueRange(
+        visibleDistanceSeries.flatMap { series ->
             telemetryPoints.mapNotNull(series.selector)
         },
     )
@@ -211,19 +193,9 @@ fun TelemetryChartSection(
                     OverlayChipRow(
                         chips = listOf(
                             OverlayChipUi(
-                                label = stringResource(stableWeightSeries.labelRes),
-                                selected = showStableWeight,
-                                onClick = { showStableWeight = !showStableWeight },
-                            ),
-                            OverlayChipUi(
                                 label = stringResource(rhythmDistanceSeries.labelRes),
                                 selected = showRhythmDistance,
                                 onClick = { showRhythmDistance = !showRhythmDistance },
-                            ),
-                            OverlayChipUi(
-                                label = stringResource(rhythmWeightSeries.labelRes),
-                                selected = showRhythmWeight,
-                                onClick = { showRhythmWeight = !showRhythmWeight },
                             ),
                         ),
                     )
@@ -307,7 +279,8 @@ fun TelemetryChartSection(
                             )
                         }
 
-                        visibleWeightSeries.forEach { series ->
+                        visibleDistanceSeries.forEach { series ->
+                            if (series === rhythmDistanceSeries) return@forEach
                             drawPath(
                                 path = buildPath(
                                     points = telemetryPoints,
@@ -316,8 +289,8 @@ fun TelemetryChartSection(
                                     domainStartTimestampMs = domainStartTimestampMs,
                                     domainEndTimestampMs = domainEndTimestampMs,
                                     selector = series.selector,
-                                    minValue = weightRange.first,
-                                    maxValue = weightRange.second,
+                                    minValue = distanceRange.first,
+                                    maxValue = distanceRange.second,
                                 ),
                                 color = series.color,
                                 style = Stroke(width = series.strokeWidth),

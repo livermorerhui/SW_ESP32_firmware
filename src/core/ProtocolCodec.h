@@ -1,11 +1,14 @@
 #pragma once
+#include <ctype.h>
 #include <errno.h>
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 #include "CommandBus.h"
 #include "EventBus.h"
 #include "PlatformSnapshot.h"
 #include "config/GlobalConfig.h"
+#include "core/VerboseSerial.h"
 
 class ProtocolCodec {
 public:
@@ -28,7 +31,7 @@ public:
                                                    size_t budgetBytes,
                                                    const String& payload) {
     if (framedLen <= budgetBytes) return;
-    Serial.printf(
+    SW_VERBOSE_SERIAL_PRINTF(
         "[PROTO] warn=%s_budget_exceeded framed_len=%u budget=%u payload=%s\n",
         frameKind,
         static_cast<unsigned>(framedLen),
@@ -113,6 +116,23 @@ public:
     return true;
   }
 
+  static bool containsAsciiIgnoreCase(const String& text, const char* needle) {
+    if (!needle) return false;
+    const size_t needleLen = strlen(needle);
+    if (needleLen == 0 || needleLen > text.length()) return false;
+    const char* haystack = text.c_str();
+    for (size_t start = 0; start + needleLen <= text.length(); ++start) {
+      size_t matched = 0;
+      while (matched < needleLen &&
+          tolower(static_cast<unsigned char>(haystack[start + matched])) ==
+              tolower(static_cast<unsigned char>(needle[matched]))) {
+        ++matched;
+      }
+      if (matched == needleLen) return true;
+    }
+    return false;
+  }
+
   // 返回 true = 成功解析
   static bool parseCommand(const String& in, Command& out, String& err) {
     String s = in; s.trim();
@@ -162,6 +182,94 @@ public:
     }
     if (s.equalsIgnoreCase("DEVICE:SECURITY?")) {
       out.type = CmdType::DEVICE_SECURITY_QUERY;
+      return true;
+    }
+    // Keep this exact query ahead of the legacy F/I/E substring parser below:
+    // DEVICE:GET_CONFIG contains "E:" and would otherwise be mistaken for a
+    // legacy wave command.
+    if (s.equalsIgnoreCase("DEVICE:GET_CONFIG")) {
+      out.type = CmdType::DEVICE_GET_CONFIG;
+      return true;
+    }
+    if (s.startsWith("DEVICE:GET_CONFIG")) {
+      err = "DEVICE_CONFIG op=GET reason=INVALID_PARAM";
+      return false;
+    }
+    if (s.startsWith("DEVICE:SET_CONFIG ") &&
+        containsAsciiIgnoreCase(s, "sensor_profile")) {
+      // Profile-aware SET has exactly two named fields. The old SET parser
+      // intentionally remains separate so laser_installed cannot act as an
+      // implicit sensor selection. Reject duplicate/unknown fields instead of
+      // allowing a misleading ACK after ignoring part of the request.
+      const String prefix = "DEVICE:SET_CONFIG ";
+      String params = s.substring(prefix.length());
+      String modelRaw;
+      String profileRaw;
+      bool seenModel = false;
+      bool seenProfile = false;
+      int fieldCount = 0;
+
+      while (params.length() > 0) {
+        const int comma = params.indexOf(',');
+        String field = (comma < 0) ? params : params.substring(0, comma);
+        field.trim();
+        if (field.length() == 0) {
+          err = "DEVICE_CONFIG op=SET reason=INVALID_PARAM";
+          return false;
+        }
+        if (field.startsWith("platform_model=")) {
+          if (seenModel) {
+            err = "DEVICE_CONFIG op=SET reason=INVALID_PARAM";
+            return false;
+          }
+          modelRaw = field.substring(String("platform_model=").length());
+          seenModel = true;
+        } else if (field.startsWith("sensor_profile=")) {
+          if (seenProfile) {
+            err = "DEVICE_CONFIG op=SET reason=INVALID_PARAM";
+            return false;
+          }
+          profileRaw = field.substring(String("sensor_profile=").length());
+          seenProfile = true;
+        } else {
+          err = "DEVICE_CONFIG op=SET reason=INVALID_PARAM";
+          return false;
+        }
+        ++fieldCount;
+        if (comma < 0) break;
+        params = params.substring(comma + 1);
+        if (params.length() == 0) {
+          err = "DEVICE_CONFIG op=SET reason=INVALID_PARAM";
+          return false;
+        }
+      }
+
+      if (fieldCount != 2 || !seenModel || !seenProfile ||
+          modelRaw.length() == 0 || profileRaw.length() == 0) {
+        err = "DEVICE_CONFIG op=SET reason=INVALID_PARAM";
+        return false;
+      }
+
+      PlatformModel model = PlatformModel::BASE;
+      if (!parsePlatformModel(modelRaw, model) ||
+          (model != PlatformModel::BASE && model != PlatformModel::PLUS)) {
+        err = "DEVICE_CONFIG op=SET reason=UNSUPPORTED_MODEL";
+        return false;
+      }
+
+      SensorProfileId profile = SensorProfileId::NONE;
+      if (!parseSensorProfile(profileRaw, profile)) {
+        err = "DEVICE_CONFIG op=SET reason=UNSUPPORTED_PROFILE";
+        return false;
+      }
+
+      if (model == PlatformModel::BASE && profile != SensorProfileId::NONE) {
+        err = "DEVICE_CONFIG op=SET reason=INVALID_COMBINATION";
+        return false;
+      }
+      out.type = CmdType::DEVICE_SET_PROFILE_CONFIG;
+      out.deviceProfileConfig.platformModel = model;
+      out.deviceProfileConfig.sensorProfile = profile;
       return true;
     }
     if (s.startsWith("DEVICE:SET_CONFIG")) {
@@ -261,8 +369,37 @@ public:
     }
     if (s.equalsIgnoreCase("WAVE:START")) { out.type = CmdType::WAVE_START; return true; }
     if (s.equalsIgnoreCase("WAVE:STOP"))  { out.type = CmdType::WAVE_STOP;  return true; }
+    if (s.startsWith("AUDIO:CUE ") || s.equalsIgnoreCase("AUDIO:CUE")) {
+      out.type = CmdType::AUDIO_CUE;
+
+      // Keep this command deliberately strict. CUE is optional and one-shot;
+      // accepting a partially parsed or unknown id could produce an audible
+      // event for a stale/typoed command.
+      String rest = s.substring(String("AUDIO:CUE").length());
+      rest.trim();
+      if (!rest.startsWith("id=")) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+      String id = rest.substring(3);
+      id.trim();
+      if (id.length() == 0 || id.indexOf(' ') >= 0 || id.indexOf(',') >= 0) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+      if (id.equalsIgnoreCase("CONNECT")) {
+        out.audioCue.id = AudioCueId::CONNECT;
+        return true;
+      }
+      if (id.equalsIgnoreCase("DISCONNECT")) {
+        out.audioCue.id = AudioCueId::DISCONNECT;
+        return true;
+      }
+      err = "INVALID_PARAM";
+      return false;
+    }
     if (s.equalsIgnoreCase("SCALE:ZERO")) { out.type = CmdType::SCALE_ZERO; return true; }
-    if (s.equalsIgnoreCase("CAL:ZERO"))   { out.type = CmdType::SCALE_ZERO; return true; }
+    if (s.equalsIgnoreCase("CAL:ZERO"))   { out.type = CmdType::CAL_ZERO; return true; }
     if (s.startsWith("SCALE:CAL")) {
       out.type = CmdType::SCALE_CAL;
       String zStr, kStr;
@@ -288,6 +425,41 @@ public:
     }
     if (s.equalsIgnoreCase("CAL:GET_MODEL")) {
       out.type = CmdType::CAL_GET_MODEL;
+      return true;
+    }
+    if (s.equalsIgnoreCase("EMPTY:GET")) {
+      out.type = CmdType::EMPTY_DISTANCE_GET;
+      return true;
+    }
+    if (s.equalsIgnoreCase("EMPTY:SET_CURRENT")) {
+      out.type = CmdType::EMPTY_DISTANCE_SET_CURRENT;
+      return true;
+    }
+    if (s.startsWith("EMPTY:SET_CURRENT")) {
+      err = "INVALID_PARAM";
+      return false;
+    }
+    if (s.startsWith("EMPTY:SET")) {
+      out.type = CmdType::EMPTY_DISTANCE_SET;
+      String distanceStr;
+      if (!readParam("distance_mm=", distanceStr)) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+      if (!parseStrictFloat(distanceStr, out.emptyDistance.distanceMm) ||
+          !isfinite(out.emptyDistance.distanceMm) ||
+          out.emptyDistance.distanceMm <= 0.0f) {
+        err = "INVALID_PARAM";
+        return false;
+      }
+      return true;
+    }
+    if (s.equalsIgnoreCase("EMPTY:CLEAR")) {
+      out.type = CmdType::EMPTY_DISTANCE_CLEAR;
+      return true;
+    }
+    if (s.equalsIgnoreCase("CAL:CLEAR_WEIGHT_MODEL")) {
+      out.type = CmdType::CAL_CLEAR_WEIGHT_MODEL;
       return true;
     }
     if (s.startsWith("CAL:SET_MODEL")) {
@@ -448,7 +620,7 @@ public:
         if (const char* compatReason = minimalCompatFaultReason(e.fault)) {
           s += " reason=";
           s += compatReason;
-          Serial.printf("[FAULT_COMPAT] export code=%u reason=%s route=EVT:FAULT\n",
+          SW_VERBOSE_SERIAL_PRINTF("[FAULT_COMPAT] export code=%u reason=%s route=EVT:FAULT\n",
                         static_cast<unsigned>(e.fault),
                         compatReason);
         }
@@ -476,6 +648,14 @@ public:
         s += String(e.v2, 4);
         return s;
       case EventType::STREAM:
+        // Older producers only populated measurementValid. Infer a complete
+        // pair for that legacy shape; new producers set the two explicit
+        // quality bits and can therefore represent distance-only samples.
+        {
+        const bool legacyComplete = e.measurementValid &&
+            !e.distanceValid && !e.weightValid;
+        const bool encodedDistanceValid = e.distanceValid || legacyComplete;
+        const bool encodedWeightValid = e.weightValid || legacyComplete;
         s = "EVT:STREAM ";
         s += "seq=";
         s += String(e.sampleSeq);
@@ -483,22 +663,45 @@ public:
         s += String(e.ts_ms);
         s += " valid=";
         s += e.measurementValid ? "1" : "0";
+        s += " distance_valid=";
+        s += encodedDistanceValid ? "1" : "0";
+        s += " weight_valid=";
+        s += encodedWeightValid ? "1" : "0";
         s += " ma12_ready=";
         s += e.ma12Ready ? "1" : "0";
-        if (e.measurementValid) {
-          s += " distance=";
-          s += String(e.distance, 2);
+        if (encodedDistanceValid) {
+          s += " distance_mm=";
+          s += String(e.distance * LASER_DISTANCE_RUNTIME_DIVISOR, 2);
+        }
+        if (encodedWeightValid) {
           s += " weight=";
           s += String(e.weightKg, 2);
           if (e.ma12Ready) {
             s += " ma12=";
             s += String(e.ma12WeightKg, 2);
           }
-        } else {
+        }
+        // Keep the normal complete frame compact. A reason is emitted for
+        // transport/quality failures and partial samples only.
+        if ((!e.measurementValid || !encodedDistanceValid || !encodedWeightValid) &&
+            e.measurementReason[0] != '\0') {
           s += " reason=";
-          s += (e.measurementReason[0] != '\0') ? e.measurementReason : "INVALID";
+          s += e.measurementReason;
+        }
+        if (e.distanceReason[0] != '\0') {
+          s += " distance_reason=";
+          s += e.distanceReason;
+        }
+        if (e.weightReason[0] != '\0') {
+          s += " weight_reason=";
+          s += e.weightReason;
+        }
+        if (e.sensorBackend[0] != '\0') {
+          s += " backend=";
+          s += e.sensorBackend;
         }
         return s;
+        }
       case EventType::BASELINE_MAIN:
         s = "EVT:BASELINE ";
         s += "start_ready=";

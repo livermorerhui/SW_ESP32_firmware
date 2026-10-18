@@ -1,4 +1,5 @@
 #include "modules/laser/LaserDiagnostics.h"
+#include "core/VerboseSerial.h"
 
 #include <math.h>
 
@@ -24,7 +25,7 @@ void logMeasurementProbeDecision(
     case MeasurementProbeEvent::RECOVERED:
       return;
     case MeasurementProbeEvent::SKIP:
-      Serial.printf(
+      SW_VERBOSE_SERIAL_PRINTF(
           "[MEASUREMENT_PROBE] event=skip state=%s next_probe_in_ms=%lu outage_ms=%lu top_state=%s\n",
           measurementProbeStateName(decision.state),
           static_cast<unsigned long>(decision.nextProbeInMs),
@@ -32,14 +33,14 @@ void logMeasurementProbeDecision(
           topStateName(topState));
       return;
     case MeasurementProbeEvent::PROBE:
-      Serial.printf(
+      SW_VERBOSE_SERIAL_PRINTF(
           "[MEASUREMENT_PROBE] event=probe state=%s top_state=%s outage_ms=%lu\n",
           measurementProbeStateName(decision.state),
           topStateName(topState),
           static_cast<unsigned long>(decision.outageMs));
       return;
     case MeasurementProbeEvent::RESET:
-      Serial.printf(
+      SW_VERBOSE_SERIAL_PRINTF(
           "[MEASUREMENT_PROBE] event=reset state=%s top_state=%s\n",
           measurementProbeStateName(decision.state),
           topStateName(topState));
@@ -56,7 +57,7 @@ void logMeasurementProbeObservation(
     case MeasurementProbeEvent::PROBE:
       return;
     case MeasurementProbeEvent::OPEN:
-      Serial.printf(
+      SW_VERBOSE_SERIAL_PRINTF(
           "[MEASUREMENT_PROBE] event=open reason=timeout code=0x%02X consecutive=%u top_state=%s probe_interval_ms=%lu\n",
           static_cast<unsigned>(observation.code),
           static_cast<unsigned>(observation.consecutiveTimeouts),
@@ -64,7 +65,7 @@ void logMeasurementProbeObservation(
           static_cast<unsigned long>(observation.probeIntervalMs));
       return;
     case MeasurementProbeEvent::STILL_UNAVAILABLE:
-      Serial.printf(
+      SW_VERBOSE_SERIAL_PRINTF(
           "[MEASUREMENT_PROBE] event=still_unavailable code=0x%02X consecutive=%u top_state=%s outage_ms=%lu next_probe_in_ms=%lu\n",
           static_cast<unsigned>(observation.code),
           static_cast<unsigned>(observation.consecutiveTimeouts),
@@ -73,14 +74,14 @@ void logMeasurementProbeObservation(
           static_cast<unsigned long>(observation.probeIntervalMs));
       return;
     case MeasurementProbeEvent::RECOVERED:
-      Serial.printf(
+      SW_VERBOSE_SERIAL_PRINTF(
           "[MEASUREMENT_PROBE] event=recovered code=0x%02X top_state=%s outage_ms=%lu\n",
           static_cast<unsigned>(observation.code),
           topStateName(topState),
           static_cast<unsigned long>(observation.outageMs));
       return;
     case MeasurementProbeEvent::RESET:
-      Serial.printf(
+      SW_VERBOSE_SERIAL_PRINTF(
           "[MEASUREMENT_PROBE] event=reset state=%s top_state=%s\n",
           measurementProbeStateName(observation.state),
           topStateName(topState));
@@ -89,7 +90,7 @@ void logMeasurementProbeObservation(
 }
 
 void logDistanceValid(uint16_t rawRegister, int16_t signedRaw, float scaledDistance) {
-  Serial.printf("[LASER] VALID raw_u16=%u raw_i16=%d scaled=%.2f\n",
+  SW_VERBOSE_SERIAL_PRINTF("[LASER] VALID raw_u16=%u raw_i16=%d scaled=%.2f\n",
       static_cast<unsigned int>(rawRegister),
       static_cast<int>(signedRaw),
       scaledDistance);
@@ -102,14 +103,14 @@ void logDistanceInvalid(
     bool sentinel,
     const char* reason) {
   if (isfinite(scaledDistance)) {
-    Serial.printf("[LASER] INVALID raw_u16=%u raw_i16=%d scaled=%.2f sentinel=%d reason=%s\n",
+    SW_VERBOSE_SERIAL_PRINTF("[LASER] INVALID raw_u16=%u raw_i16=%d scaled=%.2f sentinel=%d reason=%s\n",
         static_cast<unsigned int>(rawRegister),
         static_cast<int>(signedRaw),
         scaledDistance,
         sentinel ? 1 : 0,
         reason ? reason : "UNKNOWN");
   } else {
-    Serial.printf("[LASER] INVALID sentinel=%d reason=%s\n",
+    SW_VERBOSE_SERIAL_PRINTF("[LASER] INVALID sentinel=%d reason=%s\n",
         sentinel ? 1 : 0,
         reason ? reason : "UNKNOWN");
   }

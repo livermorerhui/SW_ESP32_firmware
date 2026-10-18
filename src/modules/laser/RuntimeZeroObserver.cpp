@@ -1,4 +1,5 @@
 #include "modules/laser/RuntimeZeroObserver.h"
+#include "core/VerboseSerial.h"
 
 #include <math.h>
 
@@ -194,7 +195,7 @@ uint8_t RuntimeZeroObserver::reasonIndex(RuntimeZeroDecisionReason reason) {
 
 void RuntimeZeroObserver::logSummary(uint32_t now) {
   const uint32_t windowMs = now - summaryWindowStartedAtMs;
-  Serial.printf(
+  SW_VERBOSE_SERIAL_PRINTF(
       "[ZERO_RUNTIME_DIAG] window_ms=%lu disabled=%u frozen_running=%u frozen_user_present=%u "
       "frozen_stable_candidate=%u frozen_occupied_cycle=%u frozen_effective_zero_locked=%u "
       "not_empty_window=%u window_not_ready=%u window_unstable=%u drift_guard=%u refreshed=%u\n",
