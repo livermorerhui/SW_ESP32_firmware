@@ -19,6 +19,7 @@
 #include "transport/ble/BleTransport.h"
 #include "services/WaveCommandService.h"
 #include "services/CapabilityCommandService.h"
+#include "services/CalibrationCommandService.h"
 
 static EventBus g_eventBus;
 static CommandBus g_cmdBus;
@@ -82,12 +83,14 @@ public:
              WaveModule* wave,
              LaserModule* laser,
              WaveCommandService* waveCommands,
-             CapabilityCommandService* capabilityCommands)
+             CapabilityCommandService* capabilityCommands,
+             CalibrationCommandService* calibrationCommands)
     : sm(fsm),
       w(wave),
       l(laser),
       waveCommands_(waveCommands),
-      capabilityCommands_(capabilityCommands) {}
+      capabilityCommands_(capabilityCommands),
+      calibrationCommands_(calibrationCommands) {}
 
   bool handle(const Command& c, String& outAck) override {
     if (waveCommands_ && waveCommands_->handles(c.type)) {
@@ -95,6 +98,9 @@ public:
     }
     if (capabilityCommands_ && capabilityCommands_->handles(c.type)) {
       return capabilityCommands_->handle(c, outAck);
+    }
+    if (calibrationCommands_ && calibrationCommands_->handles(c.type)) {
+      return calibrationCommands_->handle(c, outAck);
     }
     switch (c.type) {
       case CmdType::WAVE_SET:
@@ -109,6 +115,19 @@ public:
       case CmdType::DEVICE_SECURITY_QUERY:
       case CmdType::DEGRADED_START_SET:
         return capabilityCommands_->handle(c, outAck);
+
+      case CmdType::SCALE_ZERO:
+      case CmdType::CAL_ZERO:
+      case CmdType::SCALE_CAL:
+      case CmdType::CAL_CAPTURE:
+      case CmdType::CAL_GET_MODEL:
+      case CmdType::CAL_SET_MODEL:
+      case CmdType::EMPTY_DISTANCE_GET:
+      case CmdType::EMPTY_DISTANCE_SET_CURRENT:
+      case CmdType::EMPTY_DISTANCE_SET:
+      case CmdType::EMPTY_DISTANCE_CLEAR:
+      case CmdType::CAL_CLEAR_WEIGHT_MODEL:
+        return calibrationCommands_->handle(c, outAck);
 
       case CmdType::DEVICE_GET_CONFIG: {
         DeviceConfigSnapshot config{};
@@ -226,199 +245,6 @@ public:
         return true;
       }
 
-      case CmdType::SCALE_ZERO:
-      case CmdType::CAL_ZERO: {
-        String reason;
-        if (!l->clearCalibrationParameters(reason)) {
-          outAck = HubAckBuilder::simpleNack(reason);
-          return false;
-        }
-        outAck = c.type == CmdType::CAL_ZERO
-            ? HubAckBuilder::calibrationZero()
-            : HubAckBuilder::ok();
-        return true;
-      }
-
-      case CmdType::SCALE_CAL: {
-        String reason;
-        if (!l->setParams(c.p1, c.p2, reason)) {
-          outAck = HubAckBuilder::simpleNack(reason);
-          return false;
-        }
-        outAck = HubAckBuilder::ok();
-        return true;
-      }
-
-      case CmdType::CAL_CAPTURE: {
-        CalibrationCapture capture{};
-        String reason;
-        if (!l->captureCalibrationPoint(c.capture.referenceWeightKg, capture, reason)) {
-          outAck = HubAckBuilder::simpleNack(reason);
-          return false;
-        }
-        outAck = HubAckBuilder::calibrationPoint(
-            capture.index,
-            capture.ts_ms,
-            capture.distanceMm,
-            capture.referenceWeightKg,
-            capture.predictedWeightKg,
-            capture.stableFlag,
-            capture.validFlag);
-        return true;
-      }
-
-      case CmdType::CAL_GET_MODEL: {
-        CalibrationModel model{};
-        const bool ready = l->getCalibrationModel(model);
-        outAck = HubAckBuilder::calibrationModel(model, ready);
-        return true;
-      }
-
-      case CmdType::CAL_SET_MODEL: {
-        CalibrationModel model{};
-        model.type = static_cast<CalibrationModelType>(c.model.type);
-        model.referenceDistance = c.model.referenceDistance;
-        model.coefficients[0] = c.model.coefficients[0];
-        model.coefficients[1] = c.model.coefficients[1];
-        model.coefficients[2] = c.model.coefficients[2];
-
-        String reason;
-        if (!l->setCalibrationModel(model, reason)) {
-          SW_VERBOSE_SERIAL_PRINTF("[CAL] SET_MODEL result=failure type=%s reason=%s\n",
-              HubAckBuilder::calibrationModelTypeName(model.type),
-              reason.c_str());
-          outAck = HubAckBuilder::calibrationSetModelRejected(model.type, reason);
-          return false;
-        }
-
-        SW_VERBOSE_SERIAL_PRINTF("[CAL] SET_MODEL result=success type=%s ref=%.4f c0=%.6f c1=%.6f c2=%.6f\n",
-            HubAckBuilder::calibrationModelTypeName(model.type),
-            model.referenceDistance,
-            model.coefficients[0],
-            model.coefficients[1],
-            model.coefficients[2]);
-        outAck = HubAckBuilder::calibrationSetModel(model, true);
-        return true;
-      }
-
-      case CmdType::EMPTY_DISTANCE_GET: {
-        DeviceConfigSnapshot config{};
-        String configReason;
-        if (!l->getProfileConfig(config, configReason)) {
-          outAck = HubAckBuilder::emptyDistanceRejected("GET", "CONFIG_ERROR");
-          return false;
-        }
-        if (config.schema1Managed) {
-          ProfileEmptyDistanceRecord profileRecord{};
-          if (config.platformModel == PlatformModel::PLUS &&
-              config.sensorProfile != SensorProfileId::NONE) {
-            String reason;
-            if (!l->getProfileEmptyDistance(profileRecord, reason)) {
-              outAck = HubAckBuilder::emptyDistanceRejected("GET", reason);
-              return false;
-            }
-          } else {
-            profileRecord.sensorProfile = config.sensorProfile;
-            profileRecord.configGeneration = config.generation;
-          }
-          outAck = HubAckBuilder::profileEmptyDistance(
-              "GET", profileRecord.isSet,
-              profileRecord.distanceMm, profileRecord.toleranceMm,
-              profileRecord.sensorProfile, profileRecord.configGeneration,
-              profileRecord.emptyRevision);
-          return true;
-        }
-        EmptyDistanceRecord record{};
-        const bool supported = l->laserInstalled() &&
-            (strcmp(l->sensorBackendName(), "LASER_485") == 0 ||
-             strcmp(l->sensorBackendName(), "CYD3S1612_IIC") == 0);
-        const bool ready = supported && l->getEmptyDistance(record);
-        outAck = HubAckBuilder::emptyDistance(
-            "GET",
-            supported,
-            ready ? "SET" : (supported ? "UNSET" : "UNSUPPORTED"),
-            ready ? record.distanceRuntime * LASER_DISTANCE_RUNTIME_DIVISOR : NAN,
-            ready ? record.toleranceRuntime * LASER_DISTANCE_RUNTIME_DIVISOR : NAN,
-            l->sensorBackendName());
-        return true;
-      }
-
-      case CmdType::EMPTY_DISTANCE_SET_CURRENT: {
-        ProfileEmptyDistanceRecord saved{};
-        String reason;
-        if (!l->setEmptyDistanceFromCurrent(saved, reason)) {
-          outAck = "NACK:EMPTY op=SET_CURRENT reason=";
-          outAck += reason;
-          return false;
-        }
-        outAck = HubAckBuilder::profileEmptyDistance(
-            "SET_CURRENT", true, saved.distanceMm, saved.toleranceMm,
-            saved.sensorProfile, saved.configGeneration, saved.emptyRevision);
-        return true;
-      }
-
-      case CmdType::EMPTY_DISTANCE_SET: {
-        String reason;
-        if (!l->setEmptyDistance(c.emptyDistance.distanceMm, reason)) {
-          const bool supported = l->laserInstalled() &&
-              (strcmp(l->sensorBackendName(), "LASER_485") == 0 ||
-               strcmp(l->sensorBackendName(), "CYD3S1612_IIC") == 0);
-          outAck = HubAckBuilder::emptyDistanceRejected("SET", reason, supported);
-          return false;
-        }
-        EmptyDistanceRecord record{};
-        l->getEmptyDistance(record);
-        outAck = HubAckBuilder::emptyDistance(
-            "SET",
-            true,
-            "SET",
-            record.distanceRuntime * LASER_DISTANCE_RUNTIME_DIVISOR,
-            record.toleranceRuntime * LASER_DISTANCE_RUNTIME_DIVISOR,
-            l->sensorBackendName());
-        return true;
-      }
-
-      case CmdType::EMPTY_DISTANCE_CLEAR: {
-        String reason;
-        if (!l->clearEmptyDistance(reason)) {
-          const bool supported = l->laserInstalled() &&
-              (strcmp(l->sensorBackendName(), "LASER_485") == 0 ||
-               strcmp(l->sensorBackendName(), "CYD3S1612_IIC") == 0);
-          outAck = HubAckBuilder::emptyDistanceRejected("CLEAR", reason, supported);
-          return false;
-        }
-        DeviceConfigSnapshot config{};
-        String configReason;
-        if (!l->getProfileConfig(config, configReason)) {
-          outAck = HubAckBuilder::emptyDistanceRejected("CLEAR", "CONFIG_ERROR");
-          return false;
-        }
-        if (config.schema1Managed) {
-          ProfileEmptyDistanceRecord cleared{};
-          if (!l->getProfileEmptyDistance(cleared, configReason)) {
-            outAck = HubAckBuilder::emptyDistanceRejected("CLEAR", configReason);
-            return false;
-          }
-          outAck = HubAckBuilder::profileEmptyDistance(
-              "CLEAR", false, NAN, NAN, cleared.sensorProfile,
-              cleared.configGeneration, cleared.emptyRevision);
-          return true;
-        }
-        outAck = HubAckBuilder::emptyDistance(
-            "CLEAR", true, "UNSET", NAN, NAN, l->sensorBackendName());
-        return true;
-      }
-
-      case CmdType::CAL_CLEAR_WEIGHT_MODEL: {
-        String reason;
-        if (!l->clearWeightModel(reason)) {
-          outAck = HubAckBuilder::weightModelClearRejected(reason, reason != "UNSUPPORTED");
-          return false;
-        }
-        outAck = HubAckBuilder::weightModelClear(false);
-        return true;
-      }
-
       case CmdType::FALL_STOP_SET:
         sm->setFallStopEnabled(c.fallStop.enabled);
         outAck = HubAckBuilder::fallStop(c.fallStop.enabled, sm->fallStopModeName());
@@ -447,12 +273,15 @@ private:
   LaserModule* l;
   WaveCommandService* waveCommands_;
   CapabilityCommandService* capabilityCommands_;
+  CalibrationCommandService* calibrationCommands_;
 };
 
 static WaveCommandService g_waveCommands(&g_fsm, &g_wave);
 static CapabilityCommandService g_capabilityCommands(&g_fsm, &g_laser);
+static CalibrationCommandService g_calibrationCommands(&g_laser);
 static HubHandler g_handler(
-    &g_fsm, &g_wave, &g_laser, &g_waveCommands, &g_capabilityCommands);
+    &g_fsm, &g_wave, &g_laser,
+    &g_waveCommands, &g_capabilityCommands, &g_calibrationCommands);
 static BleLifecycleCoordinator g_bleLifecycle(
     &g_ble, &g_fsm, &g_wave, &g_laser);
 
