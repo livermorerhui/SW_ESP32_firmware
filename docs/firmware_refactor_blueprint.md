@@ -212,6 +212,8 @@ APP 登录并输入订单号
 - `HubHandler` 变为 `LegacyCommandAdapter`。
 - 所有服务返回统一 `ServiceResult`，由适配器生成旧 ACK/NACK。
 
+当前进度：已完成第一步 `WaveCommandService`，迁移 `WAVE_SET`、`WAVE_START`、`WAVE_STOP`、`AUDIO_CUE` 和 `LEGACY_FIE`；其余命令族继续按本阶段顺序迁移。
+
 ### 阶段 5：状态机接口化
 
 - 保留 `SystemStateMachine` 为唯一安全 Owner。
@@ -488,4 +490,15 @@ algorithm, nonce, signature
 - BLE 断连入口现在由 `BleLifecycleCoordinator`，不是旧的 `HubHandler`。
 
 历史说明、归档授权原型和候选蓝图不能覆盖当前源码事实；每次阶段收口时同步架构说明、施工蓝图和测试证据。
+
+## 19. 实际施工记录
+
+### 阶段 4 第一子批次：波形命令服务化
+
+- 新增 `src/services/WaveCommandService.h/.cpp`。
+- `HubHandler` 先按 `handles()` 将波形、启动、停止、Cue 和旧 F/I/E 命令转交给服务。
+- 保留原 `SystemStateMachine::requestStart/requestStop`、`WaveModule`、ACK/NACK、session Cue 和日志语义。
+- 未接入授权门禁，未改变旧启动行为。
+
+验证：`python3 -m platformio run -e esp32s3_unified` 通过；RAM 15.1%，Flash 15.8%。
 

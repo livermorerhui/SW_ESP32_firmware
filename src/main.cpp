@@ -17,6 +17,7 @@
 #include "modules/laser/LaserModule.h"
 #include "ota/FirmwareRollbackConfirmation.h"
 #include "transport/ble/BleTransport.h"
+#include "services/WaveCommandService.h"
 
 static EventBus g_eventBus;
 static CommandBus g_cmdBus;
@@ -76,11 +77,24 @@ static const char* resetReasonName(esp_reset_reason_t reason) {
 
 class HubHandler : public CommandHandler {
 public:
-  HubHandler(SystemStateMachine* fsm, WaveModule* wave, LaserModule* laser)
-    : sm(fsm), w(wave), l(laser) {}
+  HubHandler(SystemStateMachine* fsm,
+             WaveModule* wave,
+             LaserModule* laser,
+             WaveCommandService* waveCommands)
+    : sm(fsm), w(wave), l(laser), waveCommands_(waveCommands) {}
 
   bool handle(const Command& c, String& outAck) override {
+    if (waveCommands_ && waveCommands_->handles(c.type)) {
+      return waveCommands_->handle(c, outAck);
+    }
     switch (c.type) {
+      case CmdType::WAVE_SET:
+      case CmdType::WAVE_START:
+      case CmdType::WAVE_STOP:
+      case CmdType::AUDIO_CUE:
+      case CmdType::LEGACY_FIE:
+        return waveCommands_->handle(c, outAck);
+
       case CmdType::CAP_QUERY: {
         if (!l->configIdentityValid()) {
           SW_VERBOSE_SERIAL_PRINTLN("[DEVICE_CONFIG] op=CAP result=reject reason=CONFIG_ERROR");
@@ -270,91 +284,6 @@ public:
             l->streamSubscriptionEnabled(),
             l->streamSubscriptionRateHz());
         return true;
-      }
-
-      case CmdType::WAVE_SET: {
-        HumanReadableLog::command("设置波形参数");
-        SW_VERBOSE_SERIAL_PRINTF(
-            "[LAYER:COMMAND_DISPATCH] cmd=WAVE:SET freq_hz=%.2f intensity=%d owner=WaveModule::setParams\n",
-            c.wave.freqHz,
-            c.wave.intensity);
-        w->setParams(c.wave.freqHz, c.wave.intensity);
-        WaveModule::DebugState debug{};
-        w->getDebugState(debug);
-        SW_VERBOSE_SERIAL_PRINTF(
-            "[LAYER:COMMAND_DISPATCH] cmd=WAVE:SET applied display_freq_hz=%.2f target_phase_inc=%lu target_intensity=%d run_requested=%d run_state=%d\n",
-            debug.displayFreqHz,
-            static_cast<unsigned long>(debug.targetPhaseInc),
-            debug.targetIntensity,
-            debug.runRequested ? 1 : 0,
-            debug.runState ? 1 : 0);
-        outAck = HubAckBuilder::ok();
-        return true;
-      }
-
-      case CmdType::WAVE_START: {
-        HumanReadableLog::command("开始波形输出");
-        const PlatformSnapshot snapshot = sm->snapshot();
-        SW_VERBOSE_SERIAL_PRINTF(
-            "[LAYER:COMMAND_DISPATCH] cmd=WAVE:START owner=SystemStateMachine::requestStart top_state=%s runtime_ready=%d start_ready=%d baseline_ready=%d platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d degraded_start_available=%d degraded_start_enabled=%d\n",
-            topStateName(snapshot.topState),
-            snapshot.runtimeReady ? 1 : 0,
-            snapshot.startReady ? 1 : 0,
-            snapshot.baselineReady ? 1 : 0,
-            platformModelName(snapshot.platformModel),
-            snapshot.laserInstalled ? 1 : 0,
-            snapshot.laserAvailable ? 1 : 0,
-            snapshot.protectionDegraded ? 1 : 0,
-            snapshot.degradedStartAvailable ? 1 : 0,
-            snapshot.degradedStartEnabled ? 1 : 0);
-        FaultCode reason = FaultCode::NONE;
-        if (!sm->requestStart(reason)) {
-          outAck = HubAckBuilder::startRejected(reason);
-          return false;
-        }
-        outAck = HubAckBuilder::ok();
-        return true;
-      }
-
-      case CmdType::WAVE_STOP:
-        HumanReadableLog::command("停止波形输出");
-        SW_VERBOSE_SERIAL_PRINTLN("[CMD] WAVE_STOP received");
-        SW_VERBOSE_SERIAL_PRINTLN("[LAYER:COMMAND_DISPATCH] cmd=WAVE:STOP owner=SystemStateMachine::requestStop");
-        sm->requestStop();
-        outAck = HubAckBuilder::ok();
-        return true;
-
-      case CmdType::AUDIO_CUE: {
-        if (c.audioCue.id != AudioCueId::CONNECT) {
-          // DISCONNECT is an internal BLE lifecycle cue. Keeping it out of
-          // the APP command surface prevents an arbitrary RX write from
-          // fabricating a disconnect sound while the link is still alive.
-          outAck = HubAckBuilder::audioCueNack(c.audioCue.id, "LOCAL_ONLY");
-          return false;
-        }
-        const WaveModule::CueRequestResult result = w->requestCue(
-            c.audioCue.id,
-            c.transportSessionId,
-            c.connectionId,
-            c.connectionIdKnown);
-        switch (result) {
-          case WaveModule::CueRequestResult::ACCEPTED:
-            outAck = HubAckBuilder::audioCue(c.audioCue.id, "ACCEPTED");
-            return true;
-          case WaveModule::CueRequestResult::DUPLICATE:
-            outAck = HubAckBuilder::audioCue(c.audioCue.id, "DUPLICATE");
-            return true;
-          case WaveModule::CueRequestResult::BUSY_WAVE:
-            outAck = HubAckBuilder::audioCueNack(c.audioCue.id, "BUSY_WAVE");
-            return false;
-          case WaveModule::CueRequestResult::BUSY_CUE:
-            outAck = HubAckBuilder::audioCueNack(c.audioCue.id, "BUSY_CUE");
-            return false;
-          case WaveModule::CueRequestResult::INVALID:
-          default:
-            outAck = HubAckBuilder::audioCueNack(c.audioCue.id, "INVALID");
-            return false;
-        }
       }
 
       case CmdType::SCALE_ZERO:
@@ -567,29 +496,6 @@ public:
             !sm->fallStopEnabled());
         return true;
 
-      case CmdType::LEGACY_FIE: {
-        // 兼容旧命令：只改触碰到的字段
-        // freqHz = -1 表示没提供
-        if (c.wave.freqHz >= 0) w->setFreq(c.wave.freqHz);
-        if (c.wave.intensity >= 0) w->setIntensity(c.wave.intensity);
-
-        // E 字段触碰时复用状态机联锁，避免旧协议绕过安全逻辑直接启停
-        if (c.wave.hasEnable) {
-          if (c.wave.enable) {
-            FaultCode reason = FaultCode::NONE;
-            if (!sm->requestStart(reason)) {
-              outAck = HubAckBuilder::startRejected(reason);
-              return false;
-            }
-          } else {
-          SW_VERBOSE_SERIAL_PRINTLN("[CMD] WAVE_STOP received");
-            sm->requestStop();
-          }
-        }
-
-        outAck = HubAckBuilder::ok();
-        return true;
-      }
     }
     outAck = HubAckBuilder::unsupported();
     return false;
@@ -599,9 +505,11 @@ private:
   SystemStateMachine* sm;
   WaveModule* w;
   LaserModule* l;
+  WaveCommandService* waveCommands_;
 };
 
-static HubHandler g_handler(&g_fsm, &g_wave, &g_laser);
+static WaveCommandService g_waveCommands(&g_fsm, &g_wave);
+static HubHandler g_handler(&g_fsm, &g_wave, &g_laser, &g_waveCommands);
 static BleLifecycleCoordinator g_bleLifecycle(
     &g_ble, &g_fsm, &g_wave, &g_laser);
 
