@@ -21,6 +21,8 @@
 #include "services/CapabilityCommandService.h"
 #include "services/CalibrationCommandService.h"
 #include "services/DeviceConfigCommandService.h"
+#include "services/MeasurementStreamCommandService.h"
+#include "services/ProtectionCommandService.h"
 #include "transport/ble/BleDeviceConfigEffects.h"
 
 static EventBus g_eventBus;
@@ -86,14 +88,18 @@ public:
              WaveCommandService* waveCommands,
              CapabilityCommandService* capabilityCommands,
              CalibrationCommandService* calibrationCommands,
-             DeviceConfigCommandService* deviceConfigCommands)
+             DeviceConfigCommandService* deviceConfigCommands,
+             MeasurementStreamCommandService* streamCommands,
+             ProtectionCommandService* protectionCommands)
     : sm(fsm),
       w(wave),
       l(laser),
       waveCommands_(waveCommands),
       capabilityCommands_(capabilityCommands),
       calibrationCommands_(calibrationCommands),
-      deviceConfigCommands_(deviceConfigCommands) {}
+      deviceConfigCommands_(deviceConfigCommands),
+      streamCommands_(streamCommands),
+      protectionCommands_(protectionCommands) {}
 
   bool handle(const Command& c, String& outAck) override {
     if (waveCommands_ && waveCommands_->handles(c.type)) {
@@ -107,6 +113,12 @@ public:
     }
     if (deviceConfigCommands_ && deviceConfigCommands_->handles(c.type)) {
       return deviceConfigCommands_->handle(c, outAck);
+    }
+    if (streamCommands_ && streamCommands_->handles(c.type)) {
+      return streamCommands_->handle(c, outAck);
+    }
+    if (protectionCommands_ && protectionCommands_->handles(c.type)) {
+      return protectionCommands_->handle(c, outAck);
     }
     switch (c.type) {
       case CmdType::WAVE_SET:
@@ -140,37 +152,13 @@ public:
       case CmdType::DEVICE_SET_CONFIG:
         return deviceConfigCommands_->handle(c, outAck);
 
-      case CmdType::STREAM_SET: {
-        String reason;
-        if (!l->setStreamSubscription(
-                c.streamSubscription.enabled,
-                c.streamSubscription.rateHz,
-                reason)) {
-          outAck = HubAckBuilder::simpleNack(reason);
-          return false;
-        }
-        outAck = HubAckBuilder::streamSubscription(
-            l->streamSubscriptionEnabled(),
-            l->streamSubscriptionRateHz());
-        return true;
-      }
+      case CmdType::STREAM_SET:
+        return streamCommands_->handle(c, outAck);
 
       case CmdType::FALL_STOP_SET:
-        sm->setFallStopEnabled(c.fallStop.enabled);
-        outAck = HubAckBuilder::fallStop(c.fallStop.enabled, sm->fallStopModeName());
-        return true;
-
       case CmdType::LEAVE_PROTECTION_SET:
-        sm->setLeaveStopEnabled(c.leaveProtection.enabled);
-        outAck = HubAckBuilder::leaveProtection(sm->leaveStopEnabled(), sm->leaveStopModeName());
-        return true;
-
       case CmdType::MOTION_SAMPLING_MODE_SET:
-        sm->setMotionSamplingMode(c.motionSamplingMode.enabled);
-        outAck = HubAckBuilder::motionSampling(
-            c.motionSamplingMode.enabled,
-            !sm->fallStopEnabled());
-        return true;
+        return protectionCommands_->handle(c, outAck);
 
     }
     outAck = HubAckBuilder::unsupported();
@@ -185,6 +173,8 @@ private:
   CapabilityCommandService* capabilityCommands_;
   CalibrationCommandService* calibrationCommands_;
   DeviceConfigCommandService* deviceConfigCommands_;
+  MeasurementStreamCommandService* streamCommands_;
+  ProtectionCommandService* protectionCommands_;
 };
 
 static WaveCommandService g_waveCommands(&g_fsm, &g_wave);
@@ -195,10 +185,12 @@ static DeviceConfigCommandService g_deviceConfigCommands(
     &g_bleConfigEffects,
     &g_bleConfigEffects,
     &g_fsm);
+static MeasurementStreamCommandService g_streamCommands(&g_laser);
+static ProtectionCommandService g_protectionCommands(&g_fsm);
 static HubHandler g_handler(
     &g_fsm, &g_wave, &g_laser,
     &g_waveCommands, &g_capabilityCommands, &g_calibrationCommands,
-    &g_deviceConfigCommands);
+    &g_deviceConfigCommands, &g_streamCommands, &g_protectionCommands);
 static BleLifecycleCoordinator g_bleLifecycle(
     &g_ble, &g_fsm, &g_wave, &g_laser);
 
