@@ -3,9 +3,10 @@
 #include <driver/i2s.h>
 #include "core/EventBus.h"
 #include "core/CommandBus.h"
+#include "core/WaveObservation.h"
 #include "config/GlobalConfig.h"
 
-class WaveModule {
+class WaveModule : public WaveObservation {
 public:
   enum class CueRequestResult : uint8_t {
     ACCEPTED = 0,
@@ -33,7 +34,7 @@ public:
   void start();
   void stopSoft();
   bool isRunning() const;
-  bool isOutputActive() const;
+  bool isOutputActive() const override;
   CueRequestResult requestCue(AudioCueId id,
                               uint32_t transportSessionId,
                               uint16_t connectionId,
@@ -43,7 +44,7 @@ public:
   void resetCuesForNewSession(uint32_t transportSessionId);
   void getDebugState(DebugState& out);
   // Read-only snapshot used by firmware-side test summaries.
-  void getSummaryParams(float& hz, int& intensity, float& intensityNormalized);
+  void getSummaryParams(float& hz, int& intensity, float& intensityNormalized) override;
 
   // Compatibility wrappers used by legacy command path.
   void setFreq(float hz);        // 0..50

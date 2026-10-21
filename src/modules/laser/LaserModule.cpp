@@ -4,7 +4,6 @@
 #include "core/VerboseSerial.h"
 #include <math.h>
 #include <string.h>
-#include "modules/wave/WaveModule.h"
 
 namespace {
 constexpr uint32_t kLaserLoopIntervalNoLaserMs = 200UL;
@@ -196,10 +195,10 @@ void LaserModule::logConfigTruth(const char* source, const char* reason) {
   lastLoggedMeasurementBypassState = measurementBypass;
 }
 
-void LaserModule::begin(EventBus* eb, SystemStateMachine* fsm, WaveModule* waveModule) {
+void LaserModule::begin(EventBus* eb, SystemStateMachine* fsm, WaveObservation* waveObservation) {
   bus = eb;
   sm = fsm;
-  wave = waveModule;
+  this->waveObservation = waveObservation;
   if (sm) sm->attachLaserModule(this);
   lastObservedTopState = sm ? sm->state() : TopState::IDLE;
   phase2Thresholds = phase2ThresholdConfig();
@@ -1488,7 +1487,7 @@ bool LaserModule::configurationMutationBlocked(String& reason) const {
   }
   // stopSoft() can leave the actuator physically active after the state
   // machine has already entered IDLE. Do not change reader/calibration then.
-  if (wave && wave->isOutputActive()) {
+  if (waveObservation && waveObservation->isOutputActive()) {
     reason = "BUSY";
     return true;
   }
@@ -2512,8 +2511,9 @@ void LaserModule::startRunSummary(uint32_t now, const RhythmStateUpdateResult& r
   snapshot.baselineDistance =
       rhythmResult.evidence.baselineReady ? rhythmResult.evidence.baselineDistance : stableBaselineDistance;
   snapshot.fallStopEnabled = sm ? sm->fallStopEnabled() : FALL_STOP_ENABLED_DEFAULT;
-  if (wave) {
-    wave->getSummaryParams(snapshot.freqHz, snapshot.intensity, snapshot.intensityNormalized);
+  if (waveObservation) {
+    waveObservation->getSummaryParams(
+        snapshot.freqHz, snapshot.intensity, snapshot.intensityNormalized);
   }
   runSummaryCollector.start(snapshot, rhythmResult);
 }

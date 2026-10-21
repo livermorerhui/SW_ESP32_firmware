@@ -263,3 +263,20 @@ ESP-IDF 官方支持 Unity 目标测试；本仓库已有 `tools/tests`、协议
 | 协议线格式变更 | 未变更 |
 | 真机协议回归 | 待统一测试 |
 
+### 批次 3 已完成：激光只读波形观察边界
+
+- 新增 `src/core/WaveObservation.h`，只提供输出状态和参数摘要读取。
+- `WaveModule` 实现 `WaveObservation`，仍保留唯一的启动/停止控制能力。
+- `LaserModule` 不再依赖 `WaveModule` 具体类型，只依赖只读观察接口。
+- 激光模块仍通过 `SystemStateMachine` 报告配置故障和安全事实，不直接操作 I2S 或波形启停。
+
+### 批次 3 验证
+
+| 验证项 | 结果 |
+|---|---|
+| `esp32s3_unified` 编译 | 通过 |
+| 固件 ELF/BIN 生成 | 通过 |
+| RAM/Flash 预算 | RAM 15.1%，Flash 15.8% |
+| 激光模块直接引用 `WaveModule` | 已移除 |
+| 真机测量/停波行为 | 待统一测试 |
+

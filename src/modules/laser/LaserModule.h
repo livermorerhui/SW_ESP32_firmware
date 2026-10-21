@@ -6,6 +6,7 @@
 #include "core/DeviceConfig.h"
 #include "core/EventBus.h"
 #include "core/ProtocolCodec.h"
+#include "core/WaveObservation.h"
 #include "core/SystemStateMachine.h"
 #include "modules/laser/BaselineContractDiagnostics.h"
 #include "modules/laser/BaselineEvidenceEvaluator.h"
@@ -26,8 +27,6 @@
 #include "modules/laser/RuntimeZeroObserver.h"
 #include "modules/laser/RunSummaryCollector.h"
 #include "modules/laser/StartGateContractEvaluator.h"
-
-class WaveModule;
 
 struct CalibrationCapture {
   uint32_t index = 0;
@@ -71,7 +70,7 @@ struct StableContractState {
 
 class LaserModule {
 public:
-  void begin(EventBus* eb, SystemStateMachine* fsm, WaveModule* waveModule);
+  void begin(EventBus* eb, SystemStateMachine* fsm, WaveObservation* waveObservation);
   void startTask();
 
   // Command hooks（由统一命令处理器调用）
@@ -262,7 +261,7 @@ private:
 
   EventBus* bus = nullptr;
   SystemStateMachine* sm = nullptr;
-  WaveModule* wave = nullptr;
+  WaveObservation* waveObservation = nullptr;
 
   LaserMeasurementReader measurementReader;
   DistanceStateChain distanceStateChain;
