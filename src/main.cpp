@@ -23,6 +23,7 @@
 #include "services/DeviceConfigCommandService.h"
 #include "services/MeasurementStreamCommandService.h"
 #include "services/ProtectionCommandService.h"
+#include "services/LegacyCommandAdapter.h"
 #include "transport/ble/BleDeviceConfigEffects.h"
 
 static EventBus g_eventBus;
@@ -80,103 +81,6 @@ static const char* resetReasonName(esp_reset_reason_t reason) {
   }
 }
 
-class HubHandler : public CommandHandler {
-public:
-  HubHandler(SystemStateMachine* fsm,
-             WaveModule* wave,
-             LaserModule* laser,
-             WaveCommandService* waveCommands,
-             CapabilityCommandService* capabilityCommands,
-             CalibrationCommandService* calibrationCommands,
-             DeviceConfigCommandService* deviceConfigCommands,
-             MeasurementStreamCommandService* streamCommands,
-             ProtectionCommandService* protectionCommands)
-    : sm(fsm),
-      w(wave),
-      l(laser),
-      waveCommands_(waveCommands),
-      capabilityCommands_(capabilityCommands),
-      calibrationCommands_(calibrationCommands),
-      deviceConfigCommands_(deviceConfigCommands),
-      streamCommands_(streamCommands),
-      protectionCommands_(protectionCommands) {}
-
-  bool handle(const Command& c, String& outAck) override {
-    if (waveCommands_ && waveCommands_->handles(c.type)) {
-      return waveCommands_->handle(c, outAck);
-    }
-    if (capabilityCommands_ && capabilityCommands_->handles(c.type)) {
-      return capabilityCommands_->handle(c, outAck);
-    }
-    if (calibrationCommands_ && calibrationCommands_->handles(c.type)) {
-      return calibrationCommands_->handle(c, outAck);
-    }
-    if (deviceConfigCommands_ && deviceConfigCommands_->handles(c.type)) {
-      return deviceConfigCommands_->handle(c, outAck);
-    }
-    if (streamCommands_ && streamCommands_->handles(c.type)) {
-      return streamCommands_->handle(c, outAck);
-    }
-    if (protectionCommands_ && protectionCommands_->handles(c.type)) {
-      return protectionCommands_->handle(c, outAck);
-    }
-    switch (c.type) {
-      case CmdType::WAVE_SET:
-      case CmdType::WAVE_START:
-      case CmdType::WAVE_STOP:
-      case CmdType::AUDIO_CUE:
-      case CmdType::LEGACY_FIE:
-        return waveCommands_->handle(c, outAck);
-
-      case CmdType::CAP_QUERY:
-      case CmdType::DEVICE_IDENTITY_QUERY:
-      case CmdType::DEVICE_SECURITY_QUERY:
-      case CmdType::DEGRADED_START_SET:
-        return capabilityCommands_->handle(c, outAck);
-
-      case CmdType::SCALE_ZERO:
-      case CmdType::CAL_ZERO:
-      case CmdType::SCALE_CAL:
-      case CmdType::CAL_CAPTURE:
-      case CmdType::CAL_GET_MODEL:
-      case CmdType::CAL_SET_MODEL:
-      case CmdType::EMPTY_DISTANCE_GET:
-      case CmdType::EMPTY_DISTANCE_SET_CURRENT:
-      case CmdType::EMPTY_DISTANCE_SET:
-      case CmdType::EMPTY_DISTANCE_CLEAR:
-      case CmdType::CAL_CLEAR_WEIGHT_MODEL:
-        return calibrationCommands_->handle(c, outAck);
-
-      case CmdType::DEVICE_GET_CONFIG:
-      case CmdType::DEVICE_SET_PROFILE_CONFIG:
-      case CmdType::DEVICE_SET_CONFIG:
-        return deviceConfigCommands_->handle(c, outAck);
-
-      case CmdType::STREAM_SET:
-        return streamCommands_->handle(c, outAck);
-
-      case CmdType::FALL_STOP_SET:
-      case CmdType::LEAVE_PROTECTION_SET:
-      case CmdType::MOTION_SAMPLING_MODE_SET:
-        return protectionCommands_->handle(c, outAck);
-
-    }
-    outAck = HubAckBuilder::unsupported();
-    return false;
-  }
-
-private:
-  SystemStateMachine* sm;
-  WaveModule* w;
-  LaserModule* l;
-  WaveCommandService* waveCommands_;
-  CapabilityCommandService* capabilityCommands_;
-  CalibrationCommandService* calibrationCommands_;
-  DeviceConfigCommandService* deviceConfigCommands_;
-  MeasurementStreamCommandService* streamCommands_;
-  ProtectionCommandService* protectionCommands_;
-};
-
 static WaveCommandService g_waveCommands(&g_fsm, &g_wave);
 static CapabilityCommandService g_capabilityCommands(&g_fsm, &g_laser);
 static CalibrationCommandService g_calibrationCommands(&g_laser);
@@ -187,8 +91,7 @@ static DeviceConfigCommandService g_deviceConfigCommands(
     &g_fsm);
 static MeasurementStreamCommandService g_streamCommands(&g_laser);
 static ProtectionCommandService g_protectionCommands(&g_fsm);
-static HubHandler g_handler(
-    &g_fsm, &g_wave, &g_laser,
+static LegacyCommandAdapter g_handler(
     &g_waveCommands, &g_capabilityCommands, &g_calibrationCommands,
     &g_deviceConfigCommands, &g_streamCommands, &g_protectionCommands);
 static BleLifecycleCoordinator g_bleLifecycle(
