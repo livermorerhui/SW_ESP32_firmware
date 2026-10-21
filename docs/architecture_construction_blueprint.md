@@ -341,3 +341,67 @@ ESP-IDF 官方支持 Unity 目标测试；本仓库已有 `tools/tests`、协议
 - 现在应继续施工批次 4–9，不应开发授权模块。
 - 授权模块只在“完整重构完成”条目全部通过后进入施工。
 
+## 17. 自动连续施工与统一烧录验收方案
+
+用户已确认：后续由工程流程自动按批次推进，不要求每个批次重复确认。除以下情况外，不中途请求再次同意：
+
+- 需要改变已确认产品规则。
+- 需要真实设备操作或用户提供现场结果。
+- 发现旧功能基线与当前合同冲突，无法安全判断。
+
+### 17.1 自动施工规则
+
+1. 每个批次在独立分支提交，编译通过后自动进入下一批次。
+2. 发现编译、静态检查或 focused test 失败，先在当前批次修复，不跳到下一批次。
+3. 发现行为合同风险，暂停代码，回到蓝图和审计，不用临时补丁掩盖。
+4. 每批保留可回滚提交；不把未验证代码合并到 `main`。
+5. 完整重构完成前，不实现设备授权业务。
+
+### 17.2 完整重构后的烧录测试路径
+
+ESP-IDF 的目标测试模式要求测试固件按普通固件一样构建、烧录和监视；因此最终验收分为“构建产物验证”和“真实设备验证”两层，不能以编译通过替代烧录测试。
+
+**构建层：**
+
+- `esp32s3_unified` 编译、链接、分区生成。
+- 生成 `firmware.elf`、`firmware.bin`、分区表和 OTA 数据。
+- 记录 RAM、Flash、任务栈和队列预算。
+- 执行 `git diff --check`、主机 focused tests、协议矩阵测试。
+
+**烧录层：**
+
+1. 记录待升级设备、当前固件版本、设备身份和分区状态。
+2. 通过 PlatformIO/ESP-IDF 烧录统一固件，不覆盖未经确认的生产安全 eFuse。
+3. 串口监视启动、回滚确认、传感器初始化和 BLE ready。
+4. 执行连接、CAP、SNAPSHOT、WAVE、停止、断连、离位、故障恢复。
+5. 进行断电重启、重复连接、长时间运行和 OTA 回滚测试。
+6. 保存原始串口日志、测试结果、固件哈希和设备信息。
+
+### 17.3 OTA/回滚验收
+
+Espressif 官方规则要求新 OTA 应用在首次启动后确认可运行；若首次启动断电、崩溃或看门狗复位，Bootloader 应回滚到旧应用。因此完整重构后的烧录验收必须包括：
+
+- 新固件首次启动成功并完成自检。
+- 自检未完成时人为断电，设备回到旧固件。
+- 新固件启动后 BLE、传感器和音频均可用，再确认版本有效。
+- 授权数据（未来）不能因 OTA 回滚丢失或被新旧版本误读。
+- 反回滚策略、签名策略和返修刷机策略单独记录，不在重构批次中顺手改变。
+
+### 17.4 最终放行条件
+
+只有同时满足以下条件，才称为“完整重构后可烧录测试”：
+
+1. 批次 4–9 全部完成并有独立提交。
+2. `esp32s3_unified` 和相关维护环境构建通过。
+3. 旧 APP 全链路行为与基线一致。
+4. 目标板烧录、启动、BLE、声音、激光、安全和 OTA 回滚通过。
+5. 没有未解释的接口双 Owner、未记录的兼容分支或未验证的行为变化。
+6. 最终测试报告明确区分“源码/编译证据”和“真实设备证据”。
+
+### 17.5 复核资料补充
+
+- [Espressif ESP32-S3 目标测试与 pytest](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/contribute/esp-idf-tests-with-pytest.html)
+- [Espressif OTA 回滚机制](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/ota.html)
+- [Espressif 应用回滚配置](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/kconfig-reference.html)
+- [Espressif ESP32-S3 主机测试边界](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-guides/host-apps.html)
+
