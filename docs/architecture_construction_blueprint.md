@@ -245,3 +245,21 @@ ESP-IDF 官方支持 Unity 目标测试；本仓库已有 `tools/tests`、协议
 - 未烧写 Secure Boot/Flash Encryption 相关 eFuse。
 - 下一批次进入协议解码、事件编码和兼容适配拆分前，需先确认本批次真机回归结果。
 
+### 批次 2 已完成：协议边界适配
+
+- 新增 `src/core/ProtocolBoundary.h/.cpp`。
+- `CommandDecoder` 统一承接 BLE 原始命令解码入口。
+- `EventEncoder` 统一承接事件和快照编码入口。
+- `ProtocolCodec` 暂作为兼容实现保留，未改变任何旧协议字符串。
+- `BleTransport` 不再直接依赖具体解析/编码函数实现，只依赖协议边界接口。
+
+### 批次 2 验证
+
+| 验证项 | 结果 |
+|---|---|
+| `esp32s3_unified` 编译 | 通过 |
+| 固件 ELF/BIN 生成 | 通过 |
+| RAM/Flash 预算 | RAM 15.1%，Flash 15.8% |
+| 协议线格式变更 | 未变更 |
+| 真机协议回归 | 待统一测试 |
+

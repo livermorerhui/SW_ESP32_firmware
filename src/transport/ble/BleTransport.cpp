@@ -3,6 +3,7 @@
 #include "core/FirmwareLogPolicy.h"
 #include "core/HumanReadableLog.h"
 #include "core/LogMarkers.h"
+#include "core/ProtocolBoundary.h"
 #include "core/SystemStateMachine.h"
 #include "core/VerboseSerial.h"
 #include <esp_gap_ble_api.h>
@@ -1700,7 +1701,7 @@ void BleTransport::controlTaskLoop() {
 
     Command cmd{};
     String err;
-    if (!ProtocolCodec::parseCommand(in, cmd, err)) {
+    if (!CommandDecoder::decode(in, cmd, err)) {
       const String nack = "NACK:" + err;
       if (!enqueueTxLine(nack)) {
         noteTxEnqueueFailure(TxFrameClass::NACK, "parse_nack", nack.c_str());
@@ -1846,14 +1847,14 @@ void BleTransport::onEvent(const Event& e) {
       noteEventEnqueueFailure(e.type, "SNAPSHOT");
       return;
     }
-    const String snapshot = ProtocolCodec::encodeSnapshot(snapshotOwner->snapshot());
+    const String snapshot = EventEncoder::encodeSnapshot(snapshotOwner->snapshot());
     if (!enqueueTxLine(snapshot)) {
       noteEventEnqueueFailure(e.type, snapshot.c_str());
     }
     return;
   }
 
-  const String encoded = ProtocolCodec::encodeEvent(e);
+  const String encoded = EventEncoder::encode(e);
   if (e.type == EventType::STREAM) {
     if (!enqueueStreamTxLine(encoded)) {
       noteEventEnqueueFailure(e.type, encoded.c_str());
