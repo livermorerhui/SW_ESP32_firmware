@@ -2,8 +2,6 @@
 #include "core/HumanReadableLog.h"
 #include "core/LogMarkers.h"
 #include "core/VerboseSerial.h"
-#include "modules/laser/LaserModule.h"
-#include "modules/wave/WaveModule.h"
 #include <math.h>
 
 namespace {
@@ -51,11 +49,11 @@ FaultOrigin faultOrigin(FaultCode code) {
 
 SystemStateMachine* SystemStateMachine::active_instance = nullptr;
 
-void SystemStateMachine::begin(EventBus* eb, WaveModule* waveModule) {
+void SystemStateMachine::begin(EventBus* eb, WaveControl* waveControl) {
   active_instance = this;
   bus = eb;
-  wave = waveModule;
-  laser = nullptr;
+  wave = waveControl;
+  measurement = nullptr;
   st = TopState::IDLE;
   blocking_fault_code = FaultCode::NONE;
   pause_reason_code = FaultCode::NONE;
@@ -85,8 +83,9 @@ void SystemStateMachine::begin(EventBus* eb, WaveModule* waveModule) {
   emitState();
 }
 
-void SystemStateMachine::attachLaserModule(const LaserModule* laserModule) {
-  laser = laserModule;
+void SystemStateMachine::attachMeasurementFacts(
+    const MeasurementFacts* measurementFacts) {
+  measurement = measurementFacts;
 }
 
 const SystemStateMachine* SystemStateMachine::activeInstance() {
@@ -118,13 +117,13 @@ SafetySignalKind SystemStateMachine::currentSafetyEffect() const {
 }
 
 bool SystemStateMachine::laserConfiguredInstalled() const {
-  return laser ? laser->laserInstalled() : false;
+  return measurement ? measurement->laserInstalled() : false;
 }
 
 DegradedStartPolicyDecision SystemStateMachine::degradedStartPolicyDecision() const {
   DegradedStartPolicyInput input{};
   input.laserConfiguredInstalled = laserConfiguredInstalled();
-  input.measurementFaultConfirmed = laser ? laser->measurementFaultConfirmed() : false;
+  input.measurementFaultConfirmed = measurement ? measurement->measurementFaultConfirmed() : false;
   input.degradedStartAuthorized = degraded_start_authorized;
   input.runtimeReady = runtime_ready;
   input.startReady = start_ready;
@@ -146,7 +145,7 @@ bool SystemStateMachine::degradedStartBypassActive() const {
 bool SystemStateMachine::effectiveRuntimeReady() const {
   // A missing or invalid device/profile configuration is a maintenance fault,
   // not a measurement failure that the legacy degraded-start path may bypass.
-  return (!laser || laser->startConfigurationComplete()) &&
+  return (!measurement || measurement->startConfigurationComplete()) &&
       degradedStartPolicyDecision().effectiveRuntimeReady;
 }
 
@@ -154,16 +153,16 @@ bool SystemStateMachine::effectiveStartReady() const {
   // CYD's distance reader is usable for configuration, but its protected
   // start/state policy has not been validated. Do not let the legacy
   // measurement-fault bypass promote it to an approved protection path.
-  if (laser && !laser->protectedStartPolicyAvailable() &&
+  if (measurement && !measurement->protectedStartPolicyAvailable() &&
       (fall_stop_enabled || leave_stop_enabled)) {
     return false;
   }
-  return (!laser || laser->startConfigurationComplete()) &&
+  return (!measurement || measurement->startConfigurationComplete()) &&
       degradedStartPolicyDecision().effectiveStartReady;
 }
 
 bool SystemStateMachine::effectiveLaserAvailable() const {
-  return laser ? laser->laserAvailable() : false;
+  return measurement ? measurement->laserAvailable() : false;
 }
 
 bool SystemStateMachine::effectiveProtectionDegraded() const {
@@ -173,19 +172,19 @@ bool SystemStateMachine::effectiveProtectionDegraded() const {
 PlatformSnapshot SystemStateMachine::snapshot() const {
   PlatformSnapshot out{};
   out.topState = st;
-  out.userPresent = laser ? laser->isUserPresent() : false;
+  out.userPresent = measurement ? measurement->isUserPresent() : false;
   out.runtimeReady = effectiveRuntimeReady();
   out.startReady = effectiveStartReady();
-  out.baselineReady = laser ? laser->baselineReady() : false;
+  out.baselineReady = measurement ? measurement->baselineReady() : false;
   out.waveOutputActive = wave ? wave->isOutputActive() : false;
   out.currentReasonCode = snapshot_reason_code;
   out.currentSafetyEffect = snapshot_safety_effect;
-  out.stableWeightKg = laser ? laser->stableWeightKg() : 0.0f;
-  out.platformModel = laser ? laser->platformModel() : PlatformModel::PLUS;
+  out.stableWeightKg = measurement ? measurement->stableWeightKg() : 0.0f;
+  out.platformModel = measurement ? measurement->platformModel() : PlatformModel::PLUS;
   out.laserInstalled = laserConfiguredInstalled();
   out.laserAvailable = effectiveLaserAvailable();
   out.protectionDegraded = effectiveProtectionDegraded();
-  out.measurementHealth = laser ? laser->measurementHealth() : MeasurementHealthState::FAULT;
+  out.measurementHealth = measurement ? measurement->measurementHealth() : MeasurementHealthState::FAULT;
   out.degradedStartAvailable = degradedStartAvailable();
   out.degradedStartEnabled = degradedStartBypassActive();
   out.leaveStopSupported = true;
@@ -962,7 +961,7 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
     return false;
   }
 
-  if (laser && !laser->startConfigurationComplete()) {
+  if (measurement && !measurement->startConfigurationComplete()) {
     reason = FaultCode::NOT_ARMED;
     SW_VERBOSE_SERIAL_PRINTF(
         "[LAYER:START_GATE] decision=reject reason=CONFIG_ERROR model=%s\n",
@@ -971,7 +970,7 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
     return false;
   }
 
-  if (laser && !laser->protectedStartPolicyAvailable() &&
+  if (measurement && !measurement->protectedStartPolicyAvailable() &&
       (fall_stop_enabled || leave_stop_enabled)) {
     reason = FaultCode::NOT_ARMED;
     SW_VERBOSE_SERIAL_PRINTLN(

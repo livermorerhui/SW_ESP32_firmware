@@ -2,17 +2,16 @@
 #include "Types.h"
 #include "EventBus.h"
 #include "PlatformSnapshotOwner.h"
+#include "MeasurementFacts.h"
+#include "WaveControl.h"
 #include "RuntimeProtectionPolicy.h"
 #include "SafetyActionContractEvaluator.h"
 #include "config/GlobalConfig.h"
 
-class WaveModule;
-class LaserModule;
-
 class SystemStateMachine : public PlatformSnapshotOwner {
 public:
-  void begin(EventBus* eb, WaveModule* waveModule);
-  void attachLaserModule(const LaserModule* laserModule);
+  void begin(EventBus* eb, WaveControl* waveControl);
+  void attachMeasurementFacts(const MeasurementFacts* measurementFacts);
   static const SystemStateMachine* activeInstance();
 
   TopState state() const;
@@ -101,8 +100,8 @@ private:
   void syncSnapshotDecisionContext();
 
   EventBus* bus = nullptr;
-  WaveModule* wave = nullptr;
-  const LaserModule* laser = nullptr;
+  WaveControl* wave = nullptr;
+  const MeasurementFacts* measurement = nullptr;
   TopState st = TopState::IDLE;
   FaultCode blocking_fault_code = FaultCode::NONE;
   FaultCode pause_reason_code = FaultCode::NONE;

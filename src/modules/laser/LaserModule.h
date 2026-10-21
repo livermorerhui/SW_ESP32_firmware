@@ -5,6 +5,7 @@
 #include "config/LaserPhase2Config.h"
 #include "core/DeviceConfig.h"
 #include "core/DeviceConfigPorts.h"
+#include "core/MeasurementFacts.h"
 #include "core/EventBus.h"
 #include "core/ProtocolCodec.h"
 #include "core/WaveObservation.h"
@@ -69,7 +70,7 @@ struct StableContractState {
   const char* startReadyBridge = "not_ready";
 };
 
-class LaserModule : public IDeviceConfigOwner {
+class LaserModule : public IDeviceConfigOwner, public MeasurementFacts {
 public:
   void begin(EventBus* eb, SystemStateMachine* fsm, WaveObservation* waveObservation);
   void startTask();
@@ -79,14 +80,14 @@ public:
   bool setParams(float zero, float factor, String& reason);
   void getParams(float &zero, float &factor) const;
   float getWeightKg() const;
-  bool isUserPresent() const;
-  bool baselineReady() const;
-  float stableWeightKg() const;
-  PlatformModel platformModel() const;
-  bool laserInstalled() const;
-  bool laserAvailable() const;
-  MeasurementHealthState measurementHealth() const;
-  bool measurementFaultConfirmed() const;
+  bool isUserPresent() const override;
+  bool baselineReady() const override;
+  float stableWeightKg() const override;
+  PlatformModel platformModel() const override;
+  bool laserInstalled() const override;
+  bool laserAvailable() const override;
+  MeasurementHealthState measurementHealth() const override;
+  bool measurementFaultConfirmed() const override;
   bool measurementStartupResolved() const;
   bool protectionDegraded() const;
   void getDeviceConfig(DeviceConfigSnapshot& out) const;
@@ -101,8 +102,8 @@ public:
       String& reason) override;
   bool configOperational() const;
   bool configIdentityValid() const;
-  bool startConfigurationComplete() const;
-  bool protectedStartPolicyAvailable() const;
+  bool startConfigurationComplete() const override;
+  bool protectedStartPolicyAvailable() const override;
   bool getCalibrationModel(CalibrationModel& out) const;
   bool setCalibrationModel(const CalibrationModel& model, String& reason);
   bool getEmptyDistance(EmptyDistanceRecord& out) const;

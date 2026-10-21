@@ -3,10 +3,10 @@
 #include <driver/i2s.h>
 #include "core/EventBus.h"
 #include "core/CommandBus.h"
-#include "core/WaveObservation.h"
+#include "core/WaveControl.h"
 #include "config/GlobalConfig.h"
 
-class WaveModule : public WaveObservation {
+class WaveModule : public WaveControl {
 public:
   enum class CueRequestResult : uint8_t {
     ACCEPTED = 0,

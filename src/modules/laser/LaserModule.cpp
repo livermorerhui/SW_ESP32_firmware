@@ -199,7 +199,7 @@ void LaserModule::begin(EventBus* eb, SystemStateMachine* fsm, WaveObservation* 
   bus = eb;
   sm = fsm;
   this->waveObservation = waveObservation;
-  if (sm) sm->attachLaserModule(this);
+  if (sm) sm->attachMeasurementFacts(this);
   lastObservedTopState = sm ? sm->state() : TopState::IDLE;
   phase2Thresholds = phase2ThresholdConfig();
 
