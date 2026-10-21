@@ -6,10 +6,10 @@
 #include "core/DeviceConfig.h"
 #include "core/DeviceConfigPorts.h"
 #include "core/MeasurementFacts.h"
+#include "core/LaserStatePort.h"
 #include "core/EventBus.h"
 #include "core/ProtocolCodec.h"
 #include "core/WaveObservation.h"
-#include "core/SystemStateMachine.h"
 #include "modules/laser/BaselineContractDiagnostics.h"
 #include "modules/laser/BaselineEvidenceEvaluator.h"
 #include "modules/laser/CalibrationRuntime.h"
@@ -72,7 +72,7 @@ struct StableContractState {
 
 class LaserModule : public IDeviceConfigOwner, public MeasurementFacts {
 public:
-  void begin(EventBus* eb, SystemStateMachine* fsm, WaveObservation* waveObservation);
+  void begin(EventBus* eb, LaserStatePort* statePort, WaveObservation* waveObservation);
   void startTask();
 
   // Command hooks（由统一命令处理器调用）
@@ -265,7 +265,7 @@ private:
   };
 
   EventBus* bus = nullptr;
-  SystemStateMachine* sm = nullptr;
+  LaserStatePort* statePort = nullptr;
   WaveObservation* waveObservation = nullptr;
 
   LaserMeasurementReader measurementReader;

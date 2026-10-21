@@ -148,6 +148,7 @@ void setup() {
 
   g_wave.begin(&g_eventBus);
   g_laser.begin(&g_eventBus, &g_fsm, &g_wave);
+  g_fsm.attachMeasurementFacts(&g_laser);
   g_laser.startTask();
   g_cmdBus.setHandler(&g_handler);
 
