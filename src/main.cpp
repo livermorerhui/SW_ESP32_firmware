@@ -9,6 +9,7 @@
 #include "core/FirmwareDeviceIdentityProvider.h"
 #include "core/FirmwareSecurityVersionProvider.h"
 #include "core/HumanReadableLog.h"
+#include "core/BleLifecycleCoordinator.h"
 #include "core/VerboseSerial.h"
 #include "core/SystemStateMachine.h"
 #include "HubAckBuilder.h"
@@ -73,7 +74,7 @@ static const char* resetReasonName(esp_reset_reason_t reason) {
   }
 }
 
-class HubHandler : public CommandHandler, public BleDisconnectSink {
+class HubHandler : public CommandHandler {
 public:
   HubHandler(SystemStateMachine* fsm, WaveModule* wave, LaserModule* laser)
     : sm(fsm), w(wave), l(laser) {}
@@ -594,43 +595,6 @@ public:
     return false;
   }
 
-  void onBleDisconnect(uint32_t sessionId, uint16_t connId, bool connIdKnown) override {
-    if (l) l->resetStreamSubscription("ble_disconnect");
-    if (sm) sm->onBleDisconnected();
-    if (w) {
-      const WaveModule::CueRequestResult result = w->requestCue(
-          AudioCueId::DISCONNECT,
-          sessionId,
-          connId,
-          connIdKnown);
-      SW_VERBOSE_SERIAL_PRINTF(
-          "[CUE] source=ble_disconnect id=DISCONNECT result=%d session_id=%lu conn_id=%u\n",
-          static_cast<int>(result),
-          static_cast<unsigned long>(sessionId),
-          static_cast<unsigned>(connId));
-    }
-  }
-
-  void onBleConnected() override {
-    if (l) l->resetStreamSubscription("ble_connected");
-    const uint32_t sessionId = g_ble.currentSessionId();
-    if (w) {
-      w->resetCuesForNewSession(sessionId);
-      if (g_ble.isConnected()) {
-        const WaveModule::CueRequestResult result = w->requestCue(
-            AudioCueId::CONNECT,
-            sessionId,
-            0,
-            false);
-        SW_VERBOSE_SERIAL_PRINTF(
-            "[CUE] source=ble_connected id=CONNECT result=%d session_id=%lu\n",
-            static_cast<int>(result),
-            static_cast<unsigned long>(sessionId));
-      }
-    }
-    if (sm) sm->onBleConnected();
-  }
-
 private:
   SystemStateMachine* sm;
   WaveModule* w;
@@ -638,6 +602,8 @@ private:
 };
 
 static HubHandler g_handler(&g_fsm, &g_wave, &g_laser);
+static BleLifecycleCoordinator g_bleLifecycle(
+    &g_ble, &g_fsm, &g_wave, &g_laser);
 
 static String buildBleDeviceName(PlatformModel model) {
   switch (model) {
@@ -707,7 +673,7 @@ void setup() {
   g_laser.startTask();
   g_cmdBus.setHandler(&g_handler);
 
-  g_ble.setDisconnectSink(&g_handler);
+  g_ble.setDisconnectSink(&g_bleLifecycle);
   g_ble.setPlatformSnapshotOwner(&g_fsm);
   waitForMeasurementStartupResolved();
   g_bleDeviceName = g_laser.configIdentityValid()
