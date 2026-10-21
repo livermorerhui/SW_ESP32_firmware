@@ -212,7 +212,7 @@ APP 登录并输入订单号
 - `HubHandler` 变为 `LegacyCommandAdapter`。
 - 所有服务返回统一 `ServiceResult`，由适配器生成旧 ACK/NACK。
 
-当前进度：已完成第一步 `WaveCommandService`，迁移 `WAVE_SET`、`WAVE_START`、`WAVE_STOP`、`AUDIO_CUE` 和 `LEGACY_FIE`；其余命令族继续按本阶段顺序迁移。
+当前进度：已完成第一步 `WaveCommandService`，迁移 `WAVE_SET`、`WAVE_START`、`WAVE_STOP`、`AUDIO_CUE` 和 `LEGACY_FIE`；已完成第二步 `CapabilityCommandService`，迁移能力、身份、安全版本和降级启动命令；其余命令族继续按本阶段顺序迁移。
 
 ### 阶段 5：状态机接口化
 
@@ -499,6 +499,15 @@ algorithm, nonce, signature
 - `HubHandler` 先按 `handles()` 将波形、启动、停止、Cue 和旧 F/I/E 命令转交给服务。
 - 保留原 `SystemStateMachine::requestStart/requestStop`、`WaveModule`、ACK/NACK、session Cue 和日志语义。
 - 未接入授权门禁，未改变旧启动行为。
+
+验证：`python3 -m platformio run -e esp32s3_unified` 通过；RAM 15.1%，Flash 15.8%。
+
+### 阶段 4 第二子批次：能力命令服务化
+
+- 新增 `src/services/CapabilityCommandService.h/.cpp`。
+- 已迁移 `CAP_QUERY`、`DEVICE_IDENTITY_QUERY`、`DEVICE_SECURITY_QUERY`、`DEGRADED_START_SET`。
+- `HubHandler` 保留旧命令入口和兼容 ACK/NACK，但不再承载这些能力业务实现。
+- 未改变 CAP、设备身份、安全版本和降级启动的协议字段或状态语义。
 
 验证：`python3 -m platformio run -e esp32s3_unified` 通过；RAM 15.1%，Flash 15.8%。
 

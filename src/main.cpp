@@ -18,6 +18,7 @@
 #include "ota/FirmwareRollbackConfirmation.h"
 #include "transport/ble/BleTransport.h"
 #include "services/WaveCommandService.h"
+#include "services/CapabilityCommandService.h"
 
 static EventBus g_eventBus;
 static CommandBus g_cmdBus;
@@ -80,12 +81,20 @@ public:
   HubHandler(SystemStateMachine* fsm,
              WaveModule* wave,
              LaserModule* laser,
-             WaveCommandService* waveCommands)
-    : sm(fsm), w(wave), l(laser), waveCommands_(waveCommands) {}
+             WaveCommandService* waveCommands,
+             CapabilityCommandService* capabilityCommands)
+    : sm(fsm),
+      w(wave),
+      l(laser),
+      waveCommands_(waveCommands),
+      capabilityCommands_(capabilityCommands) {}
 
   bool handle(const Command& c, String& outAck) override {
     if (waveCommands_ && waveCommands_->handles(c.type)) {
       return waveCommands_->handle(c, outAck);
+    }
+    if (capabilityCommands_ && capabilityCommands_->handles(c.type)) {
+      return capabilityCommands_->handle(c, outAck);
     }
     switch (c.type) {
       case CmdType::WAVE_SET:
@@ -95,74 +104,11 @@ public:
       case CmdType::LEGACY_FIE:
         return waveCommands_->handle(c, outAck);
 
-      case CmdType::CAP_QUERY: {
-        if (!l->configIdentityValid()) {
-          SW_VERBOSE_SERIAL_PRINTLN("[DEVICE_CONFIG] op=CAP result=reject reason=CONFIG_ERROR");
-          outAck = "NACK:CONFIG_ERROR";
-          return false;
-        }
-        const PlatformSnapshot snapshot = sm->snapshot();
-        SW_VERBOSE_SERIAL_PRINTF(
-            "[LAYER:CONFIG_TRUTH] source=CAP_QUERY platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d degraded_start_available=%d degraded_start_enabled=%d runtime_ready=%d start_ready=%d baseline_ready=%d top_state=%s\n",
-            platformModelName(snapshot.platformModel),
-            snapshot.laserInstalled ? 1 : 0,
-            snapshot.laserAvailable ? 1 : 0,
-            snapshot.protectionDegraded ? 1 : 0,
-            snapshot.degradedStartAvailable ? 1 : 0,
-            snapshot.degradedStartEnabled ? 1 : 0,
-            snapshot.runtimeReady ? 1 : 0,
-            snapshot.startReady ? 1 : 0,
-            snapshot.baselineReady ? 1 : 0,
-            topStateName(snapshot.topState));
-        outAck = HubAckBuilder::cap(
-            FW_VER,
-            FW_BUILD_ID,
-            FW_BOARD_ID,
-            PROTO_VER,
-            l->platformModel(),
-            l->laserInstalled(),
-            true);
-        return true;
-      }
-
-      case CmdType::DEVICE_IDENTITY_QUERY: {
-        String deviceId;
-        if (!FirmwareDeviceIdentityProvider::readFromEfuse(deviceId) ||
-            !FirmwareDeviceIdentityProvider::isValid(deviceId)) {
-          SW_VERBOSE_SERIAL_PRINTLN("[DEVICE_IDENTITY] result=unavailable");
-          outAck = "NACK:DEVICE_ID_UNAVAILABLE";
-          return false;
-        }
-        SW_VERBOSE_SERIAL_PRINTF(
-            "[DEVICE_IDENTITY] result=ok version=%d id_suffix=%s\n",
-            FirmwareDeviceIdentityProvider::kIdentityVersion,
-            FirmwareDeviceIdentityProvider::logSuffix(deviceId).c_str());
-        outAck = HubAckBuilder::deviceIdentity(
-            deviceId,
-            FirmwareDeviceIdentityProvider::kIdentityVersion);
-        return true;
-      }
-
-      case CmdType::DEVICE_SECURITY_QUERY: {
-        FirmwareSecurityVersionFacts facts{};
-        if (!FirmwareSecurityVersionProvider::read(facts)) {
-          SW_VERBOSE_SERIAL_PRINTLN("[DEVICE_SECURITY] result=unavailable");
-          outAck = "NACK:DEVICE_SECURITY_UNAVAILABLE";
-          return false;
-        }
-        SW_VERBOSE_SERIAL_PRINTF(
-            "[DEVICE_SECURITY] result=ok app_sv=%lu efuse_sv=%lu floor_sv=%lu app_gate=%d\n",
-            static_cast<unsigned long>(facts.appSecurityVersion),
-            static_cast<unsigned long>(facts.efuseSecurityVersion),
-            static_cast<unsigned long>(facts.currentSecurityVersion),
-            facts.appAntiRollbackGate ? 1 : 0);
-        outAck = HubAckBuilder::deviceSecurity(
-            facts.appSecurityVersion,
-            facts.efuseSecurityVersion,
-            facts.currentSecurityVersion,
-            facts.appAntiRollbackGate);
-        return true;
-      }
+      case CmdType::CAP_QUERY:
+      case CmdType::DEVICE_IDENTITY_QUERY:
+      case CmdType::DEVICE_SECURITY_QUERY:
+      case CmdType::DEGRADED_START_SET:
+        return capabilityCommands_->handle(c, outAck);
 
       case CmdType::DEVICE_GET_CONFIG: {
         DeviceConfigSnapshot config{};
@@ -264,12 +210,6 @@ public:
         return true;
       }
 
-      case CmdType::DEGRADED_START_SET: {
-        sm->setDegradedStartAuthorized(c.degradedStart.enabled);
-        const PlatformSnapshot snapshot = sm->snapshot();
-        outAck = HubAckBuilder::degradedStart(snapshot);
-        return true;
-      }
 
       case CmdType::STREAM_SET: {
         String reason;
@@ -506,10 +446,13 @@ private:
   WaveModule* w;
   LaserModule* l;
   WaveCommandService* waveCommands_;
+  CapabilityCommandService* capabilityCommands_;
 };
 
 static WaveCommandService g_waveCommands(&g_fsm, &g_wave);
-static HubHandler g_handler(&g_fsm, &g_wave, &g_laser, &g_waveCommands);
+static CapabilityCommandService g_capabilityCommands(&g_fsm, &g_laser);
+static HubHandler g_handler(
+    &g_fsm, &g_wave, &g_laser, &g_waveCommands, &g_capabilityCommands);
 static BleLifecycleCoordinator g_bleLifecycle(
     &g_ble, &g_fsm, &g_wave, &g_laser);
 
