@@ -4,6 +4,7 @@
 #include <freertos/semphr.h>
 #include "config/LaserPhase2Config.h"
 #include "core/DeviceConfig.h"
+#include "core/DeviceConfigPorts.h"
 #include "core/EventBus.h"
 #include "core/ProtocolCodec.h"
 #include "core/WaveObservation.h"
@@ -68,7 +69,7 @@ struct StableContractState {
   const char* startReadyBridge = "not_ready";
 };
 
-class LaserModule {
+class LaserModule : public IDeviceConfigOwner {
 public:
   void begin(EventBus* eb, SystemStateMachine* fsm, WaveObservation* waveObservation);
   void startTask();
@@ -89,12 +90,15 @@ public:
   bool measurementStartupResolved() const;
   bool protectionDegraded() const;
   void getDeviceConfig(DeviceConfigSnapshot& out) const;
-  bool getProfileConfig(DeviceConfigSnapshot& out, String& reason);
+  bool getProfileConfig(DeviceConfigSnapshot& out, String& reason) override;
   bool setProfileConfig(
       PlatformModel platformModel,
       SensorProfileId sensorProfile,
-      String& reason);
-  bool setDeviceConfig(PlatformModel platformModel, bool laserInstalled, String& reason);
+      String& reason) override;
+  bool setDeviceConfig(
+      PlatformModel platformModel,
+      bool laserInstalled,
+      String& reason) override;
   bool configOperational() const;
   bool configIdentityValid() const;
   bool startConfigurationComplete() const;

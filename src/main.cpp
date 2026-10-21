@@ -20,6 +20,8 @@
 #include "services/WaveCommandService.h"
 #include "services/CapabilityCommandService.h"
 #include "services/CalibrationCommandService.h"
+#include "services/DeviceConfigCommandService.h"
+#include "transport/ble/BleDeviceConfigEffects.h"
 
 static EventBus g_eventBus;
 static CommandBus g_cmdBus;
@@ -28,8 +30,7 @@ static SystemStateMachine g_fsm;
 static WaveModule g_wave;
 static LaserModule g_laser;
 static BleTransport g_ble;
-static String g_bleDeviceName;
-static String buildBleDeviceName(PlatformModel model);
+static BleDeviceConfigEffects g_bleConfigEffects(&g_ble);
 
 static void configureHumanSerialLog() {
   // 保留警告和错误，隐藏 ESP-IDF 正常初始化时的英文信息。
@@ -84,13 +85,15 @@ public:
              LaserModule* laser,
              WaveCommandService* waveCommands,
              CapabilityCommandService* capabilityCommands,
-             CalibrationCommandService* calibrationCommands)
+             CalibrationCommandService* calibrationCommands,
+             DeviceConfigCommandService* deviceConfigCommands)
     : sm(fsm),
       w(wave),
       l(laser),
       waveCommands_(waveCommands),
       capabilityCommands_(capabilityCommands),
-      calibrationCommands_(calibrationCommands) {}
+      calibrationCommands_(calibrationCommands),
+      deviceConfigCommands_(deviceConfigCommands) {}
 
   bool handle(const Command& c, String& outAck) override {
     if (waveCommands_ && waveCommands_->handles(c.type)) {
@@ -101,6 +104,9 @@ public:
     }
     if (calibrationCommands_ && calibrationCommands_->handles(c.type)) {
       return calibrationCommands_->handle(c, outAck);
+    }
+    if (deviceConfigCommands_ && deviceConfigCommands_->handles(c.type)) {
+      return deviceConfigCommands_->handle(c, outAck);
     }
     switch (c.type) {
       case CmdType::WAVE_SET:
@@ -129,106 +135,10 @@ public:
       case CmdType::CAL_CLEAR_WEIGHT_MODEL:
         return calibrationCommands_->handle(c, outAck);
 
-      case CmdType::DEVICE_GET_CONFIG: {
-        DeviceConfigSnapshot config{};
-        String reason;
-        if (!l->getProfileConfig(config, reason)) {
-          g_ble.invalidatePendingStreamFrames();
-          SW_VERBOSE_SERIAL_PRINTF(
-              "[DEVICE_CONFIG] op=GET result=failure reason=%s\n",
-              reason.c_str());
-          outAck = HubAckBuilder::deviceProfileConfigNack(
-              "GET", reason == "UNSUPPORTED_MODEL" ? "UNSUPPORTED_MODEL" : "CONFIG_ERROR");
-          return false;
-        }
-        outAck = HubAckBuilder::deviceProfileConfig(
-            "GET", config.platformModel, config.sensorProfile, config.generation);
-        SW_VERBOSE_SERIAL_PRINTF(
-            "[DEVICE_CONFIG] op=GET result=ok model=%s profile=%s generation=%lu\n",
-            platformModelName(config.platformModel),
-            sensorProfileName(config.sensorProfile),
-            static_cast<unsigned long>(config.generation));
-        return true;
-      }
-
-      case CmdType::DEVICE_SET_PROFILE_CONFIG: {
-        const DeviceProfileConfigCommand& requested = c.deviceProfileConfig;
-        SW_VERBOSE_SERIAL_PRINTF(
-            "[DEVICE_CONFIG] op=SET requested_model=%s requested_profile=%s\n",
-            platformModelName(requested.platformModel),
-            sensorProfileName(requested.sensorProfile));
-        String reason;
-        if (!l->setProfileConfig(
-                requested.platformModel, requested.sensorProfile, reason)) {
-          g_ble.invalidatePendingStreamFrames();
-          outAck = HubAckBuilder::deviceProfileConfigNack("SET", reason.c_str());
-          SW_VERBOSE_SERIAL_PRINTF(
-              "[DEVICE_CONFIG] op=SET result=failure reason=%s\n",
-              reason.c_str());
-          return false;
-        }
-        g_ble.invalidatePendingStreamFrames();
-        DeviceConfigSnapshot applied{};
-        if (!l->getProfileConfig(applied, reason)) {
-          g_ble.invalidatePendingStreamFrames();
-          outAck = HubAckBuilder::deviceProfileConfigNack("SET", "VERIFY_FAILED");
-          SW_VERBOSE_SERIAL_PRINTF(
-              "[DEVICE_CONFIG] op=SET result=verify_failed reason=%s\n",
-              reason.c_str());
-          return false;
-        }
-        outAck = HubAckBuilder::deviceProfileConfig(
-            "SET", applied.platformModel, applied.sensorProfile, applied.generation);
-        g_bleDeviceName = buildBleDeviceName(applied.platformModel);
-        g_ble.updateAdvertisingIdentity(
-            g_bleDeviceName.c_str(),
-            platformModelName(applied.platformModel));
-        SW_VERBOSE_SERIAL_PRINTF(
-            "[DEVICE_CONFIG] op=SET result=ok model=%s profile=%s generation=%lu\n",
-            platformModelName(applied.platformModel),
-            sensorProfileName(applied.sensorProfile),
-            static_cast<unsigned long>(applied.generation));
-        return true;
-      }
-
-      case CmdType::DEVICE_SET_CONFIG: {
-        SW_VERBOSE_SERIAL_PRINTF(
-            "[LAYER:COMMAND_DISPATCH] cmd=DEVICE_SET_CONFIG platform_model=%s laser_installed=%d owner=LaserModule::setDeviceConfig\n",
-            platformModelName(c.deviceConfig.platformModel),
-            c.deviceConfig.laserInstalled ? 1 : 0);
-        String reason;
-        if (!l->setDeviceConfig(
-                c.deviceConfig.platformModel,
-                c.deviceConfig.laserInstalled,
-                reason)) {
-          g_ble.invalidatePendingStreamFrames();
-          outAck = HubAckBuilder::simpleNack(reason);
-          return false;
-        }
-
-        g_ble.invalidatePendingStreamFrames();
-
-        outAck = HubAckBuilder::deviceConfig(l->platformModel(), l->laserInstalled());
-        g_bleDeviceName = buildBleDeviceName(l->platformModel());
-        g_ble.updateAdvertisingIdentity(
-            g_bleDeviceName.c_str(),
-            platformModelName(l->platformModel()));
-        const PlatformSnapshot snapshot = sm->snapshot();
-        SW_VERBOSE_SERIAL_PRINTF(
-            "[LAYER:CONFIG_TRUTH] source=DEVICE_SET_CONFIG platform_model=%s laser_installed=%d laser_available=%d protection_degraded=%d degraded_start_available=%d degraded_start_enabled=%d runtime_ready=%d start_ready=%d baseline_ready=%d top_state=%s\n",
-            platformModelName(snapshot.platformModel),
-            snapshot.laserInstalled ? 1 : 0,
-            snapshot.laserAvailable ? 1 : 0,
-            snapshot.protectionDegraded ? 1 : 0,
-            snapshot.degradedStartAvailable ? 1 : 0,
-            snapshot.degradedStartEnabled ? 1 : 0,
-            snapshot.runtimeReady ? 1 : 0,
-            snapshot.startReady ? 1 : 0,
-            snapshot.baselineReady ? 1 : 0,
-            topStateName(snapshot.topState));
-        return true;
-      }
-
+      case CmdType::DEVICE_GET_CONFIG:
+      case CmdType::DEVICE_SET_PROFILE_CONFIG:
+      case CmdType::DEVICE_SET_CONFIG:
+        return deviceConfigCommands_->handle(c, outAck);
 
       case CmdType::STREAM_SET: {
         String reason;
@@ -274,30 +184,23 @@ private:
   WaveCommandService* waveCommands_;
   CapabilityCommandService* capabilityCommands_;
   CalibrationCommandService* calibrationCommands_;
+  DeviceConfigCommandService* deviceConfigCommands_;
 };
 
 static WaveCommandService g_waveCommands(&g_fsm, &g_wave);
 static CapabilityCommandService g_capabilityCommands(&g_fsm, &g_laser);
 static CalibrationCommandService g_calibrationCommands(&g_laser);
+static DeviceConfigCommandService g_deviceConfigCommands(
+    &g_laser,
+    &g_bleConfigEffects,
+    &g_bleConfigEffects,
+    &g_fsm);
 static HubHandler g_handler(
     &g_fsm, &g_wave, &g_laser,
-    &g_waveCommands, &g_capabilityCommands, &g_calibrationCommands);
+    &g_waveCommands, &g_capabilityCommands, &g_calibrationCommands,
+    &g_deviceConfigCommands);
 static BleLifecycleCoordinator g_bleLifecycle(
     &g_ble, &g_fsm, &g_wave, &g_laser);
-
-static String buildBleDeviceName(PlatformModel model) {
-  switch (model) {
-    case PlatformModel::BASE:
-      return "SonicWave_Base";
-    case PlatformModel::PLUS:
-      return "SonicWave_Plus";
-    case PlatformModel::PRO:
-      return "SonicWave_Pro";
-    case PlatformModel::ULTRA:
-      return "SonicWave_Ultra";
-  }
-  return BLE_DEVICE_NAME;
-}
 
 void setup() {
   clearBoardRgbLed();
@@ -356,11 +259,12 @@ void setup() {
   g_ble.setDisconnectSink(&g_bleLifecycle);
   g_ble.setPlatformSnapshotOwner(&g_fsm);
   waitForMeasurementStartupResolved();
-  g_bleDeviceName = g_laser.configIdentityValid()
-      ? buildBleDeviceName(g_laser.platformModel())
-      : String("SonicWave_Service");
+  g_bleConfigEffects.setInitialDeviceName(
+      g_laser.configIdentityValid()
+          ? BleDeviceConfigEffects::deviceNameForModel(g_laser.platformModel())
+          : String("SonicWave_Service"));
   g_ble.begin(&g_cmdBus,
-      g_bleDeviceName.c_str(),
+      g_bleConfigEffects.currentDeviceName().c_str(),
       g_laser.configIdentityValid()
           ? platformModelName(g_laser.platformModel())
           : "SERVICE");
