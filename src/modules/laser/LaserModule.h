@@ -19,6 +19,7 @@
 #include "modules/laser/LaserDiagnostics.h"
 #include "modules/laser/LaserMeasurementReader.h"
 #include "modules/laser/LaserMeasurementRuntime.h"
+#include "modules/laser/LaserStabilityRuntime.h"
 #include "modules/laser/LaserStableWindow.h"
 #include "modules/laser/MeasurementAvailabilityProbePolicy.h"
 #include "modules/laser/MeasurementHealthStateMachine.h"
@@ -53,22 +54,6 @@ struct DualZeroState {
   uint32_t runtimeZeroCapturedAtMs = 0;
   float lastRuntimeZeroCandidateDistance = 0.0f;
   uint32_t runtimeZeroWindowStartedAtMs = 0;
-};
-
-struct StableContractState {
-  bool userPresent = false;
-  bool stableCandidate = false;
-  bool stableReadyLive = false;
-  bool baselineReadyLatched = false;
-  bool startReady = false;
-  float stableReadyWeightKg = 0.0f;
-  float stableReadyDistance = 0.0f;
-  float baselineReadyWeightKg = 0.0f;
-  float baselineReadyDistance = 0.0f;
-  float startReadyWeightKg = 0.0f;
-  uint32_t stableReadyAtMs = 0;
-  uint32_t baselineReadyAtMs = 0;
-  const char* startReadyBridge = "not_ready";
 };
 
 class LaserModule : public IDeviceConfigOwner, public MeasurementFacts {
@@ -259,11 +244,7 @@ private:
   float getStdDev(const float* values) const;
 
 private:
-  enum class StableState : uint8_t {
-    UNSTABLE,
-    STABLE_CANDIDATE,
-    STABLE_LATCHED
-  };
+  using StableState = LaserStabilityRuntime::StableState;
 
   EventBus* bus = nullptr;
   LaserStatePort* statePort = nullptr;
@@ -302,32 +283,34 @@ private:
   bool emptyDistanceReady = false;
   DualZeroState dualZero{};
 
-  float weightBuffer[WINDOW_N]{};
-  float distanceBuffer[WINDOW_N]{};
-  int bufHead = 0, bufCount = 0;
-  StableState stableState = StableState::UNSTABLE;
+  LaserStabilityRuntime stabilityRuntime;
+  float (&weightBuffer)[WINDOW_N] = stabilityRuntime.weightBuffer;
+  float (&distanceBuffer)[WINDOW_N] = stabilityRuntime.distanceBuffer;
+  int& bufHead = stabilityRuntime.bufHead;
+  int& bufCount = stabilityRuntime.bufCount;
+  LaserStabilityRuntime::StableState& stableState = stabilityRuntime.stableState;
   // stable_weight 生命周期入口：
   // 仅在未律动且稳定站立时锁定，确认离台后才允许清空并重建。
-  float stableBaselineDistance = 0.0f;
-  float stableBaselineDistanceMm = 0.0f;
-  float stableBaselineWeight = 0.0f;
-  uint32_t stableLatchedAtMs = 0;
-  uint8_t invalidStableSamples = 0;
-  uint8_t stableConfirmCount = 0;
-  uint32_t stableCandidateStartedAtMs = 0;
-  bool stableEarlyCheckpointLogged = false;
-  bool stableFilterValid = false;
-  float stableFilteredDistance = 0.0f;
-  float stableFilteredWeight = 0.0f;
+  float& stableBaselineDistance = stabilityRuntime.stableBaselineDistance;
+  float& stableBaselineDistanceMm = stabilityRuntime.stableBaselineDistanceMm;
+  float& stableBaselineWeight = stabilityRuntime.stableBaselineWeight;
+  uint32_t& stableLatchedAtMs = stabilityRuntime.stableLatchedAtMs;
+  uint8_t& invalidStableSamples = stabilityRuntime.invalidStableSamples;
+  uint8_t& stableConfirmCount = stabilityRuntime.stableConfirmCount;
+  uint32_t& stableCandidateStartedAtMs = stabilityRuntime.stableCandidateStartedAtMs;
+  bool& stableEarlyCheckpointLogged = stabilityRuntime.stableEarlyCheckpointLogged;
+  bool& stableFilterValid = stabilityRuntime.stableFilterValid;
+  float& stableFilteredDistance = stabilityRuntime.stableFilteredDistance;
+  float& stableFilteredWeight = stabilityRuntime.stableFilteredWeight;
   float runtimeZeroBuffer[WINDOW_N]{};
   uint8_t runtimeZeroHead = 0;
   uint8_t runtimeZeroCount = 0;
-  StableContractState stableContract{};
-  uint8_t presenceEnterConfirmCount = 0;
-  uint8_t presenceExitConfirmCount = 0;
-  uint8_t invalidPresenceSamples = 0;
-  uint8_t stableExitConfirmCount = 0;
-  const char* stableExitPendingReason = nullptr;
+  StableContractState& stableContract = stabilityRuntime.stableContract;
+  uint8_t& presenceEnterConfirmCount = stabilityRuntime.presenceEnterConfirmCount;
+  uint8_t& presenceExitConfirmCount = stabilityRuntime.presenceExitConfirmCount;
+  uint8_t& invalidPresenceSamples = stabilityRuntime.invalidPresenceSamples;
+  uint8_t& stableExitConfirmCount = stabilityRuntime.stableExitConfirmCount;
+  const char*& stableExitPendingReason = stabilityRuntime.stableExitPendingReason;
 
   // 静默日志
   float lastLogDist = -999.0f;
