@@ -18,6 +18,7 @@
 #include "modules/laser/DistanceStateChain.h"
 #include "modules/laser/LaserDiagnostics.h"
 #include "modules/laser/LaserMeasurementReader.h"
+#include "modules/laser/LaserMeasurementRuntime.h"
 #include "modules/laser/LaserStableWindow.h"
 #include "modules/laser/MeasurementAvailabilityProbePolicy.h"
 #include "modules/laser/MeasurementHealthStateMachine.h"
@@ -268,9 +269,10 @@ private:
   LaserStatePort* statePort = nullptr;
   WaveObservation* waveObservation = nullptr;
 
-  LaserMeasurementReader measurementReader;
+  LaserMeasurementRuntime measurementRuntime;
+  LaserMeasurementReader& measurementReader = measurementRuntime.reader();
   DistanceStateChain distanceStateChain;
-  MeasurementPlane measurementPlane;
+  MeasurementPlane& measurementPlane = measurementRuntime.plane();
   DeviceConfigStore deviceConfigStore;
   CalibrationModelStore calibrationModelStore;
   ProfileEmptyDistanceStore profileEmptyDistanceStore;
@@ -336,8 +338,8 @@ private:
 
   volatile float latestWeightKg = 0.0f;
   bool lastMeasurementValid = false;
-  MeasurementAvailabilityProbePolicy measurementProbePolicy{};
-  MeasurementHealthStateMachine measurementHealthMachine{};
+  MeasurementAvailabilityProbePolicy& measurementProbePolicy = measurementRuntime.probePolicy();
+  MeasurementHealthStateMachine& measurementHealthMachine = measurementRuntime.health();
   uint32_t lastValidityLogMs = 0;
   bool hasLoggedMeasurementBypassState = false;
   bool lastLoggedMeasurementBypassState = false;
