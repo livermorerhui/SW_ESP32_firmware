@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 #include "config/LaserPhase2Config.h"
-#include "core/SystemStateMachine.h"
+#include "core/Types.h"
 
 enum class RuntimeZeroDecisionReason : uint8_t {
   REFRESH_DISABLED = 0,
