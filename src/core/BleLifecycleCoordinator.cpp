@@ -1,6 +1,7 @@
 #include "BleLifecycleCoordinator.h"
 
 #include "HumanReadableLog.h"
+#include "VerboseSerial.h"
 #include "SystemStateMachine.h"
 #include "modules/laser/LaserModule.h"
 #include "modules/wave/WaveModule.h"

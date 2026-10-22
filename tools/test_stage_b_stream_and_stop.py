@@ -424,7 +424,7 @@ public:
   FakeModelStore calibrationModelStore;
   FakeDistanceStateChain distanceStateChain;
   FakeRhythmStateJudge rhythmStateJudge;
-  FakeStateMachine* sm = nullptr;
+  FakeStateMachine* statePort = nullptr;
 
   bool configIdentityValid() const { return identityValid; }
   bool configurationMutationBlocked(String& reason) const {
