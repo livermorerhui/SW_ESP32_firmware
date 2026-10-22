@@ -21,6 +21,7 @@
 #include "modules/laser/LaserMeasurementRuntime.h"
 #include "modules/laser/LaserStabilityRuntime.h"
 #include "modules/laser/LaserConfigurationRuntime.h"
+#include "modules/laser/LaserDecisionRuntime.h"
 #include "modules/laser/LaserStableWindow.h"
 #include "modules/laser/MeasurementAvailabilityProbePolicy.h"
 #include "modules/laser/MeasurementHealthStateMachine.h"
@@ -321,11 +322,13 @@ private:
   uint32_t lastStreamPublishedAtMs = 0;
   // Primary Judgment Owner：
   // MA12 / deviation / ratio / main_state / duration 统一由 RhythmStateJudge 维护。
-  RhythmStateJudge rhythmStateJudge{};
-  MotionSafetyShadowEvaluator motionSafetyShadow{};
-  RuntimeZeroObserver runtimeZeroObserver{};
-  RunSummaryCollector runSummaryCollector{};
-  BaselineContractDiagnostics baselineContractDiagnostics{};
+  LaserDecisionRuntime decisionRuntime;
+  RhythmStateJudge& rhythmStateJudge = decisionRuntime.rhythmStateJudge;
+  MotionSafetyShadowEvaluator& motionSafetyShadow = decisionRuntime.motionSafetyShadow;
+  RuntimeZeroObserver& runtimeZeroObserver = decisionRuntime.runtimeZeroObserver;
+  RunSummaryCollector& runSummaryCollector = decisionRuntime.runSummaryCollector;
+  BaselineContractDiagnostics& baselineContractDiagnostics =
+      decisionRuntime.baselineContractDiagnostics;
   TopState lastObservedTopState = TopState::IDLE;
   uint32_t startGateDiagWindowStartedAtMs = 0;
   uint32_t startGateDiagLastLogMs = 0;
