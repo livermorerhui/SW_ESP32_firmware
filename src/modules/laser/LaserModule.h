@@ -19,6 +19,7 @@
 #include "modules/laser/LaserDiagnostics.h"
 #include "modules/laser/LaserMeasurementReader.h"
 #include "modules/laser/LaserMeasurementRuntime.h"
+#include "modules/laser/LaserRuntimeZeroRuntime.h"
 #include "modules/laser/LaserStabilityRuntime.h"
 #include "modules/laser/LaserConfigurationRuntime.h"
 #include "modules/laser/LaserDecisionRuntime.h"
@@ -291,9 +292,7 @@ private:
   bool& stableFilterValid = stabilityRuntime.stableFilterValid;
   float& stableFilteredDistance = stabilityRuntime.stableFilteredDistance;
   float& stableFilteredWeight = stabilityRuntime.stableFilteredWeight;
-  float runtimeZeroBuffer[WINDOW_N]{};
-  uint8_t runtimeZeroHead = 0;
-  uint8_t runtimeZeroCount = 0;
+  LaserRuntimeZeroRuntime runtimeZeroRuntime;
   StableContractState& stableContract = stabilityRuntime.stableContract;
   uint8_t& presenceEnterConfirmCount = stabilityRuntime.presenceEnterConfirmCount;
   uint8_t& presenceExitConfirmCount = stabilityRuntime.presenceExitConfirmCount;
@@ -325,7 +324,7 @@ private:
   LaserDecisionRuntime decisionRuntime;
   RhythmStateJudge& rhythmStateJudge = decisionRuntime.rhythmStateJudge;
   MotionSafetyShadowEvaluator& motionSafetyShadow = decisionRuntime.motionSafetyShadow;
-  RuntimeZeroObserver& runtimeZeroObserver = decisionRuntime.runtimeZeroObserver;
+  RuntimeZeroObserver& runtimeZeroObserver = runtimeZeroRuntime.observer;
   RunSummaryCollector& runSummaryCollector = decisionRuntime.runSummaryCollector;
   BaselineContractDiagnostics& baselineContractDiagnostics =
       decisionRuntime.baselineContractDiagnostics;

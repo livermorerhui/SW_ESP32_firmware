@@ -1866,8 +1866,7 @@ void LaserModule::resetRuntimeZero(const char* reason) {
   dualZero.runtimeZeroCapturedAtMs = 0;
   dualZero.lastRuntimeZeroCandidateDistance = 0.0f;
   dualZero.runtimeZeroWindowStartedAtMs = 0;
-  runtimeZeroHead = 0;
-  runtimeZeroCount = 0;
+  runtimeZeroRuntime.resetWindow();
   refreshEffectiveZero();
 
   if (hadRuntimeZero) {
@@ -1895,8 +1894,7 @@ void LaserModule::observeRuntimeZero(float distance, float weight, uint32_t now)
       runtimeZeroObserver.evaluateEligibility(runtimeZeroCfg, eligibilityInput);
   if (!eligibility.eligible) {
     if (eligibility.shouldResetWindow) {
-      runtimeZeroHead = 0;
-      runtimeZeroCount = 0;
+      runtimeZeroRuntime.resetWindow();
       dualZero.runtimeZeroWindowStartedAtMs = 0;
     }
     runtimeZeroObserver.noteDecision(now, eligibility);
@@ -1904,27 +1902,17 @@ void LaserModule::observeRuntimeZero(float distance, float weight, uint32_t now)
   }
 
   if (eligibility.shouldResetWindow) {
-    runtimeZeroHead = 0;
-    runtimeZeroCount = 0;
+    runtimeZeroRuntime.resetWindow();
     dualZero.runtimeZeroWindowStartedAtMs = 0;
   }
 
-  if (runtimeZeroCount == 0) {
+  if (runtimeZeroRuntime.empty()) {
     dualZero.runtimeZeroWindowStartedAtMs = now;
   }
 
-  runtimeZeroBuffer[runtimeZeroHead] = distance;
-  runtimeZeroHead = (runtimeZeroHead + 1) % WINDOW_N;
-  if (runtimeZeroCount < WINDOW_N) {
-    runtimeZeroCount++;
-  }
-
-  RuntimeZeroWindowInput windowInput{};
-  windowInput.values = runtimeZeroBuffer;
-  windowInput.head = runtimeZeroHead;
-  windowInput.count = runtimeZeroCount;
-  windowInput.capacity = WINDOW_N;
-  windowInput.calibrationZero = dualZero.calibrationZeroDistance;
+  runtimeZeroRuntime.push(distance);
+  const RuntimeZeroWindowInput windowInput =
+      runtimeZeroRuntime.window(dualZero.calibrationZeroDistance);
   const RuntimeZeroDecision decision =
       runtimeZeroObserver.evaluateWindow(runtimeZeroCfg, windowInput);
   if (!decision.shouldRefresh) {
