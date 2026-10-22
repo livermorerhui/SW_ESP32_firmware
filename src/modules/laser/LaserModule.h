@@ -20,6 +20,7 @@
 #include "modules/laser/LaserMeasurementReader.h"
 #include "modules/laser/LaserMeasurementRuntime.h"
 #include "modules/laser/LaserStabilityRuntime.h"
+#include "modules/laser/LaserConfigurationRuntime.h"
 #include "modules/laser/LaserStableWindow.h"
 #include "modules/laser/MeasurementAvailabilityProbePolicy.h"
 #include "modules/laser/MeasurementHealthStateMachine.h"
@@ -40,20 +41,6 @@ struct CalibrationCapture {
   float predictedWeightKg = 0.0f;
   bool stableFlag = false;
   bool validFlag = false;
-};
-
-struct DualZeroState {
-  float calibrationZeroDistance = 0.0f;
-  float runtimeZeroDistance = 0.0f;
-  bool runtimeZeroValid = false;
-  bool occupiedCycleActive = false;
-  bool effectiveZeroLocked = false;
-  bool effectiveZeroUsesRuntime = false;
-  float effectiveZeroDistance = 0.0f;
-  uint32_t effectiveZeroLockedAtMs = 0;
-  uint32_t runtimeZeroCapturedAtMs = 0;
-  float lastRuntimeZeroCandidateDistance = 0.0f;
-  uint32_t runtimeZeroWindowStartedAtMs = 0;
 };
 
 class LaserModule : public IDeviceConfigOwner, public MeasurementFacts {
@@ -254,15 +241,16 @@ private:
   LaserMeasurementReader& measurementReader = measurementRuntime.reader();
   DistanceStateChain distanceStateChain;
   MeasurementPlane& measurementPlane = measurementRuntime.plane();
-  DeviceConfigStore deviceConfigStore;
-  CalibrationModelStore calibrationModelStore;
-  ProfileEmptyDistanceStore profileEmptyDistanceStore;
-  Preferences preferences;
-  DeviceConfigSnapshot deviceConfig{};
-  DeviceConfigStoreStatus configStatus = DeviceConfigStoreStatus::CONFIG_ERROR;
-  bool preferencesOpened = false;
-  volatile bool configTransitionActive = false;
-  SemaphoreHandle_t profileTransitionMutex = nullptr;
+  LaserConfigurationRuntime configurationRuntime;
+  DeviceConfigStore& deviceConfigStore = configurationRuntime.deviceConfigStore;
+  CalibrationModelStore& calibrationModelStore = configurationRuntime.calibrationModelStore;
+  ProfileEmptyDistanceStore& profileEmptyDistanceStore = configurationRuntime.profileEmptyDistanceStore;
+  Preferences& preferences = configurationRuntime.preferences;
+  DeviceConfigSnapshot& deviceConfig = configurationRuntime.deviceConfig;
+  DeviceConfigStoreStatus& configStatus = configurationRuntime.configStatus;
+  bool& preferencesOpened = configurationRuntime.preferencesOpened;
+  volatile bool& configTransitionActive = configurationRuntime.configTransitionActive;
+  SemaphoreHandle_t& profileTransitionMutex = configurationRuntime.profileTransitionMutex;
   bool currentSampleValid = false;
   float currentSamplePhysicalMm = NAN;
   uint32_t currentSampleAtMs = 0;
@@ -273,15 +261,15 @@ private:
   LaserPhase2ThresholdConfig phase2Thresholds{};
 
   // 与你原固件保持一致
-  float zeroDistance = 0.0f;
-  float scaleFactor = 1.0f;
-  CalibrationModel calibrationModel{};
-  EmptyDistanceRecord emptyDistanceRecord{};
+  float& zeroDistance = configurationRuntime.zeroDistance;
+  float& scaleFactor = configurationRuntime.scaleFactor;
+  CalibrationModel& calibrationModel = configurationRuntime.calibrationModel;
+  EmptyDistanceRecord& emptyDistanceRecord = configurationRuntime.emptyDistanceRecord;
   // A cleared or never-written model must not be silently treated as a valid
   // weight calibration. Distance state can still run without it.
-  bool calibrationModelReady = false;
-  bool emptyDistanceReady = false;
-  DualZeroState dualZero{};
+  bool& calibrationModelReady = configurationRuntime.calibrationModelReady;
+  bool& emptyDistanceReady = configurationRuntime.emptyDistanceReady;
+  DualZeroState& dualZero = configurationRuntime.dualZero;
 
   LaserStabilityRuntime stabilityRuntime;
   float (&weightBuffer)[WINDOW_N] = stabilityRuntime.weightBuffer;
