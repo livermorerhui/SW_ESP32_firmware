@@ -1781,9 +1781,7 @@ void LaserModule::refreshEffectiveZero() {
 }
 
 void LaserModule::resetStableSignalFilter() {
-  stableFilterValid = false;
-  stableFilteredDistance = 0.0f;
-  stableFilteredWeight = 0.0f;
+  stabilityRuntime.resetSignalFilter();
 }
 
 bool LaserModule::updateStableSignalFilter(
@@ -2008,10 +2006,7 @@ void LaserModule::noteDistanceValidity(
 }
 
 void LaserModule::pushStableSample(float distance, float weight) {
-  distanceBuffer[bufHead] = distance;
-  weightBuffer[bufHead] = weight;
-  bufHead = (bufHead + 1) % WINDOW_N;
-  if (bufCount < WINDOW_N) bufCount++;
+  stabilityRuntime.pushSample(distance, weight);
 }
 
 bool LaserModule::updatePresenceState(float weight) {
@@ -2317,19 +2312,7 @@ void LaserModule::resetStableTracking(const char* reason, bool logIfActive) {
     HumanReadableLog::baseline("稳定测量已清除，等待重新建立");
   }
 
-  stableState = StableState::UNSTABLE;
-  stableBaselineDistance = 0.0f;
-  stableBaselineDistanceMm = 0.0f;
-  stableBaselineWeight = 0.0f;
-  stableLatchedAtMs = 0;
-  invalidStableSamples = 0;
-  stableConfirmCount = 0;
-  stableCandidateStartedAtMs = 0;
-  stableEarlyCheckpointLogged = false;
-  stableExitConfirmCount = 0;
-  stableExitPendingReason = nullptr;
-  bufHead = 0;
-  bufCount = 0;
+  stabilityRuntime.resetTracking();
   syncStableLiveContract(millis());
 
   if (exitedStableStage) {
@@ -2347,15 +2330,10 @@ void LaserModule::beginStableCandidate(float distance, float weight) {
         static_cast<unsigned int>(phase2Thresholds.stable.earlyAcceptSamples),
         phase2Thresholds.stable.enterWindowSamples);
     HumanReadableLog::baseline("开始判断重量是否稳定");
-    bufHead = 0;
-    bufCount = 0;
-    stableConfirmCount = 0;
-    stableCandidateStartedAtMs = millis();
-    stableEarlyCheckpointLogged = false;
+    stabilityRuntime.beginCandidate(millis());
     logLatestMeasurementPlaneSummary("stable_enter");
   }
 
-  stableState = StableState::STABLE_CANDIDATE;
   invalidStableSamples = 0;
   pushStableSample(distance, weight);
   syncStableLiveContract(millis());
