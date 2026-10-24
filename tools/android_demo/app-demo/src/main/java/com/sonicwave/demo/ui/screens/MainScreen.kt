@@ -334,7 +334,7 @@ private fun DeviceToolsContent(
         onPlatformModelSelected = actions.onPlatformModelSelected,
         onWriteDeviceConfig = actions.onWriteDeviceConfig,
     )
-    if (uiState.devicePlatformModel == PlatformModel.PLUS) {
+    if (uiState.selectedPlatformModel == PlatformModel.PLUS) {
         SensorProfileSection(
             uiState = uiState,
             onSensorProfileSelected = onSensorProfileSelected,
