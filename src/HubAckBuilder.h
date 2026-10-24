@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include <math.h>
 #include "core/PlatformSnapshot.h"
-#include "core/ProtocolCodec.h"
+#include "core/ProtocolSupport.h"
 #include "modules/laser/CalibrationModelStore.h"
 
 namespace HubAckBuilder {
@@ -95,10 +95,10 @@ inline String cap(
   appendKeyIntValue(out, " leave_stop_supported=", 1);
   appendKeyIntValue(out, " stream_control_supported=", 1);
   appendKeyIntValue(out, " cue_supported=", cueSupported ? 1 : 0);
-  ProtocolCodec::logTruthPayloadBudgetWarningIfNeeded(
+  ProtocolSupport::logTruthPayloadBudgetWarningIfNeeded(
       "bootstrap_truth",
       out.length() + 1,
-      ProtocolCodec::kCapTruthPayloadBudgetBytes,
+      ProtocolSupport::kCapTruthPayloadBudgetBytes,
       out);
   return out;
 }

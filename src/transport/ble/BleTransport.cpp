@@ -3,7 +3,7 @@
 #include "core/FirmwareLogPolicy.h"
 #include "core/HumanReadableLog.h"
 #include "core/LogMarkers.h"
-#include "core/SystemStateMachine.h"
+#include "core/ProtocolBoundary.h"
 #include "core/VerboseSerial.h"
 #include <esp_gap_ble_api.h>
 #include <esp_heap_caps.h>
@@ -1258,20 +1258,20 @@ bool BleTransport::streamDeferBudgetExpired(uint32_t nowMs) const {
 void BleTransport::logTruthPayloadBudgetWarningIfNeeded(const char* s, size_t framedLen) const {
   if (!s) return;
 
-  if (strncmp(s, "ACK:CAP ", 8) == 0 && framedLen > ProtocolCodec::kCapTruthPayloadBudgetBytes) {
+  if (strncmp(s, "ACK:CAP ", 8) == 0 && framedLen > ProtocolSupport::kCapTruthPayloadBudgetBytes) {
     SW_VERBOSE_SERIAL_PRINTF(
         "[BLE TX] warn=bootstrap_truth_budget_exceeded framed_len=%u budget=%u prefix=%s\n",
         static_cast<unsigned>(framedLen),
-        static_cast<unsigned>(ProtocolCodec::kCapTruthPayloadBudgetBytes),
+        static_cast<unsigned>(ProtocolSupport::kCapTruthPayloadBudgetBytes),
         s);
     return;
   }
 
-  if (strncmp(s, "SNAPSHOT:", 9) == 0 && framedLen > ProtocolCodec::kConnectSnapshotPayloadBudgetBytes) {
+  if (strncmp(s, "SNAPSHOT:", 9) == 0 && framedLen > ProtocolSupport::kConnectSnapshotPayloadBudgetBytes) {
     SW_VERBOSE_SERIAL_PRINTF(
         "[BLE TX] warn=runtime_truth_budget_exceeded framed_len=%u budget=%u prefix=%s\n",
         static_cast<unsigned>(framedLen),
-        static_cast<unsigned>(ProtocolCodec::kConnectSnapshotPayloadBudgetBytes),
+        static_cast<unsigned>(ProtocolSupport::kConnectSnapshotPayloadBudgetBytes),
         s);
   }
 }
@@ -1449,11 +1449,11 @@ void BleTransport::logTxPressureSnapshot(const char* reason, uint32_t nowMs, boo
 }
 
 bool BleTransport::tryHandleDirectQuery(const String& s) {
-  if (!ProtocolCodec::isSnapshotQuery(s)) {
+  if (!ProtocolSupport::isSnapshotQuery(s)) {
     return false;
   }
 
-  const SystemStateMachine* snapshotOwner = SystemStateMachine::activeInstance();
+  const PlatformSnapshotOwner* snapshotOwner = platformSnapshotOwner;
   if (!snapshotOwner) {
     if (!enqueueTxLineRaw("NACK:BUSY")) {
       noteTxEnqueueFailure(TxFrameClass::NACK, "snapshot_busy_nack", "NACK:BUSY");
@@ -1461,7 +1461,7 @@ bool BleTransport::tryHandleDirectQuery(const String& s) {
     return true;
   }
 
-  const String snapshot = ProtocolCodec::encodeSnapshot(snapshotOwner->snapshot());
+  const String snapshot = EventEncoder::encodeSnapshot(snapshotOwner->snapshot());
   if (!enqueueTxLine(snapshot)) {
     noteTxEnqueueFailure(TxFrameClass::SNAPSHOT, "snapshot_query", "SNAPSHOT");
     if (!enqueueTxLineRaw("NACK:BUSY")) {
@@ -1700,7 +1700,7 @@ void BleTransport::controlTaskLoop() {
 
     Command cmd{};
     String err;
-    if (!ProtocolCodec::parseCommand(in, cmd, err)) {
+    if (!CommandDecoder::decode(in, cmd, err)) {
       const String nack = "NACK:" + err;
       if (!enqueueTxLine(nack)) {
         noteTxEnqueueFailure(TxFrameClass::NACK, "parse_nack", nack.c_str());
@@ -1841,19 +1841,19 @@ void BleTransport::txTaskLoop() {
 
 void BleTransport::onEvent(const Event& e) {
   if (e.type == EventType::SNAPSHOT) {
-    const SystemStateMachine* snapshotOwner = SystemStateMachine::activeInstance();
+    const PlatformSnapshotOwner* snapshotOwner = platformSnapshotOwner;
     if (!snapshotOwner) {
       noteEventEnqueueFailure(e.type, "SNAPSHOT");
       return;
     }
-    const String snapshot = ProtocolCodec::encodeSnapshot(snapshotOwner->snapshot());
+    const String snapshot = EventEncoder::encodeSnapshot(snapshotOwner->snapshot());
     if (!enqueueTxLine(snapshot)) {
       noteEventEnqueueFailure(e.type, snapshot.c_str());
     }
     return;
   }
 
-  const String encoded = ProtocolCodec::encodeEvent(e);
+  const String encoded = EventEncoder::encode(e);
   if (e.type == EventType::STREAM) {
     if (!enqueueStreamTxLine(encoded)) {
       noteEventEnqueueFailure(e.type, encoded.c_str());

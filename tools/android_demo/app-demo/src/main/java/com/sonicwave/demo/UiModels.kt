@@ -498,7 +498,6 @@ internal fun isLaserlessStartProfile(state: UiState): Boolean {
 
 internal fun isPlusDegradedDeliveryProfile(state: UiState): Boolean {
     return state.devicePlatformModel == PlatformModel.PLUS &&
-        state.deviceLaserInstalled == true &&
         (
             state.deviceDegradedStartAvailable == true ||
                 state.deviceDegradedStartEnabled == true

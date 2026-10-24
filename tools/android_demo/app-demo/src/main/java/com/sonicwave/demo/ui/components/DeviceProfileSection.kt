@@ -166,7 +166,7 @@ fun SensorProfileSection(
                 enabled = uiState.isConnected &&
                     uiState.protocolMode == ProtocolMode.PRIMARY &&
                     confirmedDevice &&
-                    uiState.devicePlatformModel == PlatformModel.PLUS &&
+                    uiState.selectedPlatformModel == PlatformModel.PLUS &&
                     !uiState.waveOutputActive &&
                     !uiState.isDeviceConfigWritePending &&
                     !uiState.profileRuntimeRefreshPending &&

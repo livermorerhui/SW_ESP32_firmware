@@ -129,18 +129,20 @@ class DemoStartReadyRegressionTest {
     }
 
     @Test
-    fun plusWithoutLaserIsNotTreatedAsLaserlessDeliveryProfile() {
+    fun plusWithoutLaserCanUseExplicitDegradedDeliveryProfile() {
         val state = UiState(
             isConnected = true,
             devicePlatformModel = PlatformModel.PLUS,
             deviceLaserInstalled = false,
+            deviceDegradedStartAvailable = true,
             deviceStartReady = false,
             stableWeight = null,
             stableWeightActive = false,
         )
 
-        assertFalse(state.canStartWave())
+        assertTrue(state.canStartWave())
         assertFalse(isLaserlessStartProfile(state))
+        assertTrue(isPlusDegradedDeliveryProfile(state))
     }
 
     @Test

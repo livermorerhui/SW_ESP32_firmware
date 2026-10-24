@@ -4,7 +4,6 @@
 #include "core/VerboseSerial.h"
 #include <math.h>
 #include <string.h>
-#include "modules/wave/WaveModule.h"
 
 namespace {
 constexpr uint32_t kLaserLoopIntervalNoLaserMs = 200UL;
@@ -196,12 +195,11 @@ void LaserModule::logConfigTruth(const char* source, const char* reason) {
   lastLoggedMeasurementBypassState = measurementBypass;
 }
 
-void LaserModule::begin(EventBus* eb, SystemStateMachine* fsm, WaveModule* waveModule) {
+void LaserModule::begin(EventBus* eb, LaserStatePort* statePortArg, WaveObservation* waveObservation) {
   bus = eb;
-  sm = fsm;
-  wave = waveModule;
-  if (sm) sm->attachLaserModule(this);
-  lastObservedTopState = sm ? sm->state() : TopState::IDLE;
+  statePort = statePortArg;
+  this->waveObservation = waveObservation;
+  lastObservedTopState = statePort ? statePort->state() : TopState::IDLE;
   phase2Thresholds = phase2ThresholdConfig();
 
   profileTransitionMutex = xSemaphoreCreateMutex();
@@ -292,9 +290,9 @@ bool LaserModule::setParams(float zero, float factor, String& reason) {
   releaseOccupiedCycle("scale_cal", millis());
   rhythmStateJudge.reset("scale_cal_reset");
   clearStableContractBridge("scale_cal");
-  if (sm) {
-    logStartReadyWriteback(millis(), "scale_cal", sm->state(), false, 0.0f, "scale_cal");
-    sm->setStartReadiness(false, 0.0f);
+  if (statePort) {
+    logStartReadyWriteback(millis(), "scale_cal", statePort->state(), false, 0.0f, "scale_cal");
+    statePort->setStartReadiness(false, 0.0f);
   }
   needSendParams = true;
   return true;
@@ -797,9 +795,9 @@ bool LaserModule::setEmptyDistanceFromCurrent(
   resetMeasurementPlane("empty_set_current", true);
   rhythmStateJudge.reset("empty_set_current");
   clearStableContractBridge("empty_set_current");
-  if (sm) {
-    sm->setRuntimeReady(false);
-    sm->setStartReadiness(false, 0.0f);
+  if (statePort) {
+    statePort->setRuntimeReady(false);
+    statePort->setStartReadiness(false, 0.0f);
   }
   SW_VERBOSE_SERIAL_PRINTF(
       "[EMPTY_DISTANCE] action=set_current result=ok distance_mm=%.2f tolerance_mm=%.2f profile=%s generation=%lu empty_revision=%lu sample_seq=%lu sample_age_ms=%lu\n",
@@ -902,9 +900,9 @@ bool LaserModule::setEmptyDistance(float distanceMm, String& reason) {
   resetMeasurementPlane("empty_distance_set", true);
   rhythmStateJudge.reset("empty_distance_set");
   clearStableContractBridge("empty_distance_set");
-  if (sm) {
-    sm->setRuntimeReady(false);
-    sm->setStartReadiness(false, 0.0f);
+  if (statePort) {
+    statePort->setRuntimeReady(false);
+    statePort->setStartReadiness(false, 0.0f);
   }
   SW_VERBOSE_SERIAL_PRINTF(
       "[EMPTY_DISTANCE] action=set distance_mm=%.2f tolerance_mm=%.2f backend=%s model_cleared=%d\n",
@@ -958,9 +956,9 @@ bool LaserModule::clearEmptyDistance(String& reason) {
     resetMeasurementPlane("empty_distance_clear", true);
     rhythmStateJudge.reset("empty_distance_clear");
     clearStableContractBridge("empty_distance_clear");
-    if (sm) {
-      sm->setRuntimeReady(false);
-      sm->setStartReadiness(false, 0.0f);
+    if (statePort) {
+      statePort->setRuntimeReady(false);
+      statePort->setStartReadiness(false, 0.0f);
     }
     SW_VERBOSE_SERIAL_PRINTF(
         "[EMPTY_DISTANCE] action=clear result=ok profile=%s generation=%lu empty_revision=%lu\n",
@@ -994,9 +992,9 @@ bool LaserModule::clearEmptyDistance(String& reason) {
   resetMeasurementPlane("empty_distance_clear", true);
   rhythmStateJudge.reset("empty_distance_clear");
   clearStableContractBridge("empty_distance_clear");
-  if (sm) {
-    sm->setRuntimeReady(false);
-    sm->setStartReadiness(false, 0.0f);
+  if (statePort) {
+    statePort->setRuntimeReady(false);
+    statePort->setStartReadiness(false, 0.0f);
   }
   SW_VERBOSE_SERIAL_PRINTLN("[EMPTY_DISTANCE] action=clear result=success");
   return true;
@@ -1044,9 +1042,9 @@ bool LaserModule::clearWeightModel(String& reason) {
   resetMeasurementPlane("weight_model_clear", true);
   rhythmStateJudge.reset("weight_model_clear");
   clearStableContractBridge("weight_model_clear");
-  if (sm) {
-    sm->setRuntimeReady(false);
-    sm->setStartReadiness(false, 0.0f);
+  if (statePort) {
+    statePort->setRuntimeReady(false);
+    statePort->setStartReadiness(false, 0.0f);
   }
   // CAL:ZERO/SCALE:ZERO used to publish EVT:PARAM after the asynchronous
   // reset. Keep that existing consumer update, but only after NVS confirms
@@ -1080,9 +1078,9 @@ bool LaserModule::setCalibrationModel(const CalibrationModel& model, String& rea
   releaseOccupiedCycle("cal_model", millis());
   rhythmStateJudge.reset("cal_model_reset");
   clearStableContractBridge("cal_model");
-  if (sm) {
-    logStartReadyWriteback(millis(), "cal_model", sm->state(), false, 0.0f, "cal_model");
-    sm->setStartReadiness(false, 0.0f);
+  if (statePort) {
+    logStartReadyWriteback(millis(), "cal_model", statePort->state(), false, 0.0f, "cal_model");
+    statePort->setStartReadiness(false, 0.0f);
   }
   needSendParams = true;
   return true;
@@ -1175,7 +1173,7 @@ bool LaserModule::captureCalibrationPoint(float referenceWeightKg, CalibrationCa
 }
 
 bool LaserModule::setStreamSubscription(bool enabled, uint8_t rateHz, String& reason) {
-  if (rateHz < ProtocolCodec::kStreamMinRateHz || rateHz > ProtocolCodec::kStreamMaxRateHz) {
+  if (rateHz < ProtocolSupport::kStreamMinRateHz || rateHz > ProtocolSupport::kStreamMaxRateHz) {
     reason = "INVALID_PARAM";
     return false;
   }
@@ -1192,7 +1190,7 @@ bool LaserModule::setStreamSubscription(bool enabled, uint8_t rateHz, String& re
 void LaserModule::resetStreamSubscription(const char* reason) {
   const bool wasEnabled = streamEnabled;
   streamEnabled = false;
-  streamRateHz = ProtocolCodec::kStreamDefaultRateHz;
+  streamRateHz = ProtocolSupport::kStreamDefaultRateHz;
   lastStreamPublishedAtMs = 0;
   SW_VERBOSE_SERIAL_PRINTF(
       "[STREAM_CONTROL] action=reset enabled=0 rate_hz=%u previous_enabled=%d reason=%s\n",
@@ -1261,17 +1259,17 @@ void LaserModule::logMeasurementHealthChange(
 }
 
 void LaserModule::syncSensorHealthToStateMachine() {
-  if (!sm) return;
+  if (!statePort) return;
   if (!deviceConfig.laserInstalled) {
-    sm->setSensorHealthy(false);
+    statePort->setSensorHealthy(false);
     return;
   }
   if (measurementHealthMachine.state() == MeasurementHealthState::READY) {
-    sm->setSensorHealthy(true);
+    statePort->setSensorHealthy(true);
     return;
   }
   if (measurementHealthMachine.state() == MeasurementHealthState::FAULT) {
-    sm->setSensorHealthy(false);
+    statePort->setSensorHealthy(false);
   }
 }
 
@@ -1352,8 +1350,23 @@ void LaserModule::logLatestMeasurementPlaneSummary(const char* trigger) {
 }
 
 void LaserModule::loadDeviceConfig() {
-  const DeviceConfigLoadResult result =
+  DeviceConfigLoadResult result =
       deviceConfigStore.load(preferences, preferencesOpened);
+  // A blank factory board must leave durable legacy-compatible evidence before
+  // any OTA to an older firmware.  Otherwise an older image cannot distinguish
+  // this board from its historical default (PLUS) and may change the model on
+  // upgrade.  save() writes cfg_model/cfg_laser and the schema-1 slot, then
+  // verifies both through a readback.
+  if (result.status == DeviceConfigStoreStatus::BLANK && preferencesOpened) {
+    const DeviceConfigSaveResult materialized = deviceConfigStore.save(
+        preferences, true, result.config, PlatformModel::BASE,
+        SensorProfileId::NONE);
+    if (materialized.ok()) {
+      result = deviceConfigStore.load(preferences, true);
+    } else {
+      result.status = DeviceConfigStoreStatus::CONFIG_ERROR;
+    }
+  }
   deviceConfig = result.config;
   configStatus = result.status;
   SW_VERBOSE_SERIAL_PRINTF(
@@ -1482,13 +1495,13 @@ void LaserModule::configureDistanceStateChainForProfile(const char* source) {
 }
 
 bool LaserModule::configurationMutationBlocked(String& reason) const {
-  if (sm && sm->state() == TopState::RUNNING) {
+  if (statePort && statePort->state() == TopState::RUNNING) {
     reason = "NOT_IDLE";
     return true;
   }
   // stopSoft() can leave the actuator physically active after the state
   // machine has already entered IDLE. Do not change reader/calibration then.
-  if (wave && wave->isOutputActive()) {
+  if (waveObservation && waveObservation->isOutputActive()) {
     reason = "BUSY";
     return true;
   }
@@ -1526,26 +1539,26 @@ void LaserModule::applyDeviceConfigRuntimeEffects(const char* source) {
 
   logConfigTruth(source ? source : "device_config");
 
-  if (!sm) return;
+  if (!statePort) return;
 
-  sm->setRuntimeReady(false);
+  statePort->setRuntimeReady(false);
   logStartReadyWriteback(
       millis(),
       source ? source : "device_config",
-      sm->state(),
+      statePort->state(),
       false,
       0.0f,
       source ? source : "device_config");
-  sm->setStartReadiness(false, 0.0f);
+  statePort->setStartReadiness(false, 0.0f);
   syncSensorHealthToStateMachine();
 }
 
 void LaserModule::stopWaveForConfigurationFault(const char* source) {
-  if (!sm || sm->state() != TopState::RUNNING) return;
+  if (!statePort || statePort->state() != TopState::RUNNING) return;
   SW_VERBOSE_SERIAL_PRINTF(
       "[DEVICE] CONFIG_FAULT source=%s action=stop_for_config_fault reason=CONFIG_ERROR\n",
       source ? source : "unknown");
-  sm->stopForConfigurationFault();
+  statePort->stopForConfigurationFault();
 }
 
 void LaserModule::invalidateEmptyReferenceAfterStorageFailure(
@@ -1783,9 +1796,7 @@ void LaserModule::refreshEffectiveZero() {
 }
 
 void LaserModule::resetStableSignalFilter() {
-  stableFilterValid = false;
-  stableFilteredDistance = 0.0f;
-  stableFilteredWeight = 0.0f;
+  stabilityRuntime.resetSignalFilter();
 }
 
 bool LaserModule::updateStableSignalFilter(
@@ -1870,8 +1881,7 @@ void LaserModule::resetRuntimeZero(const char* reason) {
   dualZero.runtimeZeroCapturedAtMs = 0;
   dualZero.lastRuntimeZeroCandidateDistance = 0.0f;
   dualZero.runtimeZeroWindowStartedAtMs = 0;
-  runtimeZeroHead = 0;
-  runtimeZeroCount = 0;
+  runtimeZeroRuntime.resetWindow();
   refreshEffectiveZero();
 
   if (hadRuntimeZero) {
@@ -1885,7 +1895,7 @@ void LaserModule::resetRuntimeZero(const char* reason) {
 
 void LaserModule::observeRuntimeZero(float distance, float weight, uint32_t now) {
   const LaserRuntimeZeroThresholdConfig& runtimeZeroCfg = phase2Thresholds.runtimeZero;
-  const TopState currentTopState = sm ? sm->state() : TopState::IDLE;
+  const TopState currentTopState = statePort ? statePort->state() : TopState::IDLE;
   RuntimeZeroEligibilityInput eligibilityInput{};
   eligibilityInput.distance = distance;
   eligibilityInput.weight = weight;
@@ -1899,8 +1909,7 @@ void LaserModule::observeRuntimeZero(float distance, float weight, uint32_t now)
       runtimeZeroObserver.evaluateEligibility(runtimeZeroCfg, eligibilityInput);
   if (!eligibility.eligible) {
     if (eligibility.shouldResetWindow) {
-      runtimeZeroHead = 0;
-      runtimeZeroCount = 0;
+      runtimeZeroRuntime.resetWindow();
       dualZero.runtimeZeroWindowStartedAtMs = 0;
     }
     runtimeZeroObserver.noteDecision(now, eligibility);
@@ -1908,27 +1917,17 @@ void LaserModule::observeRuntimeZero(float distance, float weight, uint32_t now)
   }
 
   if (eligibility.shouldResetWindow) {
-    runtimeZeroHead = 0;
-    runtimeZeroCount = 0;
+    runtimeZeroRuntime.resetWindow();
     dualZero.runtimeZeroWindowStartedAtMs = 0;
   }
 
-  if (runtimeZeroCount == 0) {
+  if (runtimeZeroRuntime.empty()) {
     dualZero.runtimeZeroWindowStartedAtMs = now;
   }
 
-  runtimeZeroBuffer[runtimeZeroHead] = distance;
-  runtimeZeroHead = (runtimeZeroHead + 1) % WINDOW_N;
-  if (runtimeZeroCount < WINDOW_N) {
-    runtimeZeroCount++;
-  }
-
-  RuntimeZeroWindowInput windowInput{};
-  windowInput.values = runtimeZeroBuffer;
-  windowInput.head = runtimeZeroHead;
-  windowInput.count = runtimeZeroCount;
-  windowInput.capacity = WINDOW_N;
-  windowInput.calibrationZero = dualZero.calibrationZeroDistance;
+  runtimeZeroRuntime.push(distance);
+  const RuntimeZeroWindowInput windowInput =
+      runtimeZeroRuntime.window(dualZero.calibrationZeroDistance);
   const RuntimeZeroDecision decision =
       runtimeZeroObserver.evaluateWindow(runtimeZeroCfg, windowInput);
   if (!decision.shouldRefresh) {
@@ -2010,10 +2009,7 @@ void LaserModule::noteDistanceValidity(
 }
 
 void LaserModule::pushStableSample(float distance, float weight) {
-  distanceBuffer[bufHead] = distance;
-  weightBuffer[bufHead] = weight;
-  bufHead = (bufHead + 1) % WINDOW_N;
-  if (bufCount < WINDOW_N) bufCount++;
+  stabilityRuntime.pushSample(distance, weight);
 }
 
 bool LaserModule::updatePresenceState(float weight) {
@@ -2046,7 +2042,7 @@ void LaserModule::noteInvalidPresenceSample(uint32_t now, const char* reason) {
     invalidPresenceSamples++;
   }
 
-  const TopState currentTopState = sm ? sm->state() : TopState::IDLE;
+  const TopState currentTopState = statePort ? statePort->state() : TopState::IDLE;
   if (currentTopState == TopState::RUNNING) {
     return;
   }
@@ -2237,7 +2233,7 @@ void LaserModule::syncStableContractBridge(
     stableContract.baselineReadyWeightKg = result.evidence.baselineWeightKg;
     stableContract.baselineReadyDistance = result.evidence.baselineDistance;
   }
-  syncStartReadyContract(now, sm ? sm->state() : TopState::IDLE, result);
+  syncStartReadyContract(now, statePort ? statePort->state() : TopState::IDLE, result);
 }
 
 void LaserModule::clearStableContractBridge(const char* reason) {
@@ -2319,19 +2315,7 @@ void LaserModule::resetStableTracking(const char* reason, bool logIfActive) {
     HumanReadableLog::baseline("稳定测量已清除，等待重新建立");
   }
 
-  stableState = StableState::UNSTABLE;
-  stableBaselineDistance = 0.0f;
-  stableBaselineDistanceMm = 0.0f;
-  stableBaselineWeight = 0.0f;
-  stableLatchedAtMs = 0;
-  invalidStableSamples = 0;
-  stableConfirmCount = 0;
-  stableCandidateStartedAtMs = 0;
-  stableEarlyCheckpointLogged = false;
-  stableExitConfirmCount = 0;
-  stableExitPendingReason = nullptr;
-  bufHead = 0;
-  bufCount = 0;
+  stabilityRuntime.resetTracking();
   syncStableLiveContract(millis());
 
   if (exitedStableStage) {
@@ -2349,15 +2333,10 @@ void LaserModule::beginStableCandidate(float distance, float weight) {
         static_cast<unsigned int>(phase2Thresholds.stable.earlyAcceptSamples),
         phase2Thresholds.stable.enterWindowSamples);
     HumanReadableLog::baseline("开始判断重量是否稳定");
-    bufHead = 0;
-    bufCount = 0;
-    stableConfirmCount = 0;
-    stableCandidateStartedAtMs = millis();
-    stableEarlyCheckpointLogged = false;
+    stabilityRuntime.beginCandidate(millis());
     logLatestMeasurementPlaneSummary("stable_enter");
   }
 
-  stableState = StableState::STABLE_CANDIDATE;
   invalidStableSamples = 0;
   pushStableSample(distance, weight);
   syncStableLiveContract(millis());
@@ -2384,7 +2363,7 @@ bool LaserModule::shouldClearLatchedStable(float distance, float weight, const c
 }
 
 bool LaserModule::shouldUseFastStableBuildReadInterval() const {
-  const TopState currentTopState = sm ? sm->state() : TopState::IDLE;
+  const TopState currentTopState = statePort ? statePort->state() : TopState::IDLE;
   const bool baselineReady = stableContract.baselineReadyLatched;
   return currentTopState != TopState::RUNNING &&
       (stableState != StableState::STABLE_LATCHED || !baselineReady);
@@ -2440,7 +2419,7 @@ void LaserModule::latchStable(uint32_t now, const char* mode, float stddev) {
       static_cast<unsigned long>(buildLatencyMs));
   HumanReadableLog::baselineEstablished(finalWeight, finalDistance);
   logLatestMeasurementPlaneSummary("stable_latched");
-  const TopState currentTopState = sm ? sm->state() : TopState::IDLE;
+  const TopState currentTopState = statePort ? statePort->state() : TopState::IDLE;
   const bool shouldCapturePrimaryBaseline =
       currentTopState != TopState::RUNNING &&
       !stableContract.baselineReadyLatched;
@@ -2511,9 +2490,10 @@ void LaserModule::startRunSummary(uint32_t now, const RhythmStateUpdateResult& r
       rhythmResult.evidence.baselineReady ? rhythmResult.evidence.baselineWeightKg : stableBaselineWeight;
   snapshot.baselineDistance =
       rhythmResult.evidence.baselineReady ? rhythmResult.evidence.baselineDistance : stableBaselineDistance;
-  snapshot.fallStopEnabled = sm ? sm->fallStopEnabled() : FALL_STOP_ENABLED_DEFAULT;
-  if (wave) {
-    wave->getSummaryParams(snapshot.freqHz, snapshot.intensity, snapshot.intensityNormalized);
+  snapshot.fallStopEnabled = statePort ? statePort->fallStopEnabled() : FALL_STOP_ENABLED_DEFAULT;
+  if (waveObservation) {
+    waveObservation->getSummaryParams(
+        snapshot.freqHz, snapshot.intensity, snapshot.intensityNormalized);
   }
   runSummaryCollector.start(snapshot, rhythmResult);
 }
@@ -2532,10 +2512,10 @@ void LaserModule::finishRunSummary(uint32_t now,
   RunSummaryStopSnapshot snapshot{};
   snapshot.now = now;
   snapshot.stopReason = stopReason;
-  snapshot.stopEffect = sm ? sm->lastStopSafetyEffect() : SafetySignalKind::NONE;
-  snapshot.stopReasonText = sm ? sm->lastStopReasonText() : (abnormalStop ? faultCodeName(stopReason) : "NONE");
-  snapshot.stopSourceText = sm ? sm->lastStopSourceText() : "NONE";
-  snapshot.fallStopEnabled = sm ? sm->fallStopEnabled() : FALL_STOP_ENABLED_DEFAULT;
+  snapshot.stopEffect = statePort ? statePort->lastStopSafetyEffect() : SafetySignalKind::NONE;
+  snapshot.stopReasonText = statePort ? statePort->lastStopReasonText() : (abnormalStop ? faultCodeName(stopReason) : "NONE");
+  snapshot.stopSourceText = statePort ? statePort->lastStopSourceText() : "NONE";
+  snapshot.fallStopEnabled = statePort ? statePort->fallStopEnabled() : FALL_STOP_ENABLED_DEFAULT;
   runSummaryCollector.finish(snapshot, rhythmResult);
 }
 
@@ -2548,7 +2528,7 @@ void LaserModule::handleRunSummaryState(TopState currentTopState,
 
   if (previousTopState != currentTopState) {
     if (previousTopState == TopState::RUNNING && currentTopState != TopState::RUNNING) {
-      finishRunSummary(now, sm ? sm->activeFault() : FaultCode::NONE, rhythmResult);
+      finishRunSummary(now, statePort ? statePort->activeFault() : FaultCode::NONE, rhythmResult);
     }
 
     if (currentTopState == TopState::RUNNING) {
@@ -2570,13 +2550,13 @@ void LaserModule::handleInvalidMeasurement(const char* reason) {
   rhythmStateJudge.noteInvalidMeasurement();
   resetStableSignalFilter();
   noteInvalidPresenceSample(millis(), reason);
-  const TopState currentTopState = sm ? sm->state() : TopState::IDLE;
+  const TopState currentTopState = statePort ? statePort->state() : TopState::IDLE;
 
   if (currentTopState != TopState::RUNNING) {
     stableContract.startReady = false;
     stableContract.startReadyWeightKg = 0.0f;
     stableContract.startReadyBridge = "measurement_invalid";
-    if (sm) {
+    if (statePort) {
       logStartReadyWriteback(
           millis(),
           "measurement_invalid",
@@ -2584,7 +2564,7 @@ void LaserModule::handleInvalidMeasurement(const char* reason) {
           false,
           0.0f,
           stableContract.startReadyBridge);
-      sm->setStartReadiness(false, 0.0f);
+      statePort->setStartReadiness(false, 0.0f);
     }
   }
 
@@ -2601,8 +2581,8 @@ void LaserModule::handleInvalidMeasurement(const char* reason) {
     if (!stableContract.baselineReadyLatched) {
       releaseOccupiedCycle(reason, millis());
     }
-    if (sm) {
-      sm->setRuntimeReady(false);
+    if (statePort) {
+      statePort->setRuntimeReady(false);
       logStartReadyWriteback(
           millis(),
           "user_not_present_invalid",
@@ -2610,13 +2590,13 @@ void LaserModule::handleInvalidMeasurement(const char* reason) {
           false,
           0.0f,
           "user_not_present");
-      sm->setStartReadiness(false, 0.0f);
+      statePort->setStartReadiness(false, 0.0f);
     }
   }
 }
 
 void LaserModule::updateStableState(float distance, float weight, uint32_t now) {
-  const TopState currentTopState = sm ? sm->state() : TopState::IDLE;
+  const TopState currentTopState = statePort ? statePort->state() : TopState::IDLE;
   invalidStableSamples = 0;
 
   if (currentTopState == TopState::RUNNING && stableState == StableState::STABLE_CANDIDATE) {
@@ -2786,7 +2766,7 @@ void LaserModule::logRhythmStateUpdate(const RhythmStateUpdateResult& result) co
       result.evidence.ratio,
       static_cast<unsigned long>(result.evidence.abnormalDurationMs),
       static_cast<unsigned long>(result.evidence.dangerDurationMs),
-      sm && sm->fallStopEnabled() ? 1 : 0);
+      statePort && statePort->fallStopEnabled() ? 1 : 0);
 }
 
 void LaserModule::logFallStopSuppressed(
@@ -2817,14 +2797,14 @@ void LaserModule::logFallStopSuppressed(
 }
 
 void LaserModule::handleFallStopCandidate(const RhythmStateUpdateResult& rhythmResult) {
-  if (!rhythmResult.shouldStopByDanger || !sm) return;
+  if (!rhythmResult.shouldStopByDanger || !statePort) return;
 
-  FallStopActionDecision actionDecision = sm->decideFallSuspectedAction();
+  FallStopActionDecision actionDecision = statePort->decideFallSuspectedAction();
   actionDecision.verificationStopSource = VerificationStopSource::BASELINE_MAIN_LOGIC;
   if (actionDecision.stopSuppressedBySwitch) {
     logFallStopSuppressed(rhythmResult, actionDecision);
   }
-  sm->applyFallSuspectedAction(actionDecision);
+  statePort->applyFallSuspectedAction(actionDecision);
 }
 
 void LaserModule::taskLoop() {
@@ -2838,7 +2818,7 @@ void LaserModule::taskLoop() {
 
   while (true) {
     const bool noLaserConfigured = !deviceConfig.laserInstalled;
-    const TopState loopTopState = sm ? sm->state() : TopState::IDLE;
+    const TopState loopTopState = statePort ? statePort->state() : TopState::IDLE;
     const bool unavailableIdleBackoffActive =
         deviceConfig.laserInstalled &&
         nextReadEligibleAtMs != 0 &&
@@ -2907,7 +2887,7 @@ void LaserModule::taskLoop() {
       logConfigTruth("measurement_bypass_changed");
     }
 
-    const TopState readAttemptTopState = sm ? sm->state() : TopState::IDLE;
+    const TopState readAttemptTopState = statePort ? statePort->state() : TopState::IDLE;
     const MeasurementProbeDecision probeDecision =
         measurementProbePolicy.beforeRead(
             now,
@@ -3093,9 +3073,9 @@ void LaserModule::taskLoop() {
       rhythmStateJudge.reset("zero_reset");
       clearStableContractBridge("zero");
       resetMeasurementPlane("zero_reset", true);
-      if (sm) {
-        logStartReadyWriteback(now, "zero", sm->state(), false, 0.0f, "zero");
-        sm->setStartReadiness(false, 0.0f);
+      if (statePort) {
+        logStartReadyWriteback(now, "zero", statePort->state(), false, 0.0f, "zero");
+        statePort->setStartReadiness(false, 0.0f);
       }
       needZero = false;
       SW_VERBOSE_SERIAL_PRINTLN("[CAL] RESET parameters_cleared formal_zero_unchanged=1");
@@ -3107,7 +3087,7 @@ void LaserModule::taskLoop() {
         measurementReader.backend() == LaserMeasurementBackend::CYD3S1612_IIC ||
         measurementReader.backend() == LaserMeasurementBackend::LASER_485;
     const DistanceStateChainResult distanceState =
-        distanceStateChain.update(dist, now, sm && sm->state() == TopState::RUNNING);
+        distanceStateChain.update(dist, now, statePort && statePort->state() == TopState::RUNNING);
     const bool weightValid = calibrationModelReady && isfinite(evaluateCalibrationWeight(dist));
     float weight = weightValid ? evaluateCalibrationWeight(dist) : NAN;
     // Sensor transport and distance validity determine measurement health.
@@ -3158,7 +3138,7 @@ void LaserModule::taskLoop() {
         }
       } else if (stableContract.userPresent &&
                  !distanceState.baselineReady &&
-                 sm && sm->state() != TopState::RUNNING) {
+                 statePort && statePort->state() != TopState::RUNNING) {
         // DistanceStateChain invalidates its baseline when the user shifts
         // beyond baselineExitDelta. Do not leave the owner-side latch alive,
         // otherwise StartGateContractEvaluator could keep start_ready=true
@@ -3180,14 +3160,14 @@ void LaserModule::taskLoop() {
     }
     if (presenceChanged && !stableContract.userPresent) {
 #if !DIAG_DISABLE_LASER_SAFETY
-      if (sm) sm->onUserOff();
+      if (statePort) statePort->onUserOff();
 #endif
     }
-    if (sm) sm->setRuntimeReady(stableContract.userPresent);
+    if (statePort) statePort->setRuntimeReady(stableContract.userPresent);
     if (weightValid) observeRuntimeZero(dist, weight, now);
 
     // ===== Fault clear feed (Gemini rule) =====
-    if (sm && weightValid) sm->onWeightSample(weight);
+    if (statePort && weightValid) statePort->onWeightSample(weight);
 
     const uint32_t stateEvalIntervalMs =
         shouldUseFastStableBuildReadInterval()
@@ -3211,7 +3191,7 @@ void LaserModule::taskLoop() {
 
     // LaserModule remains the measurement owner. The dedicated rhythm-state
     // judge consumes normalized context only and never owns final actions.
-    TopState currentTopState = sm ? sm->state() : TopState::IDLE;
+    TopState currentTopState = statePort ? statePort->state() : TopState::IDLE;
 
     RhythmStateJudgeInput rhythmInput{};
     rhythmInput.nowMs = now;
@@ -3249,17 +3229,17 @@ void LaserModule::taskLoop() {
     shadowInput.baselineWeightKg = rhythmResult.evidence.baselineWeightKg;
     motionSafetyShadow.update(shadowInput);
     syncStableContractBridge(now, rhythmResult);
-    if (sm) {
+    if (statePort) {
       // baseline_ready 才是正式 start/leave gate；
       // runtime_ready 仍仅表示人在平台上，不再单独承担“可开始”语义。
       logStartReadyWriteback(
           now,
           "loop_contract_writeback",
-          sm->state(),
+          statePort->state(),
           stableContract.startReady,
           stableContract.startReadyWeightKg,
           stableContract.startReadyBridge);
-      sm->setStartReadiness(
+      statePort->setStartReadiness(
           stableContract.startReady,
           stableContract.startReadyWeightKg);
     }
@@ -3271,7 +3251,7 @@ void LaserModule::taskLoop() {
 #endif
     }
 
-    currentTopState = sm ? sm->state() : currentTopState;
+    currentTopState = statePort ? statePort->state() : currentTopState;
     handleRunSummaryState(currentTopState, now, dist, weightValid ? weight : 0.0f, rhythmResult);
 
     if (!stableContract.userPresent &&
@@ -3283,7 +3263,7 @@ void LaserModule::taskLoop() {
       releaseOccupiedCycle("user_left_platform_confirmed", now);
       rhythmStateJudge.reset("user_left_platform_confirmed");
       clearStableContractBridge("user_left_platform_confirmed");
-      if (sm) {
+      if (statePort) {
         logStartReadyWriteback(
             now,
             "user_left_platform_confirmed",
@@ -3291,7 +3271,7 @@ void LaserModule::taskLoop() {
             false,
             0.0f,
             "user_left_platform_confirmed");
-        sm->setStartReadiness(false, 0.0f);
+        statePort->setStartReadiness(false, 0.0f);
       }
     } else if (!stableContract.userPresent &&
                currentTopState != TopState::RUNNING &&

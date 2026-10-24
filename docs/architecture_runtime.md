@@ -24,7 +24,9 @@
 - 源码：`src/transport/ble/BleTransport.cpp`
 - Core：源码未硬编码绑定 core（由 BLE 协议栈调度）
 - 触发特征：事件驱动
-- 职责：接收命令字符串、协议解析、命令分发、断连联锁触发、notify 回传
+- BLE 回调只捕获连接身份、session/connection fence 和原始数据，并投递对应队列。
+- `BleCtrl` 校验事件是否仍属于当前连接，再调用 `CommandDecoder`、`CommandBus` 和命令服务；`BleTx` 负责 notify。
+- 连接/断连业务动作通过 `BleDisconnectSink` 进入 `BleLifecycleCoordinator`，由状态机处理联锁、由 `WaveModule` 处理提示音。
 
 ### 1.4 `main loop`（Arduino `loop()`）
 - 源码：`src/main.cpp`
@@ -65,33 +67,38 @@
 ### 3.1 WAVE START
 ```text
 APP
--> BLE Transport (RX write callback)
--> ProtocolCodec::parseCommand()
+-> BLE RX callback 入控制队列
+-> `BleCtrl` 校验 session/connection fence
+-> `CommandDecoder::decode()`
 -> CommandBus::dispatch()
--> HubHandler::handle(WAVE_START)
+-> LegacyCommandAdapter -> WaveCommandService
 -> SystemStateMachine::requestStart()
 -> SystemStateMachine::setState(RUNNING)
 -> WaveModule.start()
+-> `BleTx` 回传兼容 ACK/NACK
 ```
 
 ### 3.2 WAVE STOP
 ```text
 APP
--> BLE Transport (RX write callback)
--> ProtocolCodec::parseCommand()
+-> BLE RX callback 入控制队列
+-> `BleCtrl` 校验 session/connection fence
+-> `CommandDecoder::decode()`
 -> CommandBus::dispatch()
--> HubHandler::handle(WAVE_STOP)
+-> LegacyCommandAdapter -> WaveCommandService
 -> SystemStateMachine::requestStop()
 -> SystemStateMachine::setState(IDLE)
 -> WaveModule.stopSoft()
+-> `BleTx` 回传兼容 ACK/NACK
 ```
 
 ### 3.3 USER LEAVE
 ```text
 LaserModule::taskLoop()
 -> weight < LEAVE_TH && userPresent
--> SystemStateMachine::onBleDisconnected()
--> SystemStateMachine 进入可恢复暂停并调用唯一停波 owner
+-> LaserStatePort::onUserOff()
+-> SystemStateMachine::onUserOff()
+-> 按既有离位策略更新状态并调用唯一停波 owner
 -> WaveModule.stopSoft()
 ```
 
@@ -99,12 +106,13 @@ LaserModule::taskLoop()
 ```text
 BleTransport::MyServerCallbacks::onDisconnect()
 -> 捕获 sessionId/connId 后将 BLE_DISCONNECTED 投递到控制队列
--> BleDisconnectSink::onBleDisconnect(sessionId, connId, connIdKnown) (HubHandler)
--> SystemStateMachine::onUserOff()
--> SystemStateMachine::setState(FAULT_STOP)
+-> `BleCtrl` 校验断连事件仍属于当前 session
+-> BleDisconnectSink::onBleDisconnect(sessionId, connId, connIdKnown)
+-> BleLifecycleCoordinator
+-> SystemStateMachine::onBleDisconnected()
 -> WaveModule.stopSoft()
--> WaveModule::audioTask 等待 WAVE 静音并停止 I2S
--> 同一 audioTask 播放 DISCONNECT CUE
+-> WaveModule 请求 DISCONNECT CUE
+-> `I2S_Audio` 任务按既有顺序完成软停、I2S 和提示音处理
 ```
 
 ### 3.5 CONNECT CUE
@@ -112,9 +120,10 @@ BleTransport::MyServerCallbacks::onDisconnect()
 BleTransport::MyServerCallbacks::onConnect()
 -> 捕获当前 sessionId/connId，并将 BLE_CONNECTED 投递到控制队列
 -> BleTransport::controlTaskLoop() 校验当前连接生命周期
--> HubHandler::onBleConnected()
+-> BleDisconnectSink::onBleConnected()
+-> BleLifecycleCoordinator
 -> WaveModule::requestCue(CONNECT, 当前 sessionId)
--> WaveModule::audioTask 播放 CONNECT CUE
+-> `I2S_Audio` 任务播放 CONNECT CUE
 ```
 
 `AUDIO:CUE id=CONNECT` 仍保留为旧 APP 的兼容入口。旧 APP 可能在协议确认后发送该命令；固件按当前 `sessionId` 去重，返回 `DUPLICATE` 时不重复发声。正式 APP 不再发送连接提示音命令，CAP/SNAPSHOT/WAVE 等正常通讯仍按原协议运行。
@@ -122,7 +131,7 @@ BleTransport::MyServerCallbacks::onConnect()
 ## 4. Control Plane 与 Data Plane 对应
 
 ### 4.1 Control Plane
-`APP -> BleTransport -> ProtocolCodec -> CommandBus -> SystemStateMachine -> WaveModule/LaserModule`
+`APP -> BLE RX callback/queue -> BleCtrl -> CommandDecoder -> CommandBus -> LegacyCommandAdapter -> command service -> SystemStateMachine/WaveModule/LaserModule`
 
 ### 4.2 Data Plane
 `WaveModule（WAVE/CUE） -> DDS/LUT -> I2S DMA -> PCM5102A -> TPA3255 -> Platform`
@@ -131,9 +140,12 @@ BleTransport::MyServerCallbacks::onConnect()
 `LaserModule + SystemStateMachine -> EventBus -> BleTransport -> APP`
 
 ## 5. 关键接口索引
-- `ProtocolCodec::parseCommand` / `ProtocolCodec::encodeEvent`
+- `CommandDecoder::decode`、`EventEncoder::encode` / `encodeSnapshot`
+- `ProtocolCodec::parseCommand` / `encodeEvent` 作为旧调用兼容门面
+- `LegacyCommandAdapter` 与各命令服务
 - `CommandBus::dispatch`
 - `EventBus::publish`
-- `SystemStateMachine::requestStart` / `requestStop` / `onUserOff` / `onSensorErr`
+- `BleLifecycleCoordinator::onBleConnected` / `onBleDisconnect`
+- `SystemStateMachine::requestStart` / `requestStop` / `onUserOff` / `onBleDisconnected` / `onSensorErr`
 - `WaveModule::start` / `stopSoft`
 - `LaserModule::taskLoop`（触发在位、离位、故障、稳定事件）

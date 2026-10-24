@@ -4,9 +4,12 @@
 #include <freertos/semphr.h>
 #include "config/LaserPhase2Config.h"
 #include "core/DeviceConfig.h"
+#include "core/DeviceConfigPorts.h"
+#include "core/MeasurementFacts.h"
+#include "core/LaserStatePort.h"
 #include "core/EventBus.h"
-#include "core/ProtocolCodec.h"
-#include "core/SystemStateMachine.h"
+#include "core/ProtocolSupport.h"
+#include "core/WaveObservation.h"
 #include "modules/laser/BaselineContractDiagnostics.h"
 #include "modules/laser/BaselineEvidenceEvaluator.h"
 #include "modules/laser/CalibrationRuntime.h"
@@ -15,6 +18,11 @@
 #include "modules/laser/DistanceStateChain.h"
 #include "modules/laser/LaserDiagnostics.h"
 #include "modules/laser/LaserMeasurementReader.h"
+#include "modules/laser/LaserMeasurementRuntime.h"
+#include "modules/laser/LaserRuntimeZeroRuntime.h"
+#include "modules/laser/LaserStabilityRuntime.h"
+#include "modules/laser/LaserConfigurationRuntime.h"
+#include "modules/laser/LaserDecisionRuntime.h"
 #include "modules/laser/LaserStableWindow.h"
 #include "modules/laser/MeasurementAvailabilityProbePolicy.h"
 #include "modules/laser/MeasurementHealthStateMachine.h"
@@ -27,8 +35,6 @@
 #include "modules/laser/RunSummaryCollector.h"
 #include "modules/laser/StartGateContractEvaluator.h"
 
-class WaveModule;
-
 struct CalibrationCapture {
   uint32_t index = 0;
   uint32_t ts_ms = 0;
@@ -39,39 +45,9 @@ struct CalibrationCapture {
   bool validFlag = false;
 };
 
-struct DualZeroState {
-  float calibrationZeroDistance = 0.0f;
-  float runtimeZeroDistance = 0.0f;
-  bool runtimeZeroValid = false;
-  bool occupiedCycleActive = false;
-  bool effectiveZeroLocked = false;
-  bool effectiveZeroUsesRuntime = false;
-  float effectiveZeroDistance = 0.0f;
-  uint32_t effectiveZeroLockedAtMs = 0;
-  uint32_t runtimeZeroCapturedAtMs = 0;
-  float lastRuntimeZeroCandidateDistance = 0.0f;
-  uint32_t runtimeZeroWindowStartedAtMs = 0;
-};
-
-struct StableContractState {
-  bool userPresent = false;
-  bool stableCandidate = false;
-  bool stableReadyLive = false;
-  bool baselineReadyLatched = false;
-  bool startReady = false;
-  float stableReadyWeightKg = 0.0f;
-  float stableReadyDistance = 0.0f;
-  float baselineReadyWeightKg = 0.0f;
-  float baselineReadyDistance = 0.0f;
-  float startReadyWeightKg = 0.0f;
-  uint32_t stableReadyAtMs = 0;
-  uint32_t baselineReadyAtMs = 0;
-  const char* startReadyBridge = "not_ready";
-};
-
-class LaserModule {
+class LaserModule : public IDeviceConfigOwner, public MeasurementFacts {
 public:
-  void begin(EventBus* eb, SystemStateMachine* fsm, WaveModule* waveModule);
+  void begin(EventBus* eb, LaserStatePort* statePort, WaveObservation* waveObservation);
   void startTask();
 
   // Command hooks（由统一命令处理器调用）
@@ -79,27 +55,30 @@ public:
   bool setParams(float zero, float factor, String& reason);
   void getParams(float &zero, float &factor) const;
   float getWeightKg() const;
-  bool isUserPresent() const;
-  bool baselineReady() const;
-  float stableWeightKg() const;
-  PlatformModel platformModel() const;
-  bool laserInstalled() const;
-  bool laserAvailable() const;
-  MeasurementHealthState measurementHealth() const;
-  bool measurementFaultConfirmed() const;
+  bool isUserPresent() const override;
+  bool baselineReady() const override;
+  float stableWeightKg() const override;
+  PlatformModel platformModel() const override;
+  bool laserInstalled() const override;
+  bool laserAvailable() const override;
+  MeasurementHealthState measurementHealth() const override;
+  bool measurementFaultConfirmed() const override;
   bool measurementStartupResolved() const;
   bool protectionDegraded() const;
   void getDeviceConfig(DeviceConfigSnapshot& out) const;
-  bool getProfileConfig(DeviceConfigSnapshot& out, String& reason);
+  bool getProfileConfig(DeviceConfigSnapshot& out, String& reason) override;
   bool setProfileConfig(
       PlatformModel platformModel,
       SensorProfileId sensorProfile,
-      String& reason);
-  bool setDeviceConfig(PlatformModel platformModel, bool laserInstalled, String& reason);
+      String& reason) override;
+  bool setDeviceConfig(
+      PlatformModel platformModel,
+      bool laserInstalled,
+      String& reason) override;
   bool configOperational() const;
   bool configIdentityValid() const;
-  bool startConfigurationComplete() const;
-  bool protectedStartPolicyAvailable() const;
+  bool startConfigurationComplete() const override;
+  bool protectedStartPolicyAvailable() const override;
   bool getCalibrationModel(CalibrationModel& out) const;
   bool setCalibrationModel(const CalibrationModel& model, String& reason);
   bool getEmptyDistance(EmptyDistanceRecord& out) const;
@@ -254,28 +233,26 @@ private:
   float getStdDev(const float* values) const;
 
 private:
-  enum class StableState : uint8_t {
-    UNSTABLE,
-    STABLE_CANDIDATE,
-    STABLE_LATCHED
-  };
+  using StableState = LaserStabilityRuntime::StableState;
 
   EventBus* bus = nullptr;
-  SystemStateMachine* sm = nullptr;
-  WaveModule* wave = nullptr;
+  LaserStatePort* statePort = nullptr;
+  WaveObservation* waveObservation = nullptr;
 
-  LaserMeasurementReader measurementReader;
+  LaserMeasurementRuntime measurementRuntime;
+  LaserMeasurementReader& measurementReader = measurementRuntime.reader();
   DistanceStateChain distanceStateChain;
-  MeasurementPlane measurementPlane;
-  DeviceConfigStore deviceConfigStore;
-  CalibrationModelStore calibrationModelStore;
-  ProfileEmptyDistanceStore profileEmptyDistanceStore;
-  Preferences preferences;
-  DeviceConfigSnapshot deviceConfig{};
-  DeviceConfigStoreStatus configStatus = DeviceConfigStoreStatus::CONFIG_ERROR;
-  bool preferencesOpened = false;
-  volatile bool configTransitionActive = false;
-  SemaphoreHandle_t profileTransitionMutex = nullptr;
+  MeasurementPlane& measurementPlane = measurementRuntime.plane();
+  LaserConfigurationRuntime configurationRuntime;
+  DeviceConfigStore& deviceConfigStore = configurationRuntime.deviceConfigStore;
+  CalibrationModelStore& calibrationModelStore = configurationRuntime.calibrationModelStore;
+  ProfileEmptyDistanceStore& profileEmptyDistanceStore = configurationRuntime.profileEmptyDistanceStore;
+  Preferences& preferences = configurationRuntime.preferences;
+  DeviceConfigSnapshot& deviceConfig = configurationRuntime.deviceConfig;
+  DeviceConfigStoreStatus& configStatus = configurationRuntime.configStatus;
+  bool& preferencesOpened = configurationRuntime.preferencesOpened;
+  volatile bool& configTransitionActive = configurationRuntime.configTransitionActive;
+  SemaphoreHandle_t& profileTransitionMutex = configurationRuntime.profileTransitionMutex;
   bool currentSampleValid = false;
   float currentSamplePhysicalMm = NAN;
   uint32_t currentSampleAtMs = 0;
@@ -286,42 +263,42 @@ private:
   LaserPhase2ThresholdConfig phase2Thresholds{};
 
   // 与你原固件保持一致
-  float zeroDistance = 0.0f;
-  float scaleFactor = 1.0f;
-  CalibrationModel calibrationModel{};
-  EmptyDistanceRecord emptyDistanceRecord{};
+  float& zeroDistance = configurationRuntime.zeroDistance;
+  float& scaleFactor = configurationRuntime.scaleFactor;
+  CalibrationModel& calibrationModel = configurationRuntime.calibrationModel;
+  EmptyDistanceRecord& emptyDistanceRecord = configurationRuntime.emptyDistanceRecord;
   // A cleared or never-written model must not be silently treated as a valid
   // weight calibration. Distance state can still run without it.
-  bool calibrationModelReady = false;
-  bool emptyDistanceReady = false;
-  DualZeroState dualZero{};
+  bool& calibrationModelReady = configurationRuntime.calibrationModelReady;
+  bool& emptyDistanceReady = configurationRuntime.emptyDistanceReady;
+  DualZeroState& dualZero = configurationRuntime.dualZero;
 
-  float weightBuffer[WINDOW_N]{};
-  float distanceBuffer[WINDOW_N]{};
-  int bufHead = 0, bufCount = 0;
-  StableState stableState = StableState::UNSTABLE;
+  LaserStabilityRuntime stabilityRuntime;
+  float (&weightBuffer)[WINDOW_N] = stabilityRuntime.weightBuffer;
+  float (&distanceBuffer)[WINDOW_N] = stabilityRuntime.distanceBuffer;
+  int& bufHead = stabilityRuntime.bufHead;
+  int& bufCount = stabilityRuntime.bufCount;
+  LaserStabilityRuntime::StableState& stableState = stabilityRuntime.stableState;
   // stable_weight 生命周期入口：
   // 仅在未律动且稳定站立时锁定，确认离台后才允许清空并重建。
-  float stableBaselineDistance = 0.0f;
-  float stableBaselineDistanceMm = 0.0f;
-  float stableBaselineWeight = 0.0f;
-  uint32_t stableLatchedAtMs = 0;
-  uint8_t invalidStableSamples = 0;
-  uint8_t stableConfirmCount = 0;
-  uint32_t stableCandidateStartedAtMs = 0;
-  bool stableEarlyCheckpointLogged = false;
-  bool stableFilterValid = false;
-  float stableFilteredDistance = 0.0f;
-  float stableFilteredWeight = 0.0f;
-  float runtimeZeroBuffer[WINDOW_N]{};
-  uint8_t runtimeZeroHead = 0;
-  uint8_t runtimeZeroCount = 0;
-  StableContractState stableContract{};
-  uint8_t presenceEnterConfirmCount = 0;
-  uint8_t presenceExitConfirmCount = 0;
-  uint8_t invalidPresenceSamples = 0;
-  uint8_t stableExitConfirmCount = 0;
-  const char* stableExitPendingReason = nullptr;
+  float& stableBaselineDistance = stabilityRuntime.stableBaselineDistance;
+  float& stableBaselineDistanceMm = stabilityRuntime.stableBaselineDistanceMm;
+  float& stableBaselineWeight = stabilityRuntime.stableBaselineWeight;
+  uint32_t& stableLatchedAtMs = stabilityRuntime.stableLatchedAtMs;
+  uint8_t& invalidStableSamples = stabilityRuntime.invalidStableSamples;
+  uint8_t& stableConfirmCount = stabilityRuntime.stableConfirmCount;
+  uint32_t& stableCandidateStartedAtMs = stabilityRuntime.stableCandidateStartedAtMs;
+  bool& stableEarlyCheckpointLogged = stabilityRuntime.stableEarlyCheckpointLogged;
+  bool& stableFilterValid = stabilityRuntime.stableFilterValid;
+  float& stableFilteredDistance = stabilityRuntime.stableFilteredDistance;
+  float& stableFilteredWeight = stabilityRuntime.stableFilteredWeight;
+  LaserRuntimeZeroRuntime runtimeZeroRuntime;
+  StableContractState& stableContract = stabilityRuntime.stableContract;
+  uint8_t& presenceEnterConfirmCount = stabilityRuntime.presenceEnterConfirmCount;
+  uint8_t& presenceExitConfirmCount = stabilityRuntime.presenceExitConfirmCount;
+  uint8_t& invalidPresenceSamples = stabilityRuntime.invalidPresenceSamples;
+  uint8_t& stableExitConfirmCount = stabilityRuntime.stableExitConfirmCount;
+  const char*& stableExitPendingReason = stabilityRuntime.stableExitPendingReason;
 
   // 静默日志
   float lastLogDist = -999.0f;
@@ -332,23 +309,25 @@ private:
 
   volatile float latestWeightKg = 0.0f;
   bool lastMeasurementValid = false;
-  MeasurementAvailabilityProbePolicy measurementProbePolicy{};
-  MeasurementHealthStateMachine measurementHealthMachine{};
+  MeasurementAvailabilityProbePolicy& measurementProbePolicy = measurementRuntime.probePolicy();
+  MeasurementHealthStateMachine& measurementHealthMachine = measurementRuntime.health();
   uint32_t lastValidityLogMs = 0;
   bool hasLoggedMeasurementBypassState = false;
   bool lastLoggedMeasurementBypassState = false;
   const char* lastInvalidReason = nullptr;
   uint32_t calibrationCaptureCounter = 0;
   volatile bool streamEnabled = false;
-  volatile uint8_t streamRateHz = ProtocolCodec::kStreamDefaultRateHz;
+  volatile uint8_t streamRateHz = ProtocolSupport::kStreamDefaultRateHz;
   uint32_t lastStreamPublishedAtMs = 0;
   // Primary Judgment Owner：
   // MA12 / deviation / ratio / main_state / duration 统一由 RhythmStateJudge 维护。
-  RhythmStateJudge rhythmStateJudge{};
-  MotionSafetyShadowEvaluator motionSafetyShadow{};
-  RuntimeZeroObserver runtimeZeroObserver{};
-  RunSummaryCollector runSummaryCollector{};
-  BaselineContractDiagnostics baselineContractDiagnostics{};
+  LaserDecisionRuntime decisionRuntime;
+  RhythmStateJudge& rhythmStateJudge = decisionRuntime.rhythmStateJudge;
+  MotionSafetyShadowEvaluator& motionSafetyShadow = decisionRuntime.motionSafetyShadow;
+  RuntimeZeroObserver& runtimeZeroObserver = runtimeZeroRuntime.observer;
+  RunSummaryCollector& runSummaryCollector = decisionRuntime.runSummaryCollector;
+  BaselineContractDiagnostics& baselineContractDiagnostics =
+      decisionRuntime.baselineContractDiagnostics;
   TopState lastObservedTopState = TopState::IDLE;
   uint32_t startGateDiagWindowStartedAtMs = 0;
   uint32_t startGateDiagLastLogMs = 0;

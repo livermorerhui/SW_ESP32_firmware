@@ -2,62 +2,62 @@
 #include "Types.h"
 #include "EventBus.h"
 #include "PlatformSnapshotOwner.h"
+#include "MeasurementFacts.h"
+#include "WaveControl.h"
+#include "LaserStatePort.h"
 #include "RuntimeProtectionPolicy.h"
 #include "SafetyActionContractEvaluator.h"
 #include "config/GlobalConfig.h"
 
-class WaveModule;
-class LaserModule;
-
-class SystemStateMachine : public PlatformSnapshotOwner {
+class SystemStateMachine : public PlatformSnapshotOwner, public LaserStatePort {
 public:
-  void begin(EventBus* eb, WaveModule* waveModule);
-  void attachLaserModule(const LaserModule* laserModule);
+  void begin(EventBus* eb, WaveControl* waveControl);
+  void attachMeasurementFacts(const MeasurementFacts* measurementFacts);
   static const SystemStateMachine* activeInstance();
 
-  TopState state() const;
+  TopState state() const override;
   bool isFaultLocked() const;
-  FaultCode activeFault() const;
+  FaultCode activeFault() const override;
   bool runtimeReady() const;
   FaultCode currentReasonCode() const;
   SafetySignalKind currentSafetyEffect() const;
   PlatformSnapshot snapshot() const override;
 
   void onUserOn();
-  void onUserOff();
+  void onUserOff() override;
   void onBleConnected();
   void onBleDisconnected();
   void onFallSuspected();
   void onSensorErr();
   void setFallStopEnabled(bool enabled);
-  bool fallStopEnabled() const;
+  bool fallStopEnabled() const override;
   const char* fallStopModeName() const;
   void setLeaveStopEnabled(bool enabled);
   bool leaveStopEnabled() const;
   const char* leaveStopModeName() const;
-  FallStopActionDecision decideFallSuspectedAction() const;
-  void applyFallSuspectedAction(const FallStopActionDecision& decision);
+  FallStopActionDecision decideFallSuspectedAction() const override;
+  void applyFallSuspectedAction(const FallStopActionDecision& decision) override;
   void setMotionSamplingMode(bool enabled);
   bool motionSamplingModeEnabled() const;
   void setDegradedStartAuthorized(bool enabled);
   bool degradedStartAvailable() const;
   bool degradedStartAuthorized() const;
-  void setRuntimeReady(bool ready);
-  void setStartReadiness(bool ready, float stableWeightKg);
+  void setRuntimeReady(bool ready) override;
+  void setStartReadiness(bool ready, float stableWeightKg) override;
   bool startReady() const;
   bool leaveDetectionEnabled() const;
-  void setSensorHealthy(bool healthy);
-  const char* lastStopReasonText() const;
-  const char* lastStopSourceText() const;
-  SafetySignalKind lastStopSafetyEffect() const;
+  void setSensorHealthy(bool healthy) override;
+  const char* lastStopReasonText() const override;
+  const char* lastStopSourceText() const override;
+  SafetySignalKind lastStopSafetyEffect() const override;
 
-  void onWeightSample(float weightKg);
+  void onWeightSample(float weightKg) override;
 
   bool requestStart(FaultCode& reason);
   void requestStop();
   // An internal configuration/NVS fault must stop output without being
   // reported as a user-initiated stop or as a fall/leave safety event.
-  void stopForConfigurationFault();
+  void stopForConfigurationFault() override;
 
 private:
   void setState(TopState s);
@@ -101,8 +101,8 @@ private:
   void syncSnapshotDecisionContext();
 
   EventBus* bus = nullptr;
-  WaveModule* wave = nullptr;
-  const LaserModule* laser = nullptr;
+  WaveControl* wave = nullptr;
+  const MeasurementFacts* measurement = nullptr;
   TopState st = TopState::IDLE;
   FaultCode blocking_fault_code = FaultCode::NONE;
   FaultCode pause_reason_code = FaultCode::NONE;
