@@ -1,13 +1,12 @@
 """Bind product identity to the actual Arduino/ESP-IDF component compilation."""
 
-import json
 import os
 from pathlib import Path
 
 from SCons.Script import COMMAND_LINE_TARGETS, Import  # type: ignore[import-not-found]
 
 from product_build_contract import (
-    BUILD_METADATA, BUILD_PENDING, PRODUCT_ENV, build_evidence,
+    BUILD_METADATA, BUILD_PENDING, PRODUCT_ENV,
     current_product_identity, prepare_build_header, render_build_header,
     source_fingerprint, write_if_changed,
 )
@@ -64,21 +63,12 @@ if is_build:
     (build_dir / BUILD_METADATA).unlink(missing_ok=True)
 
 
-def complete_product_build(source, target, env):
-    if identity_mode != "product":
-        return
-    evidence = build_evidence(project_dir, build_dir, identity, sdkconfig)
-    temporary = build_dir / (BUILD_METADATA + ".tmp")
-    temporary.write_text(json.dumps(evidence, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    temporary.replace(build_dir / BUILD_METADATA)
-    (build_dir / BUILD_PENDING).unlink(missing_ok=True)
-    print(f"[product-build] verified {VERSION} {BUILD_ID} sha256={evidence['assets']['firmware.bin']['sha256']}")
-
-
-if is_build and identity_mode == "product":
-    env.AddPostAction("buildprog", complete_product_build)
-    # The normal Upload path validates before touching the serial port too.
-    env.AddPreAction("upload", complete_product_build)
+# The post hook adds dependencies only after PlatformIO has created the real
+# application objects and target aliases. Retain this pre-build input snapshot
+# so source changes during compilation cannot receive successful evidence.
+env["SW_PRODUCT_BUILD_IDENTITY"] = identity
+env["SW_PRODUCT_BUILD_MODE"] = identity_mode
+env["SW_PRODUCT_BUILD_REQUESTED"] = is_build
 
 print(f"[release-identity] version={VERSION} build_id={BUILD_ID} mode={identity_mode} "
       f"environment={platformio_env} backend={backend} rollback=enabled anti_rollback=disabled")

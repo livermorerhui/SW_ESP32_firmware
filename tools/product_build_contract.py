@@ -34,6 +34,7 @@ SOURCE_FILES = (
     "sdkconfig.defaults", "sdkconfig.esp32s3",
     "tools/release_identity_build_flags.py", "tools/release_build_contract.py",
     "tools/product_build_contract.py",
+    "tools/product_build_evidence.py",
 )
 
 
