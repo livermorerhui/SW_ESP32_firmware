@@ -1,6 +1,6 @@
 # 产品构建与工厂导出
 
-本说明对应 2026-10-24 的构建入口收口；不修改 Base/Plus、ready、保护、波形和 OTA 协议。
+本说明对应 2026-10-24 至 2026-10-25 的构建入口收口；不修改 Base/Plus、ready、保护、波形和 OTA 协议。
 
 ## 操作顺序
 
@@ -30,7 +30,7 @@ python3 tools/product_build_contract.py
 [`esp32-unified-upload-factory-contract.md`](../../../SW/docs/system/firmware-release/esp32-unified-upload-factory-contract.md)。
 旧 `.github/workflows/release.yml` 已删除：它曾取任意找到的 `firmware.bin`，再用 Git tag/SHA 填清单，未证明清单身份与应用身份相同。GitHub tag 不再自动生成另一种发布包。
 
-`product_build.json` 记录 schema、版本、构建号、环境、板型、编译时提交、全部仓内构建输入摘要、实际 SDK 配置摘要，以及 `firmware.bin / bootloader.bin / partitions.bin / ota_data_initial.bin` 的 SHA-256 与长度。编译提交与导出提交可能因纯文档提交不同，源码内容摘要必须一致。
+`product_build.json` 记录 schema、版本、构建号、环境、板型、构建校验时源码提交、全部仓内构建输入摘要、实际 SDK 配置摘要，以及 `firmware.bin / bootloader.bin / partitions.bin / ota_data_initial.bin` 的 SHA-256 与长度。构建校验提交与导出提交可能因纯文档提交不同，源码内容摘要必须一致。
 
 固定 SDK 配置从已提交的 `sdkconfig.esp32s3` 复制到构建目录；忽略文件 `sdkconfig.esp32s3_unified` 不再决定产品配置。兼容发布保持 rollback 开启、硬件 anti-rollback 关闭、secure version 为 0。关闭编译日期时间嵌入，避免同源码重编译仅因时钟变化产生新镜像；这不是对任意机器/工具链完全字节重现的承诺。
 
@@ -54,3 +54,5 @@ python3 tools/product_build_contract.py
 - [ESP-IDF 4.4.7 构建系统](https://docs.espressif.com/projects/esp-idf/en/v4.4.7/esp32s3/api-guides/build-system.html)：component 编译配置与 PROJECT_VER。
 - [ESP-IDF 4.4.7 配置参考](https://docs.espressif.com/projects/esp-idf/en/v4.4.7/esp32s3/api-reference/kconfig.html#config-app-compile-time-date)：编译日期时间开关。
 - [esptool v4 基本命令](https://docs.espressif.com/projects/esptool/en/release-v4/esp32s3/esptool/basic-commands.html)：按地址写入与擦除边界。
+
+最终实施使用 post hook `tools/product_build_evidence.py`：应用对象显式依赖生成头，独立 AlwaysBuild 验证目标依赖四个镜像，并接入 buildprog/upload。已用首次构建、noop 和提交后 noop 验证四镜像哈希不变、凭据重新生成、pending 清除。`firmware_commit` 表示该次校验所对应源码提交，不是每个镜像首次编译时间；最终归档与真机验收状态见 SW 合同第 10 节。
