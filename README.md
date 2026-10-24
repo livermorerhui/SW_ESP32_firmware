@@ -15,6 +15,13 @@ ESP32 在系统中的角色：
 
 ## Quick Start
 
+正式产品入口是 `esp32s3_unified`（默认环境）。VSCode 选择 `Default` 或
+`esp32s3_unified` 后点击 Upload，与以下命令使用同一套构建。
+版本唯一来源为 [`firmware_release.json`](firmware_release.json)，当前为 1.1.3；
+构建号随源码/构建配置内容变化，不需要手动改 `FirmwareIdentity.h`。
+工厂包必须复制这次构建的镜像，不再另选维护环境重编译。
+操作、导出校验与验收边界见 [产品构建与交付说明](docs/system/product_build_and_factory_export.md)。
+
 ### 1) Build
 ```bash
 # 如果 pio 已在 PATH
@@ -28,6 +35,10 @@ pio run
 ```bash
 pio run -t upload --upload-port <PORT>
 ```
+
+Upload 编译当前工作区。修改代码后，它是新的待验候选；构建成功不等于真机通过。
+默认生成的 `.pio/build/esp32s3_unified/product_build.json` 记录该次构建的版本、
+源码摘要和四个镜像哈希。正式工厂导出会复核当前代码与这些镜像一致。
 
 ### 3) Monitor
 ```bash

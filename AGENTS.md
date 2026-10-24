@@ -61,6 +61,8 @@
 
 ## 当前协作新增长期规则
 
+- 产品版本与默认环境以 `firmware_release.json` 为唯一入口；日常 VSCode Upload 与工厂导出统一使用 `esp32s3_unified`。工厂/OTA 复用同次产品构建的应用二进制，不改环境重新编译。导出前必须通过 `tools/product_build_contract.py` 校验当前源码摘要、实际 component 配置、镜像身份与哈希；`product_build.json` 只证明构建来源，不代替真机验收。详见 [产品构建与工厂导出](docs/system/product_build_and_factory_export.md)。
+
 - 对外状态语义必须区分：
   - 正式合同
   - warning/debug/兼容值
