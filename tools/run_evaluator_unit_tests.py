@@ -2190,6 +2190,7 @@ def run() -> None:
     cmd = [
       "g++",
       "-std=c++17",
+      '-DFW_VER="SW-ESP32-0.0.0"', '-DFW_BUILD_ID="host-evaluator-test"',
       "-Wall",
       "-Wextra",
       "-Werror",

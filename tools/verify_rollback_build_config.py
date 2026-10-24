@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from product_build_contract import render_build_header
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -49,20 +51,38 @@ def main() -> None:
         "SW_FIRMWARE_TEST_VERSION",
         "SW_FIRMWARE_TEST_BUILD_ID",
         "SW_FIRMWARE_RELEASE_SECURITY_VERSION",
-        "SW_ESP32_ROLLBACK_USB_DIAGNOSTICS",
+        "prepare_build_header(",
+        "usb_diagnostics=True",
+        'fail_self_check=env.subst("$PIOENV") == "esp32s3_rollback_self_check_fail"',
         "CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y",
         "# CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK is not set",
     ):
         require(baseline_script, expected, PROJECT_ROOT / "tools" / "test_bootchain_baseline_build_flags.py")
 
+    require(app_cmake, "product_build_config.h", PROJECT_ROOT / "src" / "CMakeLists.txt")
+    require(app_cmake, '"-include${sonicwave_build_header}"', PROJECT_ROOT / "src" / "CMakeLists.txt")
+    baseline_header = render_build_header("SW-ESP32-1.1.1", "rollback-audit", "485", usb_diagnostics=True)
+    failed_header = render_build_header("SW-ESP32-1.1.1", "rollback-audit", "485", usb_diagnostics=True,
+                                        fail_self_check=True)
+    product_header = render_build_header("SW-ESP32-1.1.3", "product-audit", "UNIFIED")
     for expected in (
-        "SW_ESP32_ROLLBACK_USB_DIAGNOSTICS",
-        "ARDUINO_USB_MODE=1",
-        "ARDUINO_USB_CDC_ON_BOOT=1",
+        "#define SW_ESP32_ROLLBACK_USB_DIAGNOSTICS 1",
+        "#define ARDUINO_USB_MODE 1",
+        "#define ARDUINO_USB_CDC_ON_BOOT 1",
     ):
-        require(app_cmake, expected, PROJECT_ROOT / "src" / "CMakeLists.txt")
+        require(baseline_header, expected, PROJECT_ROOT / "tools" / "product_build_contract.py")
+        if expected in product_header:
+            raise AssertionError("product build must not inherit rollback USB test switches")
+    injection = "#define SW_OTA_ROLLBACK_TEST_INJECT_SELF_CHECK_FAILURE 1"
+    require(failed_header, injection, PROJECT_ROOT / "tools" / "product_build_contract.py")
+    if injection in baseline_header or injection in product_header:
+        raise AssertionError("self-check failure injection must stay in its explicit test profile")
 
-    require(main_cpp, "ESP_LOGI(\"BOOT_DIAG\"", PROJECT_ROOT / "src" / "main.cpp")
+    require(main_cpp, "#if defined(SW_ESP32_ROLLBACK_USB_DIAGNOSTICS)", PROJECT_ROOT / "src" / "main.cpp")
+    require(main_cpp, "FirmwareDiagnostics::bootDiagnostic(", PROJECT_ROOT / "src" / "main.cpp")
+    diagnostics_source = PROJECT_ROOT / "src" / "core" / "FirmwareDiagnostics.cpp"
+    require(diagnostics_source.read_text(encoding="utf-8"), "event.kind = EventKind::BootDiagnostic; event.critical = true;",
+            diagnostics_source)
 
     for expected in (
         "CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y",

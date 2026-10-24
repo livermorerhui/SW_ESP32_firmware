@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+HOST_IDENTITY_FLAGS = ['-DFW_VER="SW-ESP32-0.0.0"', '-DFW_BUILD_ID="host-diagnostics-test"']
 ARDUINO_STUB = """#pragma once
 #include <cstdint>
 #include <cstddef>
@@ -32,7 +33,7 @@ def main() -> None:
         for name, source, defines in cases:
             binary = temp / name
             command = [args.cxx, "-std=c++17", "-Wall", "-Wextra", "-Werror",
-                       "-I", str(temp), "-I", str(ROOT / "src"), *defines,
+                       "-I", str(temp), "-I", str(ROOT / "src"), *HOST_IDENTITY_FLAGS, *defines,
                        str(ROOT / "tools/tests" / source), "-o", str(binary)]
             print(f"编译并运行：{name}", flush=True)
             subprocess.run(command, check=True, cwd=ROOT, timeout=60)
@@ -44,6 +45,7 @@ def main() -> None:
             binary = temp / name
             command = [args.cxx, "-std=c++11", "-Wall", "-Wextra", "-Werror", "-pthread",
                        "-DSW_DIAGNOSTIC_HOST_TEST=1", *defines,
+                       *HOST_IDENTITY_FLAGS,
                        "-I", str(ROOT / "tools/tests/firmware_diagnostic_stubs"),
                        "-I", str(ROOT / "src"), str(ROOT / "tools/tests/firmware_diagnostics_test.cpp"),
                        str(ROOT / "src/core/FirmwareDiagnosticBuffer.cpp"),

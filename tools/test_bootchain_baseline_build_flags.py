@@ -8,6 +8,8 @@ from pathlib import Path
 
 from SCons.Script import Import  # type: ignore[import-not-found]
 
+from product_build_contract import prepare_build_header, render_build_header
+
 
 Import("env")
 
@@ -53,16 +55,14 @@ generated_sdkconfig = generated_dir / "rollback-usb.sdkconfig"
 generated_sdkconfig.write_text(source_content, encoding="utf-8")
 
 env.BoardConfig().update("build.esp-idf.sdkconfig_path", str(generated_sdkconfig))
-# PlatformIO's ESP-IDF builder configures CMake components before its normal
-# SCons CPPDEFINES are applied. Export this test-only switch so src/CMakeLists
-# can add the Arduino USB Serial-JTAG mapping to the actual application
-# compile command.
-env["ENV"]["SW_ESP32_ROLLBACK_USB_DIAGNOSTICS"] = "1"
-env.Append(
-    CPPDEFINES=[
-        ("FW_VER", f'\\"{VERSION}\\"'),
-        ("FW_BUILD_ID", f'\\"{BUILD_ID}\\"'),
-    ]
+# Bind the test-only USB mapping and identity through the same component
+# configuration header, keeping it absent from the product header.
+prepare_build_header(
+    Path(env.subst("$BUILD_DIR")),
+    render_build_header(
+        VERSION, BUILD_ID, "485", usb_diagnostics=True,
+        fail_self_check=env.subst("$PIOENV") == "esp32s3_rollback_self_check_fail",
+    ),
 )
 print(
     "[rollback-usb-baseline] "

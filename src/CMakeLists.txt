@@ -7,16 +7,13 @@ idf_component_register(
   REQUIRES framework-arduinoespressif32
 )
 
-# The rollback USB baseline is a test-only build.  PlatformIO's mixed
-# Arduino/ESP-IDF builder does not forward SCons CPPDEFINES to IDF component
-# sources, so bind Arduino Serial to the already-enabled USB Serial-JTAG
-# console here.  Release and ordinary development builds do not receive this
-# environment marker and keep their existing serial routing.
-if(DEFINED ENV{SW_ESP32_ROLLBACK_USB_DIAGNOSTICS} AND
-   "$ENV{SW_ESP32_ROLLBACK_USB_DIAGNOSTICS}" STREQUAL "1")
-  target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    SW_ESP32_ROLLBACK_USB_DIAGNOSTICS=1
-    ARDUINO_USB_MODE=1
-    ARDUINO_USB_CDC_ON_BOOT=1
-  )
+# The CMake code model does not show later SCons flags. Bind the generated
+# configuration explicitly to the component so every application translation
+# unit consumes the same reviewable identity/backend in both build layers.
+set(sonicwave_build_header "${CMAKE_BINARY_DIR}/product_build_config.h")
+if(NOT EXISTS "${sonicwave_build_header}")
+  message(FATAL_ERROR "Missing product build configuration; build with PlatformIO")
 endif()
+# Keep this as one token: SCons categorizes/reorders the CMake fragments, so a
+# separate path can otherwise become a second input instead of -include's arg.
+target_compile_options(${COMPONENT_LIB} PRIVATE "-include${sonicwave_build_header}")

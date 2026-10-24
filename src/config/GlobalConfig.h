@@ -1,16 +1,8 @@
 #pragma once
 #include <Arduino.h>
-#if __has_include("FirmwareIdentity.h")
 #include "FirmwareIdentity.h"
-#endif
 
 // ===== Versions =====
-#ifndef FW_VER
-#define FW_VER        "SW-ESP32-1.0.0"
-#endif
-#ifndef FW_BUILD_ID
-#define FW_BUILD_ID   "dev-local"
-#endif
 #ifndef FW_BOARD_ID
 #define FW_BOARD_ID   "sonicwave_esp32s3_n16r8"
 #endif

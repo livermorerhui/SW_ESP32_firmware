@@ -21,6 +21,7 @@ def main() -> None:
                 "c++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
                 "-Wno-unused-private-field", "-pthread",
                 "-DSW_DISTANCE_BACKEND_UNIFIED=1",
+                '-DFW_VER="SW-ESP32-0.0.0"', '-DFW_BUILD_ID="host-reader-test"',
                 "-I", str(STUBS), "-I", str(ROOT / "src"),
                 str(TEST), str(READER), str(PROFILE), "-o", str(binary),
             ],
