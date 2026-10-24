@@ -34,11 +34,10 @@ Source:
 
 Used for:
 
-- `start_ready`
-- `baseline_ready`
+- `start_ready`（开始按钮唯一正式依据）
+- `baseline_ready`（独立的基线证据）
 - `laser_available`
-- `degraded_start_available`
-- `degraded_start_enabled`
+- `degraded_start_available` / `degraded_start_enabled`（兼容与诊断投影，不是 APP 授权门禁）
 
 ## Start Button Rules
 
@@ -55,18 +54,19 @@ APP rule:
 
 - `platform_model=BASE` is sufficient to treat the profile as laserless
 
-### `PLUS` with `laser_installed=0`
+### `PLUS` without a selected laser profile
 
-This is not a supported product profile in the current product definition.
+`PLUS` keeps `laser_installed=1` as the hardware-capability compatibility
+field, while `sensor_profile=NONE` means that no laser model has been set.
+This is a valid degraded configuration.
 
 Expected behavior:
 
-- it must not be documented as a normal delivery path
-- the APP must not treat it as an officially supported laserless profile
-
-APP rule:
-
-- only `BASE` is treated as the formal laserless product profile
+- firmware accepts the stored model/configuration as operational
+- firmware automatically publishes `start_ready=true` after configuration is
+  stable, unless a blocking fault, disconnect, or configuration transition is
+  active
+- APP shows the laser notification and does not send an authorization command
 
 ### `PLUS` with `laser_installed=1` and healthy measurement chain
 
@@ -79,24 +79,32 @@ APP rule:
 - trust firmware `start_ready`
 - do not re-derive readiness from local UI heuristics
 
-### `PLUS` with `laser_installed=1` and measurement unavailable
+### `PLUS` with a selected laser profile and measurement unavailable
 
 Expected behavior:
 
-- APP shows a repair/degraded-start prompt
-- after degraded-start is available and confirmed, `Start` should be allowed
+- firmware decides the degraded path locally after measurement startup is
+  resolved
+- firmware publishes `start_ready=true` unless a blocking fault, disconnect,
+  or configuration transition is active
+- this degraded path does not wait for `D_e`/baseline; a healthy laser with
+  protection enabled still follows the normal `D_e` and baseline path
+- APP shows the laser notification; it does not authorize or calculate the
+  degraded path
 
 APP rule:
 
-- rely on `degraded_start_available`
-- require explicit degraded-start authorization before sending `WAVE:START`
+- trust firmware `start_ready`
+- never require `degraded_start_available` or an explicit authorization command
 
 ## Non-Goals
 
 The APP must not:
 
-- require stable-weight UI data before honoring laserless start profiles
-- require `SNAPSHOT.start_ready=true` for `BASE`
+- require stable-weight UI data before honoring a firmware-published degraded
+  start result
+- re-derive readiness from `laser_available`, cached values, or local UI state
+- send `DEGRADED_START_SET` to authorize a start
 
 ## Review Checklist
 
@@ -104,8 +112,8 @@ Before changing start-button behavior, verify:
 
 - does the APP still trust firmware `start_ready` for laser-equipped profiles
 - does `BASE` still become ready immediately after reconnect
-- does degraded-start still require confirmation only for laser-equipped fault
-  paths
+- does Plus-without-profile and confirmed laser-unavailable Plus use the
+  firmware-published `start_ready` without APP confirmation
 - does connect-time `SNAPSHOT` remain small enough for the common single-notify
   MTU path
 

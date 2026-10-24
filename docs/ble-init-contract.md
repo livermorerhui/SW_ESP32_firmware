@@ -80,6 +80,13 @@ Only `FAULT` represents confirmed measurement-chain fault for APP product UI.
 `BOOTING` / `PROBING` are startup readiness states and must not be upgraded
 into user-visible laser fault by the APP.
 
+`start_ready` remains the only start-button projection. The degraded-start
+fields are compatibility/diagnostic projections; the legacy
+`DEGRADED_START_SET` command is acknowledged without changing the ESP32
+readiness decision. Plus without a selected `sensor_profile` is a valid
+degraded configuration, while blocking faults, disconnect pause, and config
+transitions still force `start_ready=0`.
+
 If richer runtime health needs to grow again, it must move to a dedicated
 query/event plane rather than inflating connect-time `SNAPSHOT`.
 

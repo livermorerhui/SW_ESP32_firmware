@@ -43,8 +43,9 @@
 
 启动按钮约定：
 - `BASE`：连接后即可开始。
-- `PLUS` 且 `laser_installed=0`：不属于当前正式产品定义，不应作为正常交付路径。
-- `PLUS` 且 `laser_installed=1`：以 firmware `start_ready` / `degraded_start_available` 为准。
+- `PLUS` 且 `sensor_profile=NONE`：是合法的固件自动降级配置；以 firmware `start_ready` 为准，APP 不发送降级授权。
+- `PLUS` 且已设置传感器型号：激光正常时按固件 `start_ready`；激光故障或未可用时仍由固件自动决定是否可开始，APP 只渲染 `start_ready`。
+- `degraded_start_available` / `degraded_start_enabled` 仅用于兼容和诊断，不能替代 `start_ready`。
 
 #### 2.4 波形控制
 - 设置参数: `WAVE:SET f=<freq>,i=<intensity>`
@@ -147,7 +148,7 @@
 1. 连接并订阅 notify。
 2. `CAP?`（确认 primary）。
 3. （可选）`DEVICE:SET_CONFIG platform_model=BASE,laser_installed=0` 或 `platform_model=PLUS,laser_installed=1`。
-4. `SNAPSHOT?`（确认 `platform_model` / `laser_installed` / `degraded_start_available` / `start_ready` 相关 truth）。
+4. `SNAPSHOT?`（确认 `platform_model` / `laser_installed` / `laser_available` / `start_ready`；降级字段只作诊断）。
 5. `WAVE:SET f=20,i=80`。
 6. `WAVE:START`。
 7. `WAVE:STOP`。
