@@ -61,6 +61,8 @@
 
 ## 当前协作新增长期规则
 
+- 维护 Demo 型号设置、Base/Plus 持久化、独立 `start_ready`、默认 Upload 或工厂包时，先读 [ESP32 与 Demo 交付维护入口](docs/system/esp32_demo_release_maintenance.md)。当前 `SystemStateMachine` 是最终就绪 Owner；旧 `DEGRADED_START_SET` 只兼容回包，不得重新接入授权门禁。源码/主机测试、用户反馈、双端日志、精确固件哈希和工厂首件验收分层记录，旧版本通过不自动覆盖新构建。
+
 - 产品版本与默认环境以 `firmware_release.json` 为唯一入口；日常 VSCode Upload 与工厂导出统一使用 `esp32s3_unified`。工厂/OTA 复用同次产品构建的应用二进制，不改环境重新编译。导出前必须通过 `tools/product_build_contract.py` 校验当前源码摘要、实际 component 配置、镜像身份与哈希；`product_build.json` 只证明构建来源，不代替真机验收。详见 [产品构建与工厂导出](docs/system/product_build_and_factory_export.md)。
 
 - 对外状态语义必须区分：
@@ -108,7 +110,7 @@
   - 开新工作前必须从最新 `main` 创建分支：`git switch main`、`git pull --ff-only origin main`、`git switch -c <type>/<short-topic>`
   - 分支类型默认使用 `feature/`、`fix/`、`docs/`、`audit/`、`release/`、`backup/`
   - 一个分支只承载一个主题；跨仓联调时与 SW 仓使用同一个短主题后缀
-  - 合并回 `main` 前必须先跑固件 focused gate，例如 `git diff --check`、`python3 tools/run_evaluator_unit_tests.py`、`python3 -m platformio run -e esp32s3`
+  - 合并回 `main` 前必须先跑固件 focused gate，例如 `git diff --check`、`python3 tools/run_evaluator_unit_tests.py`、`python3 -m platformio run -e esp32s3_unified`；`esp32s3` 等旧环境仅作明确指定的维护/回退用途，不替代产品环境验证
   - 合并优先使用 `--no-ff` 保留交付边界；高风险合并前可创建 `backup/main-before-<topic>-YYYYMMDD`
   - `backup/*` 只作短期保险，不作为长期开发入口；合并并确认 `main` 正常后，应清理已合并的本地功能分支，远端功能分支确认不再用于 PR / 回溯后再删除
   - 禁止从过期功能分支继续开新长期分支，禁止把多个无关主题堆进同一个分支，禁止把 `backup/*` 当作日常主线

@@ -1,5 +1,7 @@
 # Current Delivery Release Boundary
 
+> 历史阶段快照：本文保留早期 Phase 1–4、当时台架硬件范围和验收记录，不再作为当前交付或启动准入说明。文中的 `PLUS degraded-start authorization path` 是旧实现，已由后续 ESP32 自主判断 `start_ready` 替代；不得据此恢复 APP 降级授权。2026-10-25 起查当前状态请先读 [ESP32 与 Demo 交付维护入口](esp32_demo_release_maintenance.md)，再按其指向核对当前源码与对应版本证据。旧阶段“完成”不代表当前精确 1.1.3 或 Windows 工厂首件已验收。
+
 ## Purpose
 
 This document is the final closeout note for the current development round.

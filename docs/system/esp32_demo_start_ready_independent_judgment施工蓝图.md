@@ -1,7 +1,8 @@
 # ESP32 独立判断 start_ready 与 Demo APP 渲染施工蓝图
 
-- 版本：2026-10-24
-- 状态：ESP32 与 Demo APP 型号页施工完成，主机验证通过，待目标板与 Android Studio Run 回归
+- 版本：2026-10-24；2026-10-25 复盘同步
+- 状态：ESP32 与 Demo APP 代码已落主线；历史主机验证与用户操作有通过记录，专项业务观测 PASS，但采集完整性 INCOMPLETE；不能据此宣布当前 1.1.3 包或全部场景已验收。源码差异见第 15 节。
+- 当前维护入口：[ESP32、Demo APP 与工厂交付维护说明](esp32_demo_release_maintenance.md)；本轮只修正文档，未重新构建、Run 或设备测试。
 - 施工范围：重构后的 ESP32 固件、Demo APP 型号页面及其开始状态渲染
 - 冻结范围：SW APP、服务器、账号授权、音乐、校准页、采样页、日志页和运行页的其他功能
 - 核心目标：ESP32 独立判断 `start_ready`；Demo APP 只读取并渲染；任何 APP 都不能通过授权或按钮状态命令改写 ESP32 的就绪判断
@@ -36,7 +37,7 @@
 
 ### 2.1 SW APP
 
-SW APP 已经采用正确模式，本轮不修改：
+按用户确认的对接合同，SW APP 本轮冻结，不修改；以下不是本轮对其全部现实现的重新审计：
 
 - 连接 ESP32 后读取 `start_ready`。
 - `start_ready=true`：开始按钮可用。
@@ -88,7 +89,7 @@ ESP32 只对外发送状态，不接收任何 APP 命令来修改 `start_ready`�
 
 ### 3.2 施工前确认的旧逻辑残留
 
-当前固件仍存在：
+施工前固件曾存在以下链路（历史问题，已由 `3617b81` 修正）：
 
 ```text
 DEGRADED_START_SET
@@ -101,7 +102,7 @@ DEGRADED_START_SET
 
 这条链会让 APP 指令影响 ESP32 的有效就绪状态，与本次产品规则冲突。
 
-当前固件还把 Plus 是否设置传感器与“配置是否完成”绑在一起：
+施工前固件还把 Plus 是否设置传感器与“配置是否完成”绑在一起：
 
 ```text
 Plus + SensorProfile.NONE
@@ -115,7 +116,7 @@ Plus + SensorProfile.NONE
 本轮 ESP32 施工已处理以上两处：`DEGRADED_START_SET` 只返回当前兼容 ACK，Plus +
 `SensorProfile.NONE` 被视为合法降级配置；最终是否可开始仍由固件策略和状态机计算。
 
-### 3.3 当前竞态风险
+### 3.3 必须持续防回归的竞态风险
 
 配置切换过程中存在这些状态同时变化：
 
@@ -526,7 +527,9 @@ laser_available == false
 - 已同步修订冲突的 readiness/protocol 文档。
 - ESP32 本包已通过 `git diff --check`、固件构建和 evaluator tests；Demo APP unit tests、目标板和 Android Studio Run 证据单独记录。
 
-## 12. 审计门禁结论
+## 12. 历史审计门禁结论（施工阶段快照）
+
+本节保留施工时的证据状态；后续用户测试和采集已经发生，当前分层状态以第 15 节为准，不再把“目标板证据完全缺失”当作现状。
 
 - `general gate`：`general-partial`。Owner 和事件/持久化通用边界已明确；目标板状态时序仍需现场验证。
 - `SW project gate`：`sw-partial`。固件是设备状态真相源、Demo APP 只做 Projection、SW APP 冻结范围已明确；Demo APP 已删除授权发送路径，仍需现场回归确认。
@@ -639,7 +642,7 @@ protectedStartRequired = fall_stop_enabled || leave_stop_enabled
 
 如果后续确认该命令无旧 APP 依赖，再单独删除命令、字段和测试；本施工包先保证它不再改变当前 ready。
 
-### 13.7 重构施工批次
+### 13.7 重构施工批次（状态于 2026-10-25 同步）
 
 #### R0：冻结与反例测试（ESP32 已完成）
 
@@ -666,23 +669,23 @@ protectedStartRequired = fall_stop_enabled || leave_stop_enabled
 - `EventEncoder` 发布最终快照。
 - 本包未改 BLE 字段；现有 `configTransitionActive`、Reader epoch 和样本失效链继续作为屏障，目标板需验证旧快照不会覆盖新状态。
 
-#### R4：Demo APP 型号页（未施工）
+#### R4：Demo APP 型号页（代码已施工；源码差异见第 15 节）
 
 - 保留 `selected` 与 `device confirmed` 两套值，但不混用。
 - 卡片只按已确认型号显示。
 - 删除降级授权弹窗和命令。
 - 开始按钮只消费 `deviceStartReady`。
 
-#### R5：验证和文档同步（ESP32 主机部分已完成）
+#### R5：验证和文档同步（历史主机验证及业务观测通过；采集完整性未通过）
 
 - 固件 evaluator、PlatformIO 构建、协议 golden frames。
 - Demo APP focused tests、Android Debug unit tests。
-- 目标板 BLE 同连接切换和重连验证仍待用户执行。
+- 历史用户测试和业务观测已有通过记录；按场景/版本保留证据，采集完整性为 INCOMPLETE，不能推定当前 1.1.3 全矩阵通过。
 - 同步 `start-readiness-contract.md`、`demo_app_protocol.md` 和本蓝图。
 
 ### 13.8 修正版放行条件
 
-以下是完整交付条件；本轮只完成其中 ESP32 主机代码部分：
+以下保留完整交付条件；ESP32 与 Demo APP 代码均已施工，实际证据及剩余差异见第 15 节，不能把所有条件统一标成已通过：
 
 - `SystemStateMachine` 仍是唯一 `start_ready` Owner。
 - `RuntimeProtectionPolicy` 是纯策略，不持有第二份运行状态。
@@ -692,9 +695,11 @@ protectedStartRequired = fall_stop_enabled || leave_stop_enabled
 - 配置切换期间旧状态不会覆盖新状态。
 - Demo APP 不自行计算 ready，不发送授权命令。
 - SW APP 无代码变化且协议行为保持兼容。
-- 纯策略和 PlatformIO 构建已通过；Demo APP focused tests、目标板时序证据仍待相应施工/验收。
+- 历史记录包含纯策略、PlatformIO 和 Demo APP 主机验证；目标板业务观测与采集完整性须分开确认，历史结果不自动覆盖当前发布包。
 
-### 13.9 修正版审计结论
+### 13.9 历史修正版审计结论（ESP32 包当时状态）
+
+以下保留 ESP32 包完成、Demo 包尚未完成时的阶段记录。Demo 后续已施工，当前状态见第 15 节，不得重复据此报告 Demo“未施工”。
 
 - `general gate`：`general-partial`。ESP32 状态事实接口、自动降级策略和旧授权隔离已通过主机验证；目标板仍待验证。
 - `SW project gate`：`sw-partial`。SW APP 冻结；Demo APP 型号页尚未纳入本包，不能宣称跨端完成。
@@ -715,11 +720,9 @@ protectedStartRequired = fall_stop_enabled || leave_stop_enabled
 
 - BLE 断连。
 - 配置切换中。
-- 新 Reader 尚未完成初始化。
-- Plus 未设置激光。
-- Plus 激光测量异常。
+- 新 Reader 尚未完成启动状态判定。
 
-Plus 未设置激光和 Plus 激光测量异常可以进入 ESP32 自动降级策略；硬故障不能被降级绕过。
+合法配置下，Plus 未设置激光或已确认激光测量异常进入 ESP32 自动降级策略，不因这两个条件本身阻止开始；其余正式运行门禁仍生效。固件故障锁、配置无效不能被降级绕过。
 
 ### 14.2 `degraded_start_*` 字段边界
 
@@ -765,7 +768,7 @@ baseline_ready
 - SET 发送后，旧配置可以继续作为“当前设备已确认状态”显示，但不得继续驱动新的开始资格。
 - 一旦进入 `configTransitionActive`，`start_ready` 必须变为 `false`。
 - SET 失败：恢复旧配置前，不得恢复旧 `start_ready`；必须重新 GET 验证旧配置和 Reader 状态。
-- SET 成功但 Reader 初始化失败：保存的新配置不能冒充可运行配置，`start_ready=false`，返回配置错误。
+- Reader 配置不支持或资源配置失败，导致正式配置无效时：不能冒充配置成功，`start_ready=false`，返回配置错误。该情况不同于合法配置后健康检测确认测量不可用；后者进入自主降级策略。
 - GET 回读成功、Reader 状态稳定后，才允许发布新的 `start_ready`。
 - 断连或连接 epoch 改变后，所有旧配置事务、旧 Snapshot 和旧 `start_ready` 都失效。
 
@@ -806,7 +809,9 @@ NVS set
 | 配置 SET ACK冒充持久化成功 | Store/配置服务 | commit + GET + Reader 校验 |
 | 文档仍要求旧授权 | docs/system | 代码施工前完成文档同步 |
 
-### 14.8 最终施工放行结论
+### 14.8 历史施工放行结论（ESP32 包当时状态）
+
+本节记录施工放行时点，不是当前交付状态；Demo 后续实现与分层验收见第 15 节。
 
 经过本轮三次复核，ESP32 本包已处理以下施工门禁：
 
@@ -825,3 +830,51 @@ Plus + NONE合法化
 - `esp32-host-validation`：通过
 - `demo-app-model-page`：未施工
 - `target-board-evidence`：仍缺失
+
+
+## 15. 2026-10-25 复盘状态与源码差异登记
+
+### 15.1 已确认目标保持不变
+
+- 选择不写设备；同型号不重复设置；点击设置并回读确认后，Base 隐藏、Plus 显示后续 3 张卡片。选择、提交中、已确认、运行状态已刷新是不同阶段。
+- Plus 激光型号确认后才能设置空载距离；保护开关分别设置，激光异常或未设置时灰色不可点。
+- ESP32 独立发布 `start_ready`；APP 只消费当前设备事实。故障弹窗只有“知道了”，不授权，不改 ready；SW APP 和服务器冻结。
+- 连接故障 Plus 或 Base 设置成故障 Plus 后应通知；Plus 设置成 Base 不应通知；同一故障的重复帧不重复弹窗。
+- 本节发现差异只登记事实与待补证据，不倒改用户目标，不授权追加业务代码修改。
+
+### 15.2 真实代码与历史修正
+
+源码审计基线：`main` 的 `b2ce08e`。关键变更：`58edbf2`、`0627da8`、`3617b81`、`325bbf8`。
+
+| 历史问题 | 修正与当前证据 | 可作出的结论 |
+|---|---|---|
+| 选中 Plus 就显示卡片，选项冒充设备事实 | `0627da8` 曾在 `MainScreen.kt` 改用 `selectedPlatformModel`；`3617b81` 改为 `UiModels.kt` 的 `shouldShowPlusConfigurationCards()` | 本地选择不再直接改变卡片显隐；等待阶段仍有下表差异 |
+| 型号切换依赖断连重连 | `58edbf2` 移除主动重连路径；`DemoViewModel.kt` 在配置 GET 后刷新 CAP/SNAPSHOT/STREAM；`ProfileDeviceTransactions.kt` 保存 epoch、generation、请求序号和刷新屏障 | 同连接刷新有正式实现；具体设备时序仍按对应日志和版本验收 |
+| 通知、授权、开始状态耦合 | `3617b81` 删除 Demo 授权弹窗和 SDK 授权发送入口；`DemoViewModel.kt:2541` 的 `dismissLaserFaultDialog()` 只关闭通知；`UiModels.kt:452` 消费 `deviceStartReady` | APP 不再以激光故障确认授权开始；协议兼容定义仍可保留，不能说所有授权关键字均已删除 |
+| 旧 true 或降级字段覆盖新的 false | `WaveControlStateReducer.kt` 的 `resolveSnapshotStartReady()` 保留正式 Snapshot 的 false；`DemoStartReadyRegressionTest.kt` 覆盖本地状态不能伪造 ready | 测试是源码回归证据，不代表全部手机/传感器实测 |
+
+### 15.3 未被“通过”覆盖的源码差异
+
+| 编号 | 用户目标/边界 | 当前源码事实（`b2ce08e`） | 后续验证要求 |
+|---|---|---|---|
+| D1 | Plus 切 Base 回读成功后才隐藏 3 张卡片 | `tools/android_demo/app-demo/src/main/java/com/sonicwave/demo/DemoViewModel.kt:2155` 在 SET 等待时把 `deviceConfigVerified=false`；`tools/android_demo/app-demo/src/main/java/com/sonicwave/demo/UiModels.kt:481` 要求 verified 才显示。`tools/android_demo/app-demo/src/test/java/com/sonicwave/demo/DemoStartReadyRegressionTest.kt:323` 也断言未 verified 时隐藏 | 当前会在等待阶段暂时隐藏；不能宣称写入等待期间卡片始终保留。若修正，须先拆清“已确认型号显示”与“写入/操作资格”，补成功、失败、超时和旧回包用例 |
+| D2 | Plus 健康激光、任意保护开启时站稳后可开始 | `src/modules/laser/LaserModule.cpp:429` 的 `protectedStartPolicyAvailable()` 目前只接受 J100；`src/core/SystemStateMachine.cpp:171` 的 `effectiveStartReady()` 在激光可用但保护策略未验收且任意保护开启时返回 false | CYD 可采距离/空载距离，不代表其保护算法已验收。保持目标，记录 CYD 当前限制；禁止把 J100 证据扩展到 CYD 或未经验证解除门禁 |
+| D3 | 旧固件可设置 Base/Plus，不假装支持新传感器/空载距离 | `tools/android_demo/app-demo/src/main/java/com/sonicwave/demo/DemoViewModel.kt:2042` 的 `sendProfileConfig()` 先要求 identity、generation、verified；`2081` 才分流 `proto < 2` | legacy 分支存在不证明旧固件能走到分支；需实际 CAP/ACK fixture 与完整设置路线证明，当前不宣布全兼容 |
+
+### 15.4 验证证据分层
+
+| 层次 | 已留存/已确认事实 | 不能扩大为 |
+|---|---|---|
+| 源码和主机验证 | 历史施工有 evaluator、协议及 Demo focused tests/构建记录；本次核对当前源码、测试入口和 Git 差异 | 本次重新跑过测试、真机全部通过 |
+| 用户操作 | 用户确认新 Demo/固件简单测试通过、能输出正弦波；随后确认升级旧云端 1.1.2 成功并自动回连 | 所有型号、传感器、保护组合与未来 1.1.4 已验收 |
+| 专项业务日志 | 已归档场景的业务观测为 PASS | 未操作场景或每个设备都通过 |
+| 采集完整性 | 专项采集完整性为 INCOMPLETE | 双端原始日志完整、无丢失 |
+| 当前正式 1.1.3 | 包身份、构建和导出证据单独记录，见维护入口 | 历史 1.0.0/测试版本的用户操作自动变成当前 1.1.3 真机验收 |
+
+本轮文档复盘不重新启动采集、构建、刷机或安装 APP。证据目录、报告和发布身份以[当前维护入口](esp32_demo_release_maintenance.md)为索引；没有原始证据时明确保留缺口，不补写“全部通过”。
+
+### 15.5 当前文档路线与复核依据
+
+- 当前操作与维护：[维护说明](esp32_demo_release_maintenance.md)、[Demo README](../../tools/android_demo/README.md)、[开始就绪合同](../start-readiness-contract.md)。
+- 旧[保护专项蓝图](demo_app_protection_start_ready施工蓝图.md)保留历史决定和反例，已明确由本蓝图与最终用户合同覆盖，不能恢复“激光故障先关两个开关”或“选中即显示卡片”的旧路线。
+- [Android UI layer 官方指南](https://developer.android.com/topic/architecture/ui-layer)说明 UI 状态由正式状态持有者提供；[UI events 官方指南](https://developer.android.com/topic/architecture/ui-layer/events)区分 UI 通知动作和业务动作。资料支持职责划分，不替代本项目产品规则，也不能证明当前代码或真机已通过。

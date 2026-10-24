@@ -1,5 +1,7 @@
 # SonicWave Android Demo
 
+当前维护入口：[ESP32、Demo APP 与工厂交付维护说明](../../docs/system/esp32_demo_release_maintenance.md)。本文负责 Demo APP 的操作和协议入口；历史蓝图、源码事实与验收范围按该维护入口核对。
+
 ## Requirements
 - Android Studio (latest stable)
 - JDK 17
@@ -95,19 +97,29 @@ cd tools/android_demo
   3. `CAP?`
   4. `STREAM:SET enabled=1,rate_hz=10` when the firmware advertises `stream_control_supported=1`
   5. `SNAPSHOT?`
-- After every successful `DEVICE:SET_CONFIG`, the app should refresh both:
-  1. `CAP?`
-  2. `SNAPSHOT?`
+- For the refactored profile protocol, a SET ACK is not the final configuration truth. After `DEVICE:SET_CONFIG`, confirm the matching `DEVICE:GET_CONFIG` result first, then refresh `CAP?` / `SNAPSHOT?` and restore `STREAM` on the same BLE connection. Legacy firmware has a separate compatibility boundary; see below.
 
-## Start Readiness Contract
-- `BASE` is treated as a laserless start profile. After connect/reconnect,
-  `Start` should be ready without waiting for stable-weight runtime truth.
-- `PLUS` with `laser_installed=0` is also treated as a laserless start profile.
-  The app should show an informational prompt, but `Start` should remain
-  available.
-- `PLUS` with `laser_installed=1` relies on firmware runtime truth:
-  `start_ready` for the healthy path, `degraded_start_available` plus
-  confirmation for the degraded path.
+## Model Settings And Start Readiness Contract
+
+用户操作顺序：
+
+1. 连接后，APP 读取当前连接的设备配置和 `SNAPSHOT`。选择 Base/Plus 或激光型号只改变待设置值，不写 ESP32。
+2. 点击“设置”后，APP 写入配置并等待设备回读确认。目标合同是：确认 Base 时隐藏 Plus 的 3 张卡片；确认 Plus 时显示激光型号、空载距离、保护开关。已选型号与设备已确认型号相同时，型号设置按钮不可用。
+3. Plus 的激光型号单独设置并回读确认后，才能按有效距离设置空载距离；空载距离也需要独立回读。保护开关不以空载距离设置动作作为操作前提，两个开关分别设置。
+4. 激光未设置或异常：保护开关灰色不可点。连接到故障 Plus 或 Base 设置为故障 Plus 后，显示一次激光故障通知；只有“知道了”，关闭通知不发送授权、不改变 ready。Plus 设置为 Base 后不应沿用旧故障通知。
+5. ESP32 独立判断 `start_ready`，Base 和 Plus 均使用同一正式字段。APP 不根据型号、激光状态、`baseline_ready` 或 `degraded_start_*` 自行推算就绪，也不发送 `DEGRADED_START_SET`。
+6. ESP32 的目标规则：Base 配置完成后可开始；Plus 未设置激光或激光故障时自动降级；激光正常且两个保护都关闭时不要求站稳，任意保护开启时必须站稳。硬阻断、断连和配置切换不能被降级绕过。
+
+APP 的断连、开始/停止命令发送中、配置刷新中和非法输入仍可禁用操作；这些是 APP 操作状态，不是修改 ESP32 的 `start_ready`。本轮不修改 SW APP，也不经过服务器。
+
+**已知源码差异与证据边界（2026-10-25，审计基线 `b2ce08e`）：**
+
+- 当前 SET 等待阶段把 `deviceConfigVerified` 清为 false，3 张卡片会暂时隐藏；不能宣称整个写入等待过程都保持原卡片。目标合同未因此改动，详见[统一蓝图第 15 节](../../docs/system/esp32_demo_start_ready_independent_judgment施工蓝图.md#15-2026-10-25-复盘状态与源码差异登记)。
+- CYD 可以读距离和设置空载距离，但当前固件尚未开放其健康激光、保护开启时的启动策略。不能把 J100 的保护验收扩展到 CYD。
+- 代码保留 legacy 设置分支，不等于旧固件全链路兼容已验证；分支前置的身份、generation、配置确认条件仍需专项证据。
+- 历史用户反馈和业务观测有通过记录，但采集完整性为 `INCOMPLETE`；不代表当前 1.1.3 包或所有传感器场景已完整验收。本次文档复盘未重新运行 APP、烧录或真机测试。
+
+详细规则见 [Start Readiness Contract](../../docs/start-readiness-contract.md)。
 
 ## Main Screen Notes
 - Connection status is always one of `Disconnected`, `Scanning`, `Connecting`, `Connected`.

@@ -1,123 +1,67 @@
 # Start Readiness Contract
 
-## Purpose
+- 当前维护入口：[ESP32、Demo APP 与工厂交付维护说明](system/esp32_demo_release_maintenance.md)。
+- 当前合同：ESP32 独立判断，APP 只读取并渲染。SW APP 本轮不修改。
+- 2026-10-25 文档复盘：下列当前合同覆盖历史审计中的旧产品语义；历史审计只保留当时的 Owner、抽取范围和验证记录，不作为当前源码完成性证明。
 
-This document fixes the start-button truth contract between firmware and the
-Demo APP.
+## 当前用户路线与真相源
 
-The goal is to keep the APP start gate aligned with firmware truth and avoid
-blocking start because a reconnect-time runtime packet was delayed, oversized,
-or partially lost.
+| 顺序 | 用户操作 | APP 行为 | ESP32 事实 |
+|---|---|---|---|
+| 1 | 连接设备 | 清空旧连接状态，读取当前设备配置和运行状态 | `ACK:CAP` 是能力/身份引导；配置 GET 确认型号、传感器、generation；`SNAPSHOT.start_ready` 是正式开始依据 |
+| 2 | 选择型号或激光型号 | 只修改待设置值；同型号不能重复提交 | 未收到设置命令时，设备不变 |
+| 3 | 点击设置 | SET 后等待 GET 确认，再刷新当前连接的运行状态 | 持久化、配置 generation 和 Reader 状态按正式 Owner 生效 |
+| 4 | 确认 Base/Plus | Base 隐藏、Plus 显示 3 张卡片；激光型号确认后才设置空载距离 | APP 不以临时选项、SET ACK 或旧 Snapshot 冒充成功 |
+| 5 | Plus 激光未设置或故障 | 保护开关灰色，显示一次激光故障通知；“知道了”只关通知 | ESP32 独立判定自动降级并发布 `start_ready` |
+| 6 | 点击开始 | 按当前 `start_ready` 和 APP 操作状态显示按钮，发送开始动作 | `SystemStateMachine` 保持最终启停 Owner，不接收 APP 对 ready 的赋值或降级授权 |
 
-## Truth Sources
+服务器不参与这条本地 BLE 设置/就绪链。两种授权必须区分：本合同取消的是“激光降级确认授权”，不是把历史分期授权设计引入当前固件。
 
-### Bootstrap truth
+## 当前 ESP32 就绪目标
 
-Source:
+以下是用户已确认的目标，不代表所有传感器已完成验收：
 
-- `ACK:CAP`
+| 设备状态 | ESP32 应发布的开始状态 |
+|---|---|
+| 硬阻断、BLE 断连、配置切换中或有效配置不能确认 | `start_ready=false` |
+| Base，配置完成且无上述阻断 | `start_ready=true` |
+| Plus 未设置激光（`sensor_profile=NONE`） | 自动降级，不等待 APP 授权或站稳；无上述阻断时 `true` |
+| Plus 激光故障已确认 | 自动降级，不等待空载距离或站稳；无上述阻断时 `true` |
+| Plus 激光正常，两个保护都关闭 | 不等待站稳；无上述阻断时 `true` |
+| Plus 激光正常，任意保护开启 | 按固件保护合同，站稳后才允许 `true` |
 
-Used for:
+`laser_installed` 是历史硬件能力兼容字段，不能代替 `sensor_profile` 判断是否设置激光。`baseline_ready` 是独立基线事实，不能由 APP 转换成 ready。`degraded_start_available/enabled` 仅作兼容或诊断，不能作为 APP 授权入口；旧 `DEGRADED_START_SET` 可被解析和回复，但不得改变固件 ready。
 
-- `platform_model`
-- `laser_installed`
+“硬阻断”指固件的阻止输出故障、故障停止或恢复窗口、配置无法确认等；激光未设置/测量异常本身不等于这种阻断。APP 对断连、配置刷新、命令发送中或非法参数的禁用，是操作生命周期控制，不是设备 ready 的第二份真相。
 
-This layer decides whether the device is operating as a laserless profile.
+## 当前实现、差异与验收边界
 
-### Runtime truth
+审计源码为 `b2ce08e`；核心修正来自 `3617b81`。目标合同与当前差异分别记录：
 
-Source:
+| 项目 | 当前源码事实 | 边界 |
+|---|---|---|
+| APP 开始状态 | `tools/android_demo/app-demo/src/main/java/com/sonicwave/demo/UiModels.kt` 的 `waveStartAvailability()` 只以 `deviceStartReady` 作为设备就绪依据；`WaveControlStateReducer.kt` 接受新的 false | UI 操作锁不能被描述成 APP 修改 ESP32 ready |
+| 故障通知 | `DemoViewModel.kt` 的 Snapshot 分支与 `dismissLaserFaultDialog()`；`MainScreen.kt` 的单按钮通知 | 不发送授权；不能把一次通知作为降级资格 |
+| 卡片等待阶段 | `DemoViewModel.kt` 的 `sendProfileConfig()` 清除 `deviceConfigVerified`；`UiModels.kt` 的 `shouldShowPlusConfigurationCards()` 同时检查该值 | 当前 SET 等待会隐藏卡片，尚不能保证“回读成功前保持原卡片” |
+| CYD 保护策略 | `src/modules/laser/LaserModule.cpp` 的 `protectedStartPolicyAvailable()` 只开放 J100；`src/core/SystemStateMachine.cpp` 的 `effectiveStartReady()` 保留未验收策略门禁 | CYD 距离/空载距离可用不等于保护启动已验收；不得倒改通用目标或擅自开放 |
+| 旧固件兼容 | `DemoViewModel.kt` 的 `sendProfileConfig()` 有 `proto < 2` 分支，但身份、generation、verified 等检查先执行 | 不能据此宣布所有旧固件可设置，需完整链路证据 |
+| 历史验证 | 历史用户确认通过，专项业务观测有 PASS | 采集完整性为 INCOMPLETE；不扩展为当前 1.1.3 或完整场景验收 |
 
-- `SNAPSHOT`
-- `EVT:BASELINE`
-- dedicated ACK/event flows such as degraded-start confirmation
+完整差异、测试入口和证据索引见[统一蓝图第 15 节](system/esp32_demo_start_ready_independent_judgment施工蓝图.md#15-2026-10-25-复盘状态与源码差异登记)。本轮只更新文档，未重新构建、Run 或进行设备测试。
 
-Used for:
+## 后续修改复核
 
-- `start_ready`（开始按钮唯一正式依据）
-- `baseline_ready`（独立的基线证据）
-- `laser_available`
-- `degraded_start_available` / `degraded_start_enabled`（兼容与诊断投影，不是 APP 授权门禁）
+- Base、Plus 均只消费当前连接的正式 `start_ready`；不能把 Base 型号或无激光推算为本地 true。
+- 选择、SET ACK、配置 GET、运行 Snapshot 必须分开；旧 epoch/旧配置结果不得覆盖新状态。
+- 故障通知必须绑定已确认 Plus 的故障进入状态；Plus 转 Base 不沿用通知，重复故障帧不重复弹窗。
+- 保护开关分别设置；激光不可用时禁止操作，不要求先关闭开关才能自动降级。
+- 主机测试、构建、用户操作、业务日志、采集完整性和发布包身份分别报告。
 
-## Start Button Rules
+## 历史记录适用范围
 
-### `BASE`
+以下为 2026-04-27～28 的历史重构记录，保留当时动作顺序和测试证据。历史“Base 直接就绪”“仅非 Base 使用 start_ready”“依赖降级确认”等语义均不能覆盖上面的当前合同。历史测试命令和结果不自动覆盖当前 `main` 或正式 `esp32s3_unified` 发布包；当前构建入口见维护说明。
 
-`BASE` is a laserless profile.
-
-Expected behavior:
-
-- after connect, `Start` should be ready
-- reconnect should not require rewriting the device profile
-
-APP rule:
-
-- `platform_model=BASE` is sufficient to treat the profile as laserless
-
-### `PLUS` without a selected laser profile
-
-`PLUS` keeps `laser_installed=1` as the hardware-capability compatibility
-field, while `sensor_profile=NONE` means that no laser model has been set.
-This is a valid degraded configuration.
-
-Expected behavior:
-
-- firmware accepts the stored model/configuration as operational
-- firmware automatically publishes `start_ready=true` after configuration is
-  stable, unless a blocking fault, disconnect, or configuration transition is
-  active
-- APP shows the laser notification and does not send an authorization command
-
-### `PLUS` with `laser_installed=1` and healthy measurement chain
-
-Expected behavior:
-
-- `Start` becomes ready only after firmware reports formal ready truth
-
-APP rule:
-
-- trust firmware `start_ready`
-- do not re-derive readiness from local UI heuristics
-
-### `PLUS` with a selected laser profile and measurement unavailable
-
-Expected behavior:
-
-- firmware decides the degraded path locally after measurement startup is
-  resolved
-- firmware publishes `start_ready=true` unless a blocking fault, disconnect,
-  or configuration transition is active
-- this degraded path does not wait for `D_e`/baseline; a healthy laser with
-  protection enabled still follows the normal `D_e` and baseline path
-- APP shows the laser notification; it does not authorize or calculate the
-  degraded path
-
-APP rule:
-
-- trust firmware `start_ready`
-- never require `degraded_start_available` or an explicit authorization command
-
-## Non-Goals
-
-The APP must not:
-
-- require stable-weight UI data before honoring a firmware-published degraded
-  start result
-- re-derive readiness from `laser_available`, cached values, or local UI state
-- send `DEGRADED_START_SET` to authorize a start
-
-## Review Checklist
-
-Before changing start-button behavior, verify:
-
-- does the APP still trust firmware `start_ready` for laser-equipped profiles
-- does `BASE` still become ready immediately after reconnect
-- does Plus-without-profile and confirmed laser-unavailable Plus use the
-  firmware-published `start_ready` without APP confirmation
-- does connect-time `SNAPSHOT` remain small enough for the common single-notify
-  MTU path
-
-## StableContract / StartGate Owner Freeze
+## 历史审计：StableContract / StartGate Owner Freeze
 
 2026-04-27 audit result:
 
@@ -161,7 +105,7 @@ Diagnostics note:
 - It does not change `start_ready`, `baseline_ready`, BLE wire format, or
   `WAVE:START` ACK/NACK behavior.
 
-## Baseline / Presence Owner Freeze
+## 历史审计：Baseline / Presence Owner Freeze
 
 2026-04-27 audit result:
 
@@ -220,7 +164,7 @@ Validation note:
 - `python3 -m platformio run -e esp32s3` must still pass after evaluator
   changes.
 
-## BaselineContract Diagnostics Freeze
+## 历史审计：BaselineContract Diagnostics Freeze
 
 2026-04-27 diagnostic implementation:
 
@@ -244,7 +188,7 @@ Frozen boundaries:
   timing, occupied-cycle cleanup, and rhythm reset timing.
 - `SystemStateMachine` still owns final start allow/reject behavior.
 
-## Baseline Action Timing Freeze
+## 历史审计：Baseline Action Timing Freeze
 
 2026-04-28 audit result:
 

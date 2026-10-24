@@ -15,6 +15,8 @@ ESP32 在系统中的角色：
 
 ## Quick Start
 
+接手型号设置、开始就绪、Demo 或工厂交付前，先读 [当前维护与证据入口](docs/system/esp32_demo_release_maintenance.md)。成功经验、失败修正与待验范围均从该入口查阅，历史通过不自动覆盖新的镜像。
+
 正式产品入口是 `esp32s3_unified`（默认环境）。VSCode 选择 `Default` 或
 `esp32s3_unified` 后点击 Upload，与以下命令使用同一套构建。
 版本唯一来源为 [`firmware_release.json`](firmware_release.json)，当前为 1.1.3；

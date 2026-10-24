@@ -1,5 +1,7 @@
 # Demo App Engineering Console
 
+当前型号/开始就绪合同及已知差异见 [维护入口](esp32_demo_release_maintenance.md)。下文 Guaranteed Baseline 是功能保留目标，不代表本轮所有路径已完成实机验收。
+
 ## Purpose
 
 `tools/android_demo/app-demo` is the SonicWave engineering console for:

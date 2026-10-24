@@ -28,6 +28,11 @@ python3 tools/product_build_contract.py
 
 正式导出和 OTA 打包使用 SW 仓的 `scripts/ota/` 工具，合同见
 [`esp32-unified-upload-factory-contract.md`](../../../SW/docs/system/firmware-release/esp32-unified-upload-factory-contract.md)。
+
+Windows 工厂操作使用同一四镜像的预配置图形包：软件、固件路径和地址已放好，操作员按包内说明选芯片/接口/COM 后点 START，不重新编译。入口见 [Windows 包合同](../../../SW/docs/system/firmware-release/esp32-windows-factory-package.md)及[工厂操作说明](../../../SW/docs/system/firmware-release/esp32-factory-flashing-operator-guide.md)。图形工具不提供原脚本的旧分区/目标容量预检，限指定 N16R8 空白板或工程人员已确认兼容的板；软件包装修订不改变固件版本或构建号。
+
+当前 `SW-ESP32-1.1.3 / u113-77d0f0df57ec` 的镜像一致性与主机检查已完成，但本次精确二进制的完整真机验收、Windows 首件烧录及未来 1.1.4 OTA 均不能由此前正弦波/升级旧 1.1.2 的反馈代替。精确状态见 [交付凭据](../../../SW/docs/system/firmware-release/esp32-1.1.3-unified-delivery-evidence.json)及 [Windows 包凭据](../../../SW/docs/system/firmware-release/esp32-windows-factory-evidence.json)，后续维护从 [统一维护入口](esp32_demo_release_maintenance.md)开始。
+
 旧 `.github/workflows/release.yml` 已删除：它曾取任意找到的 `firmware.bin`，再用 Git tag/SHA 填清单，未证明清单身份与应用身份相同。GitHub tag 不再自动生成另一种发布包。
 
 `product_build.json` 记录 schema、版本、构建号、环境、板型、构建校验时源码提交、全部仓内构建输入摘要、实际 SDK 配置摘要，以及 `firmware.bin / bootloader.bin / partitions.bin / ota_data_initial.bin` 的 SHA-256 与长度。构建校验提交与导出提交可能因纯文档提交不同，源码内容摘要必须一致。
