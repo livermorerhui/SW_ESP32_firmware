@@ -26,9 +26,9 @@ class DemoStartReadyRegressionTest {
     }
 
     @Test
-    fun lifecycleRefreshPreservesKnownReadyOnFalseSnapshot() {
+    fun lifecycleRefreshUsesFalseSnapshotFromEsp32() {
         assertEquals(
-            expected = true,
+            expected = false,
             actual = resolveSnapshotStartReady(
                 currentStartReady = true,
                 snapshotStartReady = false,
@@ -114,7 +114,7 @@ class DemoStartReadyRegressionTest {
     }
 
     @Test
-    fun baseStartButtonBecomesReadyWithoutStableWeight() {
+    fun baseStartButtonUsesEsp32ReadyTruthWithoutStableWeight() {
         val state = UiState(
             isConnected = true,
             devicePlatformModel = PlatformModel.BASE,
@@ -124,12 +124,12 @@ class DemoStartReadyRegressionTest {
             stableWeightActive = false,
         )
 
-        assertTrue(state.canStartWave())
+        assertFalse(state.canStartWave())
         assertTrue(isLaserlessStartProfile(state))
     }
 
     @Test
-    fun plusWithoutLaserCanUseExplicitDegradedDeliveryProfile() {
+    fun plusWithoutLaserStillRequiresEsp32ReadyTruth() {
         val state = UiState(
             isConnected = true,
             devicePlatformModel = PlatformModel.PLUS,
@@ -140,7 +140,7 @@ class DemoStartReadyRegressionTest {
             stableWeightActive = false,
         )
 
-        assertTrue(state.canStartWave())
+        assertFalse(state.canStartWave())
         assertFalse(isLaserlessStartProfile(state))
         assertTrue(isPlusDegradedDeliveryProfile(state))
     }
@@ -216,7 +216,7 @@ class DemoStartReadyRegressionTest {
     }
 
     @Test
-    fun startButtonBecomesReadyWhenDegradedStartIsAvailableEvenBeforeConfirmation() {
+    fun startButtonStaysBlockedUntilEsp32ConfirmsDegradedStart() {
         val state = UiState(
             isConnected = true,
             devicePlatformModel = PlatformModel.PLUS,
@@ -229,7 +229,98 @@ class DemoStartReadyRegressionTest {
             deviceBaselineReady = false,
         )
 
+        assertFalse(state.canStartWave())
+    }
+
+    @Test
+    fun degradedFieldsCannotOverrideEsp32ReadyTruth() {
+        val state = UiState(
+            isConnected = true,
+            devicePlatformModel = PlatformModel.PLUS,
+            deviceDegradedStartAvailable = true,
+            deviceDegradedStartEnabled = false,
+            deviceStartReady = true,
+        )
+
         assertTrue(state.canStartWave())
+    }
+
+    @Test
+    fun localFaultProjectionCannotOverrideEsp32ReadyTruth() {
+        val state = UiState(
+            isConnected = true,
+            deviceStartReady = true,
+            faultStatus = FaultStatusUi(severity = FaultSeverityUi.BLOCKING),
+            deviceReasonCode = "USER_LEFT_PLATFORM",
+        )
+
+        assertTrue(state.canStartWave())
+    }
+
+    @Test
+    fun plusLaserFaultNotificationFiresOnEntryOnly() {
+        assertTrue(
+            shouldNotifyPlusLaserUnavailable(
+                previousModel = PlatformModel.BASE,
+                previousLaserAvailable = false,
+                nextModel = PlatformModel.PLUS,
+                nextLaserAvailable = false,
+            ),
+        )
+        assertFalse(
+            shouldNotifyPlusLaserUnavailable(
+                previousModel = PlatformModel.PLUS,
+                previousLaserAvailable = false,
+                nextModel = PlatformModel.PLUS,
+                nextLaserAvailable = false,
+            ),
+        )
+        assertTrue(
+            shouldNotifyPlusLaserUnavailable(
+                previousModel = PlatformModel.PLUS,
+                previousLaserAvailable = true,
+                nextModel = PlatformModel.PLUS,
+                nextLaserAvailable = false,
+            ),
+        )
+    }
+
+    @Test
+    fun protectionControlsRequireConfirmedPlusAndUsableLaser() {
+        val base = UiState(
+            isConnected = true,
+            protocolMode = ProtocolMode.PRIMARY,
+            devicePlatformModel = PlatformModel.BASE,
+            deviceConfigVerified = true,
+            deviceLaserAvailable = true,
+        )
+        val plusWithoutLaser = base.copy(
+            devicePlatformModel = PlatformModel.PLUS,
+            deviceLaserAvailable = false,
+        )
+        val plusReady = plusWithoutLaser.copy(deviceLaserAvailable = true)
+
+        assertFalse(base.canEditProtectionControls())
+        assertFalse(plusWithoutLaser.canEditProtectionControls())
+        assertTrue(plusReady.canEditProtectionControls())
+    }
+
+    @Test
+    fun plusCardsFollowConfirmedDeviceModelNotTemporarySelection() {
+        val baseWithPlusSelected = UiState(
+            devicePlatformModel = PlatformModel.BASE,
+            selectedPlatformModel = PlatformModel.PLUS,
+            deviceConfigVerified = true,
+        )
+        val plusWithBaseSelected = UiState(
+            devicePlatformModel = PlatformModel.PLUS,
+            selectedPlatformModel = PlatformModel.BASE,
+            deviceConfigVerified = true,
+        )
+
+        assertFalse(baseWithPlusSelected.shouldShowPlusConfigurationCards())
+        assertTrue(plusWithBaseSelected.shouldShowPlusConfigurationCards())
+        assertFalse(plusWithBaseSelected.copy(deviceConfigVerified = false).shouldShowPlusConfigurationCards())
     }
 
     @Test

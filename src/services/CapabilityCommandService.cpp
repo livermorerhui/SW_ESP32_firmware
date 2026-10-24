@@ -103,7 +103,9 @@ bool CapabilityCommandService::handle(const Command& command,
     }
 
     case CmdType::DEGRADED_START_SET:
-      stateMachine_->setDegradedStartAuthorized(command.degradedStart.enabled);
+      // Legacy clients may still send this command. Readiness is now an ESP32
+      // local decision, so acknowledge the current projection without letting
+      // an APP command mutate it.
       outAck = HubAckBuilder::degradedStart(stateMachine_->snapshot());
       return true;
 

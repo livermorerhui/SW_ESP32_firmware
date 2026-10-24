@@ -41,12 +41,14 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.sonicwave.demo.DemoViewModel
+import com.sonicwave.demo.DemoAcceptanceDiagnostics
 import com.sonicwave.demo.PermissionState
 import com.sonicwave.demo.R
 import com.sonicwave.demo.ScanState
 import com.sonicwave.demo.TelemetryPointUi
 import com.sonicwave.demo.TestSessionPanelUiState
 import com.sonicwave.demo.UiState
+import com.sonicwave.demo.shouldShowPlusConfigurationCards
 import com.sonicwave.demo.ui.components.CalibrationCommandCallbacks
 import com.sonicwave.demo.ui.components.CalibrationInputCallbacks
 import com.sonicwave.demo.ui.components.CalibrationToolsSection
@@ -67,7 +69,6 @@ import com.sonicwave.demo.ui.components.TestSessionSection
 import com.sonicwave.demo.ui.components.WaveControlActions
 import com.sonicwave.demo.ui.components.WaveControlBottomBar
 import com.sonicwave.transport.BleScanResult
-import com.sonicwave.protocol.PlatformModel
 import com.sonicwave.protocol.SensorProfile
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -110,6 +111,15 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
 
     LaunchedEffect(Unit) {
         viewModel.refreshPermissionState()
+    }
+
+    LaunchedEffect(uiState.devicePlatformModel, uiState.deviceConfigVerified) {
+        DemoAcceptanceDiagnostics.event(
+            "MODEL_CARDS_PROJECTION",
+            "model" to uiState.devicePlatformModel?.name,
+            "config_verified" to uiState.deviceConfigVerified,
+            "plus_cards" to uiState.shouldShowPlusConfigurationCards(),
+        )
     }
 
     Scaffold(
@@ -200,35 +210,14 @@ fun MainScreen(viewModel: DemoViewModel = viewModel()) {
         }
     }
 
-    if (uiState.showDegradedStartDialog) {
+    if (uiState.showLaserFaultDialog) {
         AlertDialog(
-            onDismissRequest = viewModel::dismissDegradedStartDialog,
-            title = {
-                Text(stringResource(R.string.degraded_start_dialog_title))
-            },
-            text = {
-                Text(stringResource(R.string.degraded_start_dialog_message))
-            },
+            onDismissRequest = viewModel::dismissLaserFaultDialog,
+            title = { Text(stringResource(R.string.laser_fault_dialog_title)) },
+            text = { Text(stringResource(R.string.laser_fault_dialog_message)) },
             confirmButton = {
-                TextButton(
-                    onClick = viewModel::confirmDegradedStart,
-                    enabled = !uiState.isDegradedStartWritePending,
-                ) {
-                    Text(
-                        if (uiState.isDegradedStartWritePending) {
-                            stringResource(R.string.degraded_start_pending_action)
-                        } else {
-                            stringResource(R.string.degraded_start_confirm_action)
-                        },
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = viewModel::dismissDegradedStartDialog,
-                    enabled = !uiState.isDegradedStartWritePending,
-                ) {
-                    Text(stringResource(R.string.degraded_start_cancel_action))
+                TextButton(onClick = viewModel::dismissLaserFaultDialog) {
+                    Text(stringResource(R.string.laser_fault_dialog_ack))
                 }
             },
         )
@@ -334,7 +323,7 @@ private fun DeviceToolsContent(
         onPlatformModelSelected = actions.onPlatformModelSelected,
         onWriteDeviceConfig = actions.onWriteDeviceConfig,
     )
-    if (uiState.selectedPlatformModel == PlatformModel.PLUS) {
+    if (uiState.shouldShowPlusConfigurationCards()) {
         SensorProfileSection(
             uiState = uiState,
             onSensorProfileSelected = onSensorProfileSelected,

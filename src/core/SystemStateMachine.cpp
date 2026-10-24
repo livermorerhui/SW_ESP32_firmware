@@ -122,8 +122,19 @@ bool SystemStateMachine::laserConfiguredInstalled() const {
 
 DegradedStartPolicyDecision SystemStateMachine::degradedStartPolicyDecision() const {
   DegradedStartPolicyInput input{};
+  input.configurationValid = measurement
+      ? measurement->configurationValid()
+      : true;
   input.laserConfiguredInstalled = laserConfiguredInstalled();
+  input.laserProfileConfigured = measurement
+      ? measurement->laserProfileConfigured()
+      : false;
+  input.laserAvailable = measurement ? measurement->laserAvailable() : false;
   input.measurementFaultConfirmed = measurement ? measurement->measurementFaultConfirmed() : false;
+  input.measurementStartupResolved = measurement
+      ? measurement->measurementStartupResolved()
+      : true;
+  input.protectedStartRequired = fall_stop_enabled || leave_stop_enabled;
   input.degradedStartAuthorized = degraded_start_authorized;
   input.runtimeReady = runtime_ready;
   input.startReady = start_ready;
@@ -145,20 +156,38 @@ bool SystemStateMachine::degradedStartBypassActive() const {
 bool SystemStateMachine::effectiveRuntimeReady() const {
   // A missing or invalid device/profile configuration is a maintenance fault,
   // not a measurement failure that the legacy degraded-start path may bypass.
-  return (!measurement || measurement->startConfigurationComplete()) &&
-      degradedStartPolicyDecision().effectiveRuntimeReady;
+  if (blocking_fault_code != FaultCode::NONE ||
+      pause_reason_code != FaultCode::NONE) {
+    return false;
+  }
+  const DegradedStartPolicyDecision decision = degradedStartPolicyDecision();
+  const bool configurationReady = !measurement ||
+      (measurement->configurationValid() &&
+       (measurement->startConfigurationComplete() ||
+        decision.startConfigurationBypassActive));
+  return configurationReady && decision.effectiveRuntimeReady;
 }
 
 bool SystemStateMachine::effectiveStartReady() const {
+  if (blocking_fault_code != FaultCode::NONE ||
+      pause_reason_code != FaultCode::NONE ||
+      st == TopState::FAULT_STOP) {
+    return false;
+  }
   // CYD's distance reader is usable for configuration, but its protected
   // start/state policy has not been validated. Do not let the legacy
   // measurement-fault bypass promote it to an approved protection path.
-  if (measurement && !measurement->protectedStartPolicyAvailable() &&
+  if (measurement && measurement->laserAvailable() &&
+      !measurement->protectedStartPolicyAvailable() &&
       (fall_stop_enabled || leave_stop_enabled)) {
     return false;
   }
-  return (!measurement || measurement->startConfigurationComplete()) &&
-      degradedStartPolicyDecision().effectiveStartReady;
+  const DegradedStartPolicyDecision decision = degradedStartPolicyDecision();
+  const bool configurationReady = !measurement ||
+      (measurement->configurationValid() &&
+       (measurement->startConfigurationComplete() ||
+        decision.startConfigurationBypassActive));
+  return configurationReady && decision.effectiveStartReady;
 }
 
 bool SystemStateMachine::effectiveLaserAvailable() const {
@@ -929,6 +958,7 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
   }
 
   const PlatformSnapshot startSnapshot = snapshot();
+  const DegradedStartPolicyDecision startDecision = degradedStartPolicyDecision();
   const bool runtimeReadyNow = effectiveRuntimeReady();
   const bool startReadyNow = effectiveStartReady();
   SW_VERBOSE_SERIAL_PRINTF(
@@ -961,7 +991,10 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
     return false;
   }
 
-  if (measurement && !measurement->startConfigurationComplete()) {
+  if (measurement &&
+      (!measurement->configurationValid() ||
+       (!measurement->startConfigurationComplete() &&
+        !startDecision.startConfigurationBypassActive))) {
     reason = FaultCode::NOT_ARMED;
     SW_VERBOSE_SERIAL_PRINTF(
         "[LAYER:START_GATE] decision=reject reason=CONFIG_ERROR model=%s\n",
@@ -970,7 +1003,8 @@ bool SystemStateMachine::requestStart(FaultCode& reason) {
     return false;
   }
 
-  if (measurement && !measurement->protectedStartPolicyAvailable() &&
+  if (measurement && measurement->laserAvailable() &&
+      !measurement->protectedStartPolicyAvailable() &&
       (fall_stop_enabled || leave_stop_enabled)) {
     reason = FaultCode::NOT_ARMED;
     SW_VERBOSE_SERIAL_PRINTLN(

@@ -10,6 +10,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedButton
@@ -45,6 +46,12 @@ fun DeviceProfileSection(
     val notAvailable = stringResource(R.string.common_not_available)
     val currentDeviceLabel = uiState.devicePlatformModel?.let(::modelLabel) ?: notAvailable
     val confirmedDevice = uiState.deviceIdentity != null && uiState.deviceConfigVerified
+    val selectedChipColors = FilterChipDefaults.filterChipColors(
+        selectedContainerColor = MaterialTheme.colorScheme.primary,
+        selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+        selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
+        selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimary,
+    )
 
     Card(modifier = modifier.fillMaxWidth()) {
         Column(
@@ -81,6 +88,7 @@ fun DeviceProfileSection(
                         selected = uiState.selectedPlatformModel == model,
                         onClick = { onPlatformModelSelected(model) },
                         enabled = selectable,
+                        colors = selectedChipColors,
                         label = { Text(modelLabel(model)) },
                     )
                 }
@@ -98,8 +106,7 @@ fun DeviceProfileSection(
                     uiState.weightModel.status != WeightModelStatusUi.PENDING &&
                     !uiState.emptyModelReadbackPending &&
                     uiState.writeModelStatus?.kind != WriteModelFeedbackKind.PENDING &&
-                    (uiState.selectedPlatformModel != uiState.devicePlatformModel ||
-                        uiState.selectedPlatformModel == PlatformModel.BASE),
+                    uiState.selectedPlatformModel != uiState.devicePlatformModel,
             ) {
                 Text(
                     if (uiState.isDeviceConfigWritePending) {
@@ -138,6 +145,12 @@ fun SensorProfileSection(
 ) {
     val current = uiState.deviceSensorProfile
     val confirmedDevice = uiState.deviceIdentity != null && uiState.deviceConfigVerified
+    val selectedChipColors = FilterChipDefaults.filterChipColors(
+        selectedContainerColor = MaterialTheme.colorScheme.primary,
+        selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+        selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
+        selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimary,
+    )
     Card(modifier = modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -157,6 +170,7 @@ fun SensorProfileSection(
                         FilterChip(
                             selected = uiState.selectedSensorProfile == profile,
                             onClick = { onSensorProfileSelected(profile) },
+                            colors = selectedChipColors,
                             label = { Text(sensorProfileLabel(profile)) },
                         )
                     }

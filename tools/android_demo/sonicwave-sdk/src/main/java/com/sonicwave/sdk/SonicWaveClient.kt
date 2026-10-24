@@ -286,55 +286,6 @@ class SonicWaveClient(
         }
     }
 
-    suspend fun setDegradedStartAndAwaitAck(
-        enabled: Boolean,
-        timeoutMs: Long = 1_500,
-    ): Event.DegradedStart = coroutineScope {
-        val requestEpoch = currentConnectionEpoch
-            ?: throw IllegalStateException("BLE 尚未建立当前连接")
-        val semanticResult = CompletableDeferred<Event?>()
-        val collector = launch(start = CoroutineStart.UNDISPATCHED) {
-            transport.incomingStampedLines.collect { incoming ->
-                if (!incoming.isFromCurrentRequest(requestEpoch, currentConnectionEpoch)) return@collect
-                val event = ProtocolCodec.decode(incoming.line) ?: return@collect
-                if (event is Event.DegradedStart && event.enabled != enabled) return@collect
-                if (!semanticResult.isCompleted &&
-                    (event is Event.DegradedStart ||
-                        event is Event.Nack ||
-                        event is Event.Error)
-                ) {
-                    semanticResult.complete(event)
-                }
-            }
-        }
-
-        try {
-            send(Command.DegradedStartSet(enabled), expectedEpoch = requestEpoch)
-            val event = withTimeoutOrNull(timeoutMs) { semanticResult.await() }
-            requireCurrentConnection(requestEpoch)
-            when (event) {
-                is Event.DegradedStart -> {
-                    _mode.value = ProtocolMode.PRIMARY
-                    event
-                }
-
-                is Event.Nack -> {
-                    throw IllegalStateException("DEGRADED_START 收到 NACK:${event.reason}")
-                }
-
-                is Event.Error -> {
-                    throw IllegalStateException("DEGRADED_START 收到 ERR:${event.reason}")
-                }
-
-                else -> {
-                    throw IllegalStateException("DEGRADED_START 在 ${timeoutMs}ms 内未收到设备确认")
-                }
-            }
-        } finally {
-            collector.cancel()
-        }
-    }
-
     suspend fun setStreamSubscriptionAndAwaitAck(
         enabled: Boolean,
         rateHz: Int = 10,

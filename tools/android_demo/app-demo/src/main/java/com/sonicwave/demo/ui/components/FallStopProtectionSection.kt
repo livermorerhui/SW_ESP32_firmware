@@ -11,6 +11,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -22,7 +23,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.sonicwave.demo.R
 import com.sonicwave.demo.UiState
-import com.sonicwave.protocol.ProtocolMode
+import com.sonicwave.demo.DemoAcceptanceDiagnostics
+import com.sonicwave.demo.canEditProtectionControls
 
 @Composable
 fun FallStopProtectionSection(
@@ -32,13 +34,27 @@ fun FallStopProtectionSection(
     modifier: Modifier = Modifier,
 ) {
     var detailsExpanded by rememberSaveable { mutableStateOf(false) }
-    val fallControlEnabled = uiState.isConnected &&
-        uiState.protocolMode != ProtocolMode.LEGACY &&
+    val fallControlEnabled = uiState.canEditProtectionControls() &&
         !uiState.isFallStopSyncInProgress
-    val leaveControlEnabled = uiState.isConnected &&
-        uiState.protocolMode != ProtocolMode.LEGACY &&
+    val leaveControlEnabled = uiState.canEditProtectionControls() &&
         uiState.leaveProtectionSupported &&
         !uiState.isLeaveProtectionSyncInProgress
+    LaunchedEffect(
+        fallControlEnabled,
+        leaveControlEnabled,
+        uiState.devicePlatformModel,
+        uiState.deviceConfigVerified,
+        uiState.deviceLaserAvailable,
+    ) {
+        DemoAcceptanceDiagnostics.event(
+            "PROTECTION_SWITCH_PROJECTION",
+            "fall_enabled" to fallControlEnabled,
+            "leave_enabled" to leaveControlEnabled,
+            "model" to uiState.devicePlatformModel?.name,
+            "config_verified" to uiState.deviceConfigVerified,
+            "laser_available" to uiState.deviceLaserAvailable,
+        )
+    }
     val statusText = when {
         uiState.isFallStopSyncInProgress && uiState.fallStopAckConfirmed && uiState.fallStopEnabled ->
             stringResource(R.string.value_fall_stop_protection_ack_enabled_verifying)

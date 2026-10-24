@@ -327,6 +327,14 @@ bool LaserModule::laserInstalled() const {
   return deviceConfig.laserInstalled;
 }
 
+bool LaserModule::laserProfileConfigured() const {
+  // Keep laserInstalled() as the legacy hardware-capability field. The actual
+  // Plus configuration fact is the persisted, known sensor profile.
+  return deviceConfig.platformModel == PlatformModel::PLUS &&
+      deviceConfig.sensorProfile != SensorProfileId::NONE &&
+      isKnownSensorProfile(deviceConfig.sensorProfile);
+}
+
 bool LaserModule::laserAvailable() const {
   return configOperational() && deviceConfig.laserInstalled &&
       lastMeasurementValid &&
@@ -352,10 +360,15 @@ bool LaserModule::measurementFaultConfirmed() const {
 }
 
 bool LaserModule::measurementStartupResolved() const {
-  if (!configOperational() || !deviceConfig.laserInstalled) {
+  if (!configOperational() || !deviceConfig.laserInstalled ||
+      deviceConfig.sensorProfile == SensorProfileId::NONE) {
     return true;
   }
   return measurementHealthMachine.startupResolved();
+}
+
+bool LaserModule::configurationValid() const {
+  return configOperational();
 }
 
 bool LaserModule::protectionDegraded() const {
@@ -379,6 +392,12 @@ bool LaserModule::configOperational() const {
   if (deviceConfig.platformModel == PlatformModel::BASE) {
     return deviceConfig.sensorProfile == SensorProfileId::NONE;
   }
+  // Plus without a selected laser profile is a valid degraded configuration.
+  // The reader remains stopped and the ESP32 owns the degraded start decision.
+  if (deviceConfig.platformModel == PlatformModel::PLUS &&
+      deviceConfig.sensorProfile == SensorProfileId::NONE) {
+    return true;
+  }
   return deviceConfig.platformModel == PlatformModel::PLUS &&
       deviceConfig.sensorProfile != SensorProfileId::NONE &&
       isKnownSensorProfile(deviceConfig.sensorProfile) &&
@@ -395,6 +414,10 @@ bool LaserModule::configIdentityValid() const {
 bool LaserModule::startConfigurationComplete() const {
   if (!configOperational()) return false;
   if (deviceConfig.platformModel == PlatformModel::BASE) {
+    return true;
+  }
+  if (deviceConfig.platformModel == PlatformModel::PLUS &&
+      deviceConfig.sensorProfile == SensorProfileId::NONE) {
     return true;
   }
   return deviceConfig.platformModel == PlatformModel::PLUS &&

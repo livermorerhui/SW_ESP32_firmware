@@ -60,10 +60,12 @@ public:
   float stableWeightKg() const override;
   PlatformModel platformModel() const override;
   bool laserInstalled() const override;
+  bool laserProfileConfigured() const override;
   bool laserAvailable() const override;
   MeasurementHealthState measurementHealth() const override;
   bool measurementFaultConfirmed() const override;
-  bool measurementStartupResolved() const;
+  bool measurementStartupResolved() const override;
+  bool configurationValid() const override;
   bool protectionDegraded() const;
   void getDeviceConfig(DeviceConfigSnapshot& out) const;
   bool getProfileConfig(DeviceConfigSnapshot& out, String& reason) override;

@@ -121,16 +121,6 @@
     <string name="empty_distance_clear_confirm_title">清除空载距离？</string>
     <string name="empty_distance_set_confirm_message">请确认平台空载。点击“写入”时，ESP32 会读取当时的距离；APP 回读一致后才显示空载距离。</string>
     <string name="empty_distance_clear_confirm_message">清除设备已确认的空载距离。设备确认成功后才会完成清除。</string>
-    <string name="degraded_start_dialog_title">激光链路需要维修</string>
-    <string name="degraded_start_dialog_message">当前 PLUS 机型的激光或 MAX485 链路不可用，建议维修。确认后可按降级启动路径继续运行，但测量仍不可用。</string>
-    <string name="degraded_start_confirm_action">确认继续</string>
-    <string name="degraded_start_cancel_action">稍后</string>
-    <string name="degraded_start_pending_action">确认中…</string>
-    <string name="degraded_start_requires_primary">降级启动确认需要 primary 协议连接。</string>
-    <string name="degraded_start_unavailable">当前不可进入降级启动。</string>
-    <string name="degraded_start_pending">正在发送降级启动确认…</string>
-    <string name="degraded_start_enabled_status">已确认降级启动，可在测量不可用时继续开始。</string>
-    <string name="degraded_start_send_failed">降级启动确认失败：%1$s</string>
     <string name="device_truth_refresh_failed">设备真值刷新失败：%1$s</string>
     <string name="notify_status_enabled">已开启</string>
     <string name="notify_status_disabled">未开启</string>

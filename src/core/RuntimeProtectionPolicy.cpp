@@ -3,18 +3,32 @@
 DegradedStartPolicyDecision RuntimeProtectionPolicy::evaluateDegradedStart(
     const DegradedStartPolicyInput& input) {
   DegradedStartPolicyDecision decision{};
-  decision.noLaserStartBypassActive = !input.laserConfiguredInstalled;
+  const bool degradedCondition =
+      input.configurationValid &&
+      (!input.laserConfiguredInstalled ||
+       !input.laserProfileConfigured ||
+       (input.measurementStartupResolved && !input.laserAvailable));
+  const bool noProtectionBaselineRequired =
+      input.configurationValid &&
+      input.measurementStartupResolved &&
+      input.laserAvailable &&
+      !input.protectedStartRequired;
+  // Do not publish a degraded result during reader startup or a configuration
+  // transition. Once startup is resolved, Base, Plus-without-profile, and a
+  // confirmed unavailable Plus laser all use the same local ESP32 decision.
+  const bool degradedPathActive =
+      input.measurementStartupResolved && degradedCondition;
+  const bool bypassActive = degradedPathActive || noProtectionBaselineRequired;
+  decision.noLaserStartBypassActive = degradedPathActive;
+  decision.startConfigurationBypassActive = bypassActive;
   decision.degradedStartAvailable =
-      input.laserConfiguredInstalled && input.measurementFaultConfirmed;
-  decision.degradedStartEnabled =
-      decision.degradedStartAvailable && input.degradedStartAuthorized;
-
-  const bool bypassActive =
-      decision.noLaserStartBypassActive || decision.degradedStartEnabled;
+      degradedPathActive && input.laserConfiguredInstalled;
+  // This field is retained as a compatibility/diagnostic projection. It no
+  // longer depends on an APP authorization command.
+  decision.degradedStartEnabled = decision.degradedStartAvailable;
   decision.effectiveRuntimeReady = bypassActive ? true : input.runtimeReady;
   decision.effectiveStartReady = bypassActive ? true : input.startReady;
-  decision.protectionDegraded =
-      !input.laserConfiguredInstalled || input.measurementFaultConfirmed;
+  decision.protectionDegraded = degradedPathActive;
   return decision;
 }
 

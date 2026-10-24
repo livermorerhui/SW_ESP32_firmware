@@ -65,7 +65,7 @@ class WaveControlStateReducerTest {
     }
 
     @Test
-    fun safetyBlockedAvailabilityStillBlocksStart() {
+    fun staleSafetyProjectionDoesNotOverrideEsp32Ready() {
         val state = reducer.syncWaveControlFlags(
             state = readyState().copy(
                 safetyStatus = SafetyStatusUi(
@@ -76,7 +76,7 @@ class WaveControlStateReducerTest {
             hasPendingStop = false,
         )
 
-        assertEquals(WaveStartAvailabilityUi.SAFETY_BLOCKED, state.waveStartAvailability())
+        assertEquals(WaveStartAvailabilityUi.READY, state.waveStartAvailability())
     }
 
     @Test

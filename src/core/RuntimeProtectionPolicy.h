@@ -3,8 +3,15 @@
 #include "Types.h"
 
 struct DegradedStartPolicyInput {
+  bool configurationValid = false;
   bool laserConfiguredInstalled = false;
+  bool laserProfileConfigured = false;
+  bool laserAvailable = false;
   bool measurementFaultConfirmed = false;
+  bool measurementStartupResolved = false;
+  bool protectedStartRequired = true;
+  // Kept for wire/API source compatibility during the migration. It is not a
+  // readiness input anymore; the ESP32 decides degraded start locally.
   bool degradedStartAuthorized = false;
   bool runtimeReady = false;
   bool startReady = false;
@@ -12,6 +19,7 @@ struct DegradedStartPolicyInput {
 
 struct DegradedStartPolicyDecision {
   bool noLaserStartBypassActive = true;
+  bool startConfigurationBypassActive = false;
   bool degradedStartAvailable = false;
   bool degradedStartEnabled = false;
   bool effectiveRuntimeReady = true;

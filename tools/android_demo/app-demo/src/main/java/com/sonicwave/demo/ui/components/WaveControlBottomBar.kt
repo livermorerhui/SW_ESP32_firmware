@@ -1,5 +1,6 @@
 package com.sonicwave.demo.ui.components
 
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -44,6 +45,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.sonicwave.demo.R
 import com.sonicwave.demo.UiState
+import com.sonicwave.demo.DemoAcceptanceDiagnostics
 import com.sonicwave.demo.WaveStartAvailabilityUi
 import com.sonicwave.demo.canStartWave
 import com.sonicwave.demo.waveStartAvailability
@@ -71,6 +73,24 @@ fun WaveControlBottomBar(
     val isRunning = uiState.waveOutputActive
     val startAvailability = uiState.waveStartAvailability()
     val startEnabled = uiState.canStartWave()
+    LaunchedEffect(
+        startAvailability,
+        startEnabled,
+        uiState.deviceStartReady,
+        uiState.devicePlatformModel,
+        uiState.deviceLaserAvailable,
+        uiState.deviceBaselineReady,
+    ) {
+        DemoAcceptanceDiagnostics.event(
+            "START_BUTTON_PROJECTION",
+            "availability" to startAvailability.name,
+            "enabled" to startEnabled,
+            "device_start_ready" to uiState.deviceStartReady,
+            "model" to uiState.devicePlatformModel?.name,
+            "laser_available" to uiState.deviceLaserAvailable,
+            "baseline_ready" to uiState.deviceBaselineReady,
+        )
+    }
     val stopEnabled = uiState.isConnected &&
         (uiState.waveOutputActive || uiState.isWaveStartPending) &&
         !uiState.isWaveStopPending

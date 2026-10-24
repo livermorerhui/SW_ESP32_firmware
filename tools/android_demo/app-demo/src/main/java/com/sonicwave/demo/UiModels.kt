@@ -3,7 +3,7 @@ package com.sonicwave.demo
 import com.sonicwave.protocol.CalibrationModelType
 import com.sonicwave.protocol.DeviceState
 import com.sonicwave.protocol.PlatformModel
-import com.sonicwave.protocol.SafetyEffect
+import com.sonicwave.protocol.ProtocolMode
 import com.sonicwave.protocol.WaveState
 
 enum class FaultSeverityUi {
@@ -450,19 +450,7 @@ fun UiState.hasValidWaveInputs(): Boolean {
 }
 
 fun UiState.waveStartAvailability(): WaveStartAvailabilityUi {
-    val leftPlatformBlocked = safetyStatus.reasonCode.equals("USER_LEFT_PLATFORM", ignoreCase = true) ||
-        deviceReasonCode.equals("USER_LEFT_PLATFORM", ignoreCase = true) ||
-        faultStatus.codeName.equals("USER_LEFT_PLATFORM", ignoreCase = true) ||
-        faultStatus.code == 100
-    val abnormalStopBlocked = deviceState == DeviceState.FAULT_STOP ||
-        safetyStatus.effectCode == SafetyEffect.ABNORMAL_STOP.name ||
-        deviceSafetyEffectCode == SafetyEffect.ABNORMAL_STOP.name ||
-        faultStatus.severity == FaultSeverityUi.BLOCKING
-    val safetyBlocked = safetyStatus.effectCode == SafetyEffect.RECOVERABLE_PAUSE.name ||
-        deviceSafetyEffectCode == SafetyEffect.RECOVERABLE_PAUSE.name
-    val laserlessProfileReady = isLaserlessStartProfile(this)
-    val degradedStartReady = laserlessProfileReady || deviceDegradedStartAvailable == true
-    val startReady = degradedStartReady || deviceStartReady == true
+    val startReady = deviceStartReady == true
 
     return when {
         !isConnected -> WaveStartAvailabilityUi.DISCONNECTED
@@ -471,15 +459,38 @@ fun UiState.waveStartAvailability(): WaveStartAvailabilityUi {
         waveOutputActive -> WaveStartAvailabilityUi.RUNNING
         isDeviceConfigWritePending || profileRuntimeRefreshPending -> WaveStartAvailabilityUi.NOT_READY
         !hasValidWaveInputs() -> WaveStartAvailabilityUi.INVALID_PARAMETERS
-        leftPlatformBlocked -> WaveStartAvailabilityUi.LEFT_PLATFORM_BLOCKED
-        abnormalStopBlocked -> WaveStartAvailabilityUi.ABNORMAL_STOP_BLOCKED
-        safetyBlocked -> WaveStartAvailabilityUi.SAFETY_BLOCKED
         startReady -> WaveStartAvailabilityUi.READY
         else -> WaveStartAvailabilityUi.NOT_READY
     }
 }
 
 fun UiState.canStartWave(): Boolean = waveStartAvailability() == WaveStartAvailabilityUi.READY
+
+/**
+ * A protection switch is editable only after the ESP32 has confirmed Plus and reported
+ * a usable laser.  Null is intentionally treated as unavailable while runtime truth is
+ * being read back.
+ */
+internal fun UiState.canEditProtectionControls(): Boolean =
+    isConnected &&
+        protocolMode == ProtocolMode.PRIMARY &&
+        devicePlatformModel == PlatformModel.PLUS &&
+        deviceConfigVerified &&
+        deviceLaserAvailable == true
+
+internal fun UiState.shouldShowPlusConfigurationCards(): Boolean =
+    devicePlatformModel == PlatformModel.PLUS && deviceConfigVerified
+
+/** Notify once when a confirmed Plus device enters the laser-unavailable state. */
+internal fun shouldNotifyPlusLaserUnavailable(
+    previousModel: PlatformModel?,
+    previousLaserAvailable: Boolean?,
+    nextModel: PlatformModel?,
+    nextLaserAvailable: Boolean?,
+): Boolean =
+    nextModel == PlatformModel.PLUS &&
+        nextLaserAvailable == false &&
+        (previousModel != PlatformModel.PLUS || previousLaserAvailable != false)
 
 /** Device model writes and clears must wait for profile and empty-distance truth. */
 fun UiState.calibrationModelMutationBlocked(): Boolean =
@@ -496,6 +507,7 @@ internal fun isLaserlessStartProfile(state: UiState): Boolean {
     return isBaseDeliveryProfile(state)
 }
 
+/** Compatibility projection for measurement/session instrumentation only; never start readiness. */
 internal fun isPlusDegradedDeliveryProfile(state: UiState): Boolean {
     return state.devicePlatformModel == PlatformModel.PLUS &&
         (

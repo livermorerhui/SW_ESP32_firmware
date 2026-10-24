@@ -160,8 +160,7 @@ data class UiState(
     val waveOutputActive: Boolean = false,
     val isWaveStartPending: Boolean = false,
     val isWaveStopPending: Boolean = false,
-    val isDegradedStartWritePending: Boolean = false,
-    val showDegradedStartDialog: Boolean = false,
+    val showLaserFaultDialog: Boolean = false,
     val testSession: TestSessionUi? = null,
     val testSessionNotice: String? = null,
     val isMotionSamplingActive: Boolean = false,
@@ -288,8 +287,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
     private val lastSavedSerialByOwner = mutableMapOf<Pair<String, SensorProfile>, Long>()
     private var pendingWriteModelType: CalibrationModelType? = null
     private var pendingModelReadback: PreparedCalibrationModelUi? = null
-    private var degradedStartDialogSuppressed: Boolean = false
     private var preferredLaserPlatformModel: PlatformModel = PlatformModel.PLUS
+    private var lastAcceptanceSnapshotSignature: String? = null
     private var testSessionStore: TestSessionUi? = null
     private var motionSamplingSessionStore: MotionSamplingSessionUi? = null
 
@@ -559,6 +558,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         profileStreamSubscriptionGate.retire()
         profileSnapshotRefreshGate.retire()
         selectedDeviceName = device.name ?: device.address
+        lastAcceptanceSnapshotSignature = null
         disconnectRequested = false
         hadConnectedSession = false
         awaitingCalibrationCaptureResult = false
@@ -588,7 +588,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         pendingModelReadback = null
         wavePendingLifecycleStore.clearAll()
         preferredLaserPlatformModel = PlatformModel.PLUS
-        degradedStartDialogSuppressed = false
         sessionCaptureSignals = SessionCaptureSignals()
         client.stopScan()
         streamWatchdogJob?.cancel()
@@ -660,8 +659,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         waveOutputActive = false,
                         isWaveStartPending = false,
                         isWaveStopPending = false,
-                        isDegradedStartWritePending = false,
-                        showDegradedStartDialog = false,
+                        showLaserFaultDialog = false,
                         fallStopEnabled = true,
                         fallStopStateKnown = false,
                         fallStopAckConfirmed = false,
@@ -693,6 +691,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             }.onSuccess {
                 if (requestSerial != connectRequestSerial) return@onSuccess
                 val connectedEpoch = client.currentConnectionEpoch ?: return@onSuccess
+                DemoAcceptanceDiagnostics.event(
+                    "CONNECT_SUCCESS",
+                    "epoch" to connectedEpoch,
+                    "device" to device.id,
+                )
                 _uiState.update {
                     calibrationSessionStore.withCaptureAvailability(
                         it.copy(
@@ -844,7 +847,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         pendingWriteModelType = null
         pendingModelReadback = null
         wavePendingLifecycleStore.clearAll()
-        degradedStartDialogSuppressed = false
         finishTestSessionIfRecording(
             result = "ABNORMAL_STOP",
             stopReason = "BLE_DISCONNECTED",
@@ -905,8 +907,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                         waveOutputActive = false,
                         isWaveStartPending = false,
                         isWaveStopPending = false,
-                        isDegradedStartWritePending = false,
-                        showDegradedStartDialog = false,
+                        showLaserFaultDialog = false,
                         fallStopEnabled = true,
                         fallStopStateKnown = false,
                         fallStopAckConfirmed = false,
@@ -963,6 +964,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         if (model != PlatformModel.BASE) {
             preferredLaserPlatformModel = model
         }
+        DemoAcceptanceDiagnostics.event(
+            "MODEL_SELECTION_CHANGED",
+            "selected_model" to model.name,
+            "device_model" to _uiState.value.devicePlatformModel?.name,
+            "config_verified" to _uiState.value.deviceConfigVerified,
+        )
         _uiState.update { state ->
             state.copy(
                 selectedPlatformModel = model,
@@ -1167,12 +1174,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(lastAckOrError = startBlockedMessage(normalizedState)) }
             return
         }
-        if (requiresDegradedStartAuthorizationBeforeWaveStart(normalizedState)) {
-            degradedStartDialogSuppressed = false
-            _uiState.update { syncDegradedStartUi(it).syncWaveControlFlags() }
-            return
-        }
-
         if (!normalizedState.canStartWave()) {
             _uiState.update {
                 it.copy(lastAckOrError = startBlockedMessage(normalizedState))
@@ -2023,6 +2024,12 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         if (model != PlatformModel.BASE && model != PlatformModel.PLUS) return
         val profile = if (model == PlatformModel.BASE) SensorProfile.NONE
             else state.selectedSensorProfile
+        if (model == state.devicePlatformModel && profile == state.deviceSensorProfile) {
+            _uiState.update {
+                it.copy(lastAckOrError = "当前设备已经是 ${model.name}，没有新的设置需要写入")
+            }
+            return
+        }
         sendProfileConfig(model, profile)
     }
 
@@ -2062,6 +2069,54 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (state.waveOutputActive) {
             _uiState.update { it.copy(deviceConfigStatus = "请先停止律动，再切换型号或传感器") }
+            return
+        }
+        DemoAcceptanceDiagnostics.event(
+            "DEVICE_CONFIG_SET_REQUESTED",
+            "model" to platformModel.name,
+            "profile" to sensorProfile.name,
+            "epoch" to epoch,
+        )
+        val capabilityProto = lastConnectionCapabilities?.values?.get("proto")?.toIntOrNull()
+        if (capabilityProto != null && capabilityProto < 2) {
+            if (platformModel == PlatformModel.PLUS && sensorProfile != SensorProfile.NONE) {
+                _uiState.update {
+                    it.copy(
+                        deviceConfigStatus = "当前旧固件只支持设置 Base/Plus，不支持激光型号设置",
+                        lastAckOrError = "当前旧固件不支持激光型号设置",
+                    )
+                }
+                return
+            }
+            val legacyRequest = deviceConfigWriteTracker.start(
+                platformModel = platformModel,
+                laserInstalled = platformModel == PlatformModel.PLUS,
+                requestedAtMs = System.currentTimeMillis(),
+            )
+            _uiState.update {
+                it.copy(
+                    isDeviceConfigWritePending = true,
+                    deviceConfigStatus = "正在使用旧固件协议设置 ${platformModel.name}，等待设备确认",
+                )
+            }
+            scheduleDeviceConfigWriteWatchdog()
+            viewModelScope.launch {
+                runCatching {
+                    client.send(
+                        Command.DeviceSetConfig(platformModel, legacyRequest.laserInstalled),
+                        expectedEpoch = epoch,
+                    )
+                }.onFailure { error ->
+                    deviceConfigWriteTracker.failure()
+                    clearPendingDeviceConfigWatchdog()
+                    _uiState.update {
+                        it.copy(
+                            isDeviceConfigWritePending = false,
+                            deviceConfigStatus = "旧固件设置失败：${error.message ?: "未知错误"}",
+                        )
+                    }
+                }
+            }
             return
         }
         if (profileStreamSubscriptionGate.isPendingFor(epoch)) {
@@ -2105,6 +2160,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 streamSubscriptionConfirmed = false,
                 deviceStartReady = null,
                 deviceBaselineReady = null,
+                // Runtime laser truth belongs to the new device configuration.  Do not
+                // carry Base's old false value into a Plus readback notification.
+                deviceLaserAvailable = null,
+                deviceProtectionDegraded = null,
                 distance = null,
                 weight = null,
                 ma12 = null,
@@ -2126,6 +2185,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 comparisonResult = null,
                 motionSamplingSession = null,
                 deviceConfigStatus = "正在写入 ${platformModel.name}/${sensorProfile.name}，等待设备回读",
+                showLaserFaultDialog = false,
             )
         }
         scheduleProfileConfigWriteTimeout(epoch, requestSerial)
@@ -2231,6 +2291,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         if (profileConfigReadExpiredEpoch == epoch) return
         _uiState.update { it.copy(deviceIdentity = event.id, deviceConfigStatus = "正在读取设备型号与传感器") }
         appendSystemLog("[DEVICE_CONFIG] identity id=${event.id} version=${event.version} epoch=$epoch")
+        DemoAcceptanceDiagnostics.event(
+            "DEVICE_IDENTITY_RECEIVED",
+            "version" to event.version,
+            "epoch" to epoch,
+        )
         sendProfileConfigGet(epoch)
     }
 
@@ -2302,6 +2367,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 profile = profile,
                 generation = generation,
             )
+        val runtimeTruthMustBeReRead = !previousConfig.deviceConfigVerified || verifiedProfileChanged
         if (verifiedProfileChanged) {
             // EMPTY invalidation belongs to the previous verified config. The
             // new profile's CAL:GET_MODEL can now report its own ready model.
@@ -2331,6 +2397,11 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                 selectedSensorProfile = profile,
                 selectedLaserInstalled = model == PlatformModel.PLUS,
                 deviceLaserInstalled = model == PlatformModel.PLUS,
+                // A pre-GET snapshot can belong to the previous model.  Force the
+                // post-GET runtime snapshot to establish laser truth for this config.
+                deviceLaserAvailable = if (runtimeTruthMustBeReRead) null else state.deviceLaserAvailable,
+                deviceProtectionDegraded = if (runtimeTruthMustBeReRead) null else state.deviceProtectionDegraded,
+                showLaserFaultDialog = if (runtimeTruthMustBeReRead) false else state.showLaserFaultDialog,
                 emptyDistance = EmptyDistanceState(),
                 profileDistanceReady = false,
                 profileDistanceFault = false,
@@ -2343,6 +2414,13 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         appendSystemLog("[DEVICE_CONFIG] verified id=$identity model=$model profile=$profile generation=$generation epoch=$epoch")
+        DemoAcceptanceDiagnostics.event(
+            "DEVICE_CONFIG_VERIFIED",
+            "model" to model.name,
+            "profile" to profile.name,
+            "generation" to generation,
+            "epoch" to epoch,
+        )
         activateProfileHistory(identity, profile, epoch)
         if (confirmedWrite || recoveredWrite) {
             // SET was independently confirmed by GET on this identity/epoch.
@@ -2352,6 +2430,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             refreshCapabilityAndSnapshot(resubscribeStream = true)
         } else {
             enableDemoRealtimeStreamIfSupported(lastConnectionCapabilities)
+            // The connection-time snapshot can arrive before DEVICE:GET_CONFIG.
+            // Request a fresh runtime snapshot after the model is confirmed so Plus
+            // laser faults are notified without requiring a reconnect.
+            requestSnapshotRefresh()
         }
         if (model == PlatformModel.PLUS && profile != SensorProfile.NONE) sendEmptyDistanceGet()
     }
@@ -2456,64 +2538,9 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         requestCalibrationModelAfterEmptyReadback(epoch)
     }
 
-    fun dismissDegradedStartDialog() {
-        degradedStartDialogSuppressed = true
-        _uiState.update { it.copy(showDegradedStartDialog = false) }
-    }
-
-    fun confirmDegradedStart() {
-        val state = _uiState.value
-        if (!state.isConnected || state.protocolMode != ProtocolMode.PRIMARY) {
-            _uiState.update {
-                it.copy(lastAckOrError = text(R.string.degraded_start_requires_primary))
-            }
-            return
-        }
-        if (state.deviceDegradedStartAvailable != true) {
-            _uiState.update {
-                it.copy(lastAckOrError = text(R.string.degraded_start_unavailable))
-            }
-            return
-        }
-
-        _uiState.update {
-            it.copy(
-                isDegradedStartWritePending = true,
-                lastAckOrError = text(R.string.degraded_start_pending),
-            )
-        }
-
-        viewModelScope.launch {
-            runCatching {
-                client.setDegradedStartAndAwaitAck(enabled = true)
-            }.onSuccess { ack ->
-                degradedStartDialogSuppressed = false
-                _uiState.update {
-                    syncDegradedStartUi(
-                        it.copy(
-                            deviceDegradedStartAvailable = ack.available,
-                            deviceDegradedStartEnabled = ack.enabled,
-                            isDegradedStartWritePending = false,
-                            lastAckOrError = text(R.string.degraded_start_enabled_status),
-                        ),
-                    ).syncWaveControlFlags()
-                }
-                requestSnapshotRefresh()
-            }.onFailure { error ->
-                degradedStartDialogSuppressed = false
-                _uiState.update {
-                    syncDegradedStartUi(
-                        it.copy(
-                            isDegradedStartWritePending = false,
-                            lastAckOrError = text(
-                                R.string.degraded_start_send_failed,
-                                error.message ?: text(R.string.common_not_available),
-                            ),
-                        ),
-                    )
-                }
-            }
-        }
+    fun dismissLaserFaultDialog() {
+        DemoAcceptanceDiagnostics.event("LASER_FAULT_DIALOG_ACK")
+        _uiState.update { it.copy(showLaserFaultDialog = false) }
     }
 
     fun sendCalibrationZero() {
@@ -2780,6 +2807,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val state = _uiState.value
         if (!state.isConnected ||
             state.protocolMode == ProtocolMode.LEGACY ||
+            state.deviceLaserAvailable != true ||
             state.isFallStopSyncInProgress
         ) {
             return
@@ -2868,6 +2896,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val state = _uiState.value
         if (!state.isConnected ||
             state.protocolMode == ProtocolMode.LEGACY ||
+            state.deviceLaserAvailable != true ||
             !state.leaveProtectionSupported ||
             state.isLeaveProtectionSyncInProgress
         ) {
@@ -3161,7 +3190,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     resetMeasurementDisplayState()
                     resetSessionStores(clearTestSession = false, clearMotionSamplingSession = true)
                     motionSamplingSessionStore = null
-                    degradedStartDialogSuppressed = false
                     _uiState.update { state ->
                         calibrationSessionStore.withCaptureAvailability(
                                 state.copy(
@@ -3197,8 +3225,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                     waveOutputActive = false,
                                     isWaveStartPending = false,
                                     isWaveStopPending = false,
-                                    isDegradedStartWritePending = false,
-                                    showDegradedStartDialog = false,
                                     captureStatus = null,
                                     writeModelStatus = null,
                                     emptyDistance = EmptyDistanceState(),
@@ -3400,7 +3426,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 code = faultStatus.code,
                             )
                             val measurementUnavailable = faultStatus.codeName == "MEASUREMENT_UNAVAILABLE"
-                            syncDegradedStartUi(it.copy(
+                            it.copy(
                                 faultStatus = faultStatus,
                                 deviceReasonCode = faultStatus.codeName,
                                 deviceDegradedStartAvailable = if (measurementUnavailable &&
@@ -3418,7 +3444,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 lastAckOrError = text(R.string.message_fault, faultStatus.label),
                                 stableWeight = if (clearsStableBaseline) null else it.stableWeight,
                                 stableWeightActive = if (clearsStableBaseline) false else it.stableWeightActive,
-                            )).syncFormalWaveTruth().syncWaveControlFlags()
+                            ).syncFormalWaveTruth().syncWaveControlFlags()
                         }
                         wavePendingLifecycleStore.ensureStopRequestIf(
                             _uiState.value.waveOutputActive ||
@@ -3450,7 +3476,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 code = safetyStatus.code,
                             )
                             val measurementUnavailable = safetyStatus.reasonCode == "MEASUREMENT_UNAVAILABLE"
-                            syncDegradedStartUi(it.applyWaveOutputTransition(
+                            it.applyWaveOutputTransition(
                                 if (authoritativeWaveStopped) false else it.waveOutputActive,
                             ).copy(
                                 deviceState = nextState,
@@ -3473,7 +3499,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 lastAckOrError = formatSafetyStatusMessage(safetyStatus),
                                 stableWeight = if (clearsStableBaseline) null else it.stableWeight,
                                 stableWeightActive = if (clearsStableBaseline) false else it.stableWeightActive,
-                            )).syncFormalWaveTruth().syncWaveControlFlags()
+                            ).syncFormalWaveTruth().syncWaveControlFlags()
                         }
                         if (
                             event.effect == SafetyEffect.ABNORMAL_STOP ||
@@ -3509,13 +3535,19 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     is Event.Snapshot -> {
+                        val previousLaserFaultDialogVisible = _uiState.value.showLaserFaultDialog
                         val postWriteSnapshot = profileSnapshotRefreshGate.acceptSnapshot(stamped.epoch)
                         _uiState.update {
                             val pendingDeviceConfigStatus = pendingDeviceConfigConfirmationStatus(
                                 observedPlatformModel = event.platformModel,
                                 observedLaserInstalled = event.laserInstalled,
                             )
-                            val nextDeviceState = if (event.topState != DeviceState.UNKNOWN) {
+                            // During a profile SET/GET transaction, snapshots already in
+                            // flight can still describe the previous reader.  Do not let
+                            // them overwrite runtime truth until the explicitly requested
+                            // post-write snapshot crosses the refresh gate.
+                            val runtimeSnapshotAccepted = !it.profileRuntimeRefreshPending || postWriteSnapshot
+                            val nextDeviceState = if (runtimeSnapshotAccepted && event.topState != DeviceState.UNKNOWN) {
                                 event.topState
                             } else {
                                 it.deviceState
@@ -3524,12 +3556,48 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                             val nextWaveOutputActive = resolveAuthoritativeWaveOutput(
                                 currentWaveOutputActive = it.waveOutputActive,
                                 authoritativeTopState = nextDeviceState,
-                                authoritativeWaveOutputActive = event.waveOutputActive,
+                                authoritativeWaveOutputActive = if (runtimeSnapshotAccepted) {
+                                    event.waveOutputActive
+                                } else {
+                                    null
+                                },
                             )
-                            val snapshotLeaveStopEnabled = event.leaveStopEnabled
-                            val nextReasonCode = event.currentReasonCode ?: it.deviceReasonCode
-                            val nextSafetyEffectCode = event.currentSafetyEffect ?: it.deviceSafetyEffectCode
-                            syncDegradedStartUi(it.applyWaveOutputTransition(nextWaveOutputActive).copy(
+                            val snapshotLeaveStopEnabled = if (runtimeSnapshotAccepted) {
+                                event.leaveStopEnabled
+                            } else {
+                                null
+                            }
+                            // DEVICE:GET_CONFIG is the model owner.  A SNAPSHOT may use
+                            // its model only during the explicit post-write refresh; a
+                            // queued snapshot from before SET must not change the page.
+                            val confirmedModel = when {
+                                runtimeSnapshotAccepted && it.deviceConfigVerified && !it.isDeviceConfigWritePending ->
+                                    it.devicePlatformModel
+                                postWriteSnapshot -> event.platformModel ?: it.devicePlatformModel
+                                else -> null
+                            }
+                            val shouldShowLaserFault = shouldNotifyPlusLaserUnavailable(
+                                previousModel = it.devicePlatformModel,
+                                previousLaserAvailable = it.deviceLaserAvailable,
+                                nextModel = confirmedModel,
+                                nextLaserAvailable = if (runtimeSnapshotAccepted) event.laserAvailable else null,
+                            )
+                            val nextReasonCode = if (!runtimeSnapshotAccepted) {
+                                it.deviceReasonCode
+                            } else {
+                                event.currentReasonCode
+                                    ?: if (confirmedModel == PlatformModel.PLUS && event.laserAvailable == false) {
+                                        "MEASUREMENT_UNAVAILABLE"
+                                    } else {
+                                        it.deviceReasonCode
+                                    }
+                            }
+                            val nextSafetyEffectCode = if (runtimeSnapshotAccepted) {
+                                event.currentSafetyEffect ?: it.deviceSafetyEffectCode
+                            } else {
+                                it.deviceSafetyEffectCode
+                            }
+                            it.applyWaveOutputTransition(nextWaveOutputActive).copy(
                                 protocolMode = mergeProtocolMode(
                                     currentMode = it.protocolMode,
                                     observedMode = ProtocolMode.PRIMARY,
@@ -3541,17 +3609,25 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                     else event.platformModel ?: it.devicePlatformModel,
                                 deviceLaserInstalled = if (it.deviceConfigVerified || it.isDeviceConfigWritePending) it.deviceLaserInstalled
                                     else event.laserInstalled ?: it.deviceLaserInstalled,
-                                deviceLaserAvailable = event.laserAvailable,
-                                deviceProtectionDegraded = event.protectionDegraded,
-                                deviceDegradedStartAvailable = event.degradedStartAvailable,
-                                deviceDegradedStartEnabled = event.degradedStartEnabled,
-                                deviceRuntimeReady = event.runtimeReady,
-                                deviceStartReady = resolveSnapshotStartReady(
-                                    currentStartReady = it.deviceStartReady,
-                                    snapshotStartReady = event.startReady,
-                                    mergeContext = startReadyMergeContext,
-                                ),
-                                deviceBaselineReady = event.baselineReady,
+                                deviceLaserAvailable = if (runtimeSnapshotAccepted) event.laserAvailable else it.deviceLaserAvailable,
+                                deviceProtectionDegraded = if (runtimeSnapshotAccepted) event.protectionDegraded else it.deviceProtectionDegraded,
+                                deviceDegradedStartAvailable = if (runtimeSnapshotAccepted) event.degradedStartAvailable else it.deviceDegradedStartAvailable,
+                                deviceDegradedStartEnabled = if (runtimeSnapshotAccepted) event.degradedStartEnabled else it.deviceDegradedStartEnabled,
+                                // Notification only; it never grants or changes start
+                                // permission.  The edge helper prevents every snapshot
+                                // from reopening the same acknowledged notice.
+                                showLaserFaultDialog = it.showLaserFaultDialog || shouldShowLaserFault,
+                                deviceRuntimeReady = if (runtimeSnapshotAccepted) event.runtimeReady else it.deviceRuntimeReady,
+                                deviceStartReady = if (runtimeSnapshotAccepted) {
+                                    resolveSnapshotStartReady(
+                                        currentStartReady = it.deviceStartReady,
+                                        snapshotStartReady = event.startReady,
+                                        mergeContext = startReadyMergeContext,
+                                    )
+                                } else {
+                                    it.deviceStartReady
+                                },
+                                deviceBaselineReady = if (runtimeSnapshotAccepted) event.baselineReady else it.deviceBaselineReady,
                                 deviceReasonCode = nextReasonCode,
                                 deviceSafetyEffectCode = nextSafetyEffectCode,
                                 faultStatus = faultStatusFromReason(nextReasonCode),
@@ -3562,8 +3638,8 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                     waveOutputActive = nextWaveOutputActive,
                                 ),
                                 deviceConfigStatus = pendingDeviceConfigStatus ?: it.deviceConfigStatus,
-                                stableWeight = event.stableWeightKg ?: it.stableWeight,
-                                stableWeightActive = event.baselineReady ?: it.stableWeightActive,
+                                stableWeight = if (runtimeSnapshotAccepted) event.stableWeightKg ?: it.stableWeight else it.stableWeight,
+                                stableWeightActive = if (runtimeSnapshotAccepted) event.baselineReady ?: it.stableWeightActive else it.stableWeightActive,
                                 isDeviceConfigWritePending = profileConfigTransaction.isPending ||
                                     profileRecoveryReadPending || deviceConfigWriteTracker.isPending,
                                 leaveProtectionEnabled = snapshotLeaveStopEnabled ?: it.leaveProtectionEnabled,
@@ -3586,7 +3662,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 } else {
                                     it.isLeaveProtectionSyncInProgress
                                 },
-                            )).syncFormalWaveTruth().syncWaveControlFlags()
+                            ).syncFormalWaveTruth().syncWaveControlFlags()
                         }.also {
                             reconcileTestSessionWithFormalWaveTruth(
                                 source = if (_uiState.value.waveOutputActive) {
@@ -3597,6 +3673,40 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 waveOutputActive = _uiState.value.waveOutputActive,
                                 freqHz = event.currentFrequencyHz,
                                 intensity = event.currentIntensity,
+                            )
+                        }
+                        val acceptanceSnapshot = _uiState.value
+                        val acceptanceSignature = listOf(
+                            acceptanceSnapshot.devicePlatformModel,
+                            acceptanceSnapshot.deviceStartReady,
+                            acceptanceSnapshot.deviceBaselineReady,
+                            acceptanceSnapshot.deviceLaserInstalled,
+                            acceptanceSnapshot.deviceLaserAvailable,
+                            acceptanceSnapshot.deviceProtectionDegraded,
+                            acceptanceSnapshot.deviceConfigVerified,
+                            stamped.epoch,
+                        ).joinToString("|")
+                        val snapshotProjectionChanged = acceptanceSignature != lastAcceptanceSnapshotSignature
+                        if (snapshotProjectionChanged) {
+                            lastAcceptanceSnapshotSignature = acceptanceSignature
+                            DemoAcceptanceDiagnostics.event(
+                                "SNAPSHOT_APPLIED",
+                                "model" to acceptanceSnapshot.devicePlatformModel?.name,
+                                "start_ready" to acceptanceSnapshot.deviceStartReady,
+                                "baseline_ready" to acceptanceSnapshot.deviceBaselineReady,
+                                "laser_installed" to acceptanceSnapshot.deviceLaserInstalled,
+                                "laser_available" to acceptanceSnapshot.deviceLaserAvailable,
+                                "protection_degraded" to acceptanceSnapshot.deviceProtectionDegraded,
+                                "config_verified" to acceptanceSnapshot.deviceConfigVerified,
+                                "epoch" to stamped.epoch,
+                            )
+                        }
+                        if (!previousLaserFaultDialogVisible && _uiState.value.showLaserFaultDialog) {
+                            DemoAcceptanceDiagnostics.event(
+                                "LASER_FAULT_DIALOG_SHOWN",
+                                "model" to _uiState.value.devicePlatformModel?.name,
+                                "laser_available" to _uiState.value.deviceLaserAvailable,
+                                "epoch" to stamped.epoch,
                             )
                         }
                         if (postWriteSnapshot) completeProfileRuntimeRefresh(stamped.epoch)
@@ -4005,7 +4115,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     is Event.DeviceConfig -> {
-                        if (_uiState.value.deviceIdentity != null) {
+                        if (_uiState.value.deviceIdentity != null && !deviceConfigWriteTracker.isPending) {
                             appendSystemLog("[DEVICE_CONFIG] ignored_legacy_config_reply raw=${event.raw}")
                             return@collect
                         }
@@ -4045,13 +4155,10 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
                     is Event.DegradedStart -> {
                         _uiState.update {
-                            syncDegradedStartUi(
-                                it.copy(
-                                    deviceDegradedStartAvailable = event.available,
-                                    deviceDegradedStartEnabled = event.enabled,
-                                    isDegradedStartWritePending = false,
-                                    lastAckOrError = event.raw,
-                                ),
+                            it.copy(
+                                deviceDegradedStartAvailable = event.available,
+                                deviceDegradedStartEnabled = event.enabled,
+                                lastAckOrError = event.raw,
                             ).syncWaveControlFlags()
                         }
                     }
@@ -5317,32 +5424,6 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
             }
             appendRawLog("SYS", "WARN $warning | $debug")
         }
-    }
-
-    private fun shouldOfferDegradedStart(state: UiState): Boolean {
-        return state.isConnected &&
-            state.protocolMode == ProtocolMode.PRIMARY &&
-            state.devicePlatformModel != PlatformModel.BASE &&
-            state.deviceDegradedStartAvailable == true &&
-            state.deviceDegradedStartEnabled != true
-    }
-
-    private fun requiresDegradedStartAuthorizationBeforeWaveStart(state: UiState): Boolean {
-        return state.isConnected &&
-            state.protocolMode == ProtocolMode.PRIMARY &&
-            state.deviceDegradedStartAvailable == true &&
-            state.deviceDegradedStartEnabled != true &&
-            !state.isDegradedStartWritePending
-    }
-
-    private fun syncDegradedStartUi(state: UiState): UiState {
-        val shouldOffer = shouldOfferDegradedStart(state)
-        if (!shouldOffer || state.deviceDegradedStartEnabled == true) {
-            degradedStartDialogSuppressed = false
-        }
-        return state.copy(
-            showDegradedStartDialog = shouldOffer && !degradedStartDialogSuppressed,
-        )
     }
 
     private fun formatCapabilityInfo(result: CapabilityResult): String {

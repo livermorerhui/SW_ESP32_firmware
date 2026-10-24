@@ -1149,8 +1149,13 @@ void test_measurement_probe_policy_ignores_non_timeout_and_resets_when_ineligibl
 
 void test_degraded_start_policy_profiles() {
   DegradedStartPolicyInput input{};
+  input.configurationValid = true;
   input.laserConfiguredInstalled = false;
+  input.laserProfileConfigured = false;
+  input.laserAvailable = false;
   input.measurementFaultConfirmed = false;
+  input.measurementStartupResolved = true;
+  input.protectedStartRequired = true;
   input.degradedStartAuthorized = false;
   input.runtimeReady = false;
   input.startReady = false;
@@ -1165,7 +1170,11 @@ void test_degraded_start_policy_profiles() {
   assert(decision.protectionDegraded);
 
   input.laserConfiguredInstalled = true;
+  input.laserProfileConfigured = true;
+  input.laserAvailable = true;
   input.measurementFaultConfirmed = false;
+  input.measurementStartupResolved = true;
+  input.protectedStartRequired = true;
   input.runtimeReady = true;
   input.startReady = false;
   decision = RuntimeProtectionPolicy::evaluateDegradedStart(input);
@@ -1176,15 +1185,56 @@ void test_degraded_start_policy_profiles() {
   assert(!decision.effectiveStartReady);
   assert(!decision.protectionDegraded);
 
+  // A storage/configuration error cannot be bypassed by a missing laser or by
+  // disabling both protection switches.
+  input.configurationValid = false;
+  input.laserProfileConfigured = false;
+  input.laserAvailable = false;
+  input.protectedStartRequired = false;
+  input.runtimeReady = false;
+  input.startReady = false;
+  decision = RuntimeProtectionPolicy::evaluateDegradedStart(input);
+  assert(!decision.startConfigurationBypassActive);
+  assert(!decision.effectiveRuntimeReady);
+  assert(!decision.effectiveStartReady);
+
+  input.configurationValid = true;
+  input.laserProfileConfigured = true;
+  input.laserAvailable = true;
+  input.protectedStartRequired = true;
+  input.runtimeReady = true;
+  input.startReady = false;
+
+  // A healthy Plus laser still requires the baseline when either protection
+  // switch is enabled.
+  input.laserAvailable = true;
+  input.measurementFaultConfirmed = false;
+  input.runtimeReady = true;
+  input.startReady = false;
+  input.protectedStartRequired = true;
+  decision = RuntimeProtectionPolicy::evaluateDegradedStart(input);
+  assert(!decision.effectiveStartReady);
+
+  // With both protection switches disabled, a healthy laser may start without
+  // a stable baseline. This bypass is owned by the ESP32 policy.
+  input.protectedStartRequired = false;
+  decision = RuntimeProtectionPolicy::evaluateDegradedStart(input);
+  assert(decision.effectiveRuntimeReady);
+  assert(decision.effectiveStartReady);
+  assert(!decision.protectionDegraded);
+
+  input.protectedStartRequired = true;
+
   input.measurementFaultConfirmed = true;
+  input.laserAvailable = false;
   input.degradedStartAuthorized = false;
   input.runtimeReady = false;
   input.startReady = false;
   decision = RuntimeProtectionPolicy::evaluateDegradedStart(input);
   assert(decision.degradedStartAvailable);
-  assert(!decision.degradedStartEnabled);
-  assert(!decision.effectiveRuntimeReady);
-  assert(!decision.effectiveStartReady);
+  assert(decision.degradedStartEnabled);
+  assert(decision.effectiveRuntimeReady);
+  assert(decision.effectiveStartReady);
   assert(decision.protectionDegraded);
 
   input.degradedStartAuthorized = true;
@@ -1194,6 +1244,41 @@ void test_degraded_start_policy_profiles() {
   assert(decision.effectiveRuntimeReady);
   assert(decision.effectiveStartReady);
   assert(decision.protectionDegraded);
+
+  // Plus without a selected laser profile is a valid local degraded path.
+  input.laserProfileConfigured = false;
+  input.measurementFaultConfirmed = false;
+  input.laserAvailable = false;
+  input.degradedStartAuthorized = false;
+  decision = RuntimeProtectionPolicy::evaluateDegradedStart(input);
+  assert(decision.degradedStartAvailable);
+  assert(decision.degradedStartEnabled);
+  assert(decision.effectiveStartReady);
+
+  // Startup/configuration is still a hard gate; do not publish a transient
+  // degraded result before the reader has resolved.
+  input.laserProfileConfigured = true;
+  input.measurementStartupResolved = false;
+  input.laserAvailable = false;
+  input.runtimeReady = false;
+  input.startReady = false;
+  decision = RuntimeProtectionPolicy::evaluateDegradedStart(input);
+  assert(!decision.degradedStartAvailable);
+  assert(!decision.degradedStartEnabled);
+  assert(!decision.effectiveRuntimeReady);
+  assert(!decision.effectiveStartReady);
+
+  // The legacy APP authorization bit has no effect on the local decision.
+  input.measurementStartupResolved = true;
+  input.laserAvailable = false;
+  input.degradedStartAuthorized = false;
+  const DegradedStartPolicyDecision withoutAuth =
+      RuntimeProtectionPolicy::evaluateDegradedStart(input);
+  input.degradedStartAuthorized = true;
+  const DegradedStartPolicyDecision withAuth =
+      RuntimeProtectionPolicy::evaluateDegradedStart(input);
+  assert(withoutAuth.effectiveStartReady == withAuth.effectiveStartReady);
+  assert(withoutAuth.degradedStartEnabled == withAuth.degradedStartEnabled);
 }
 
 void test_user_left_policy_actions() {

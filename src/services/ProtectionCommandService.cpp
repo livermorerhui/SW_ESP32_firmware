@@ -27,12 +27,20 @@ bool ProtectionCommandService::handle(
   }
   switch (command.type) {
     case CmdType::FALL_STOP_SET:
+      if (!stateMachine_->snapshot().laserAvailable) {
+        outAck = HubAckBuilder::simpleNack("LASER_UNAVAILABLE");
+        return false;
+      }
       stateMachine_->setFallStopEnabled(command.fallStop.enabled);
       outAck = HubAckBuilder::fallStop(
           command.fallStop.enabled, stateMachine_->fallStopModeName());
       return true;
 
     case CmdType::LEAVE_PROTECTION_SET:
+      if (!stateMachine_->snapshot().laserAvailable) {
+        outAck = HubAckBuilder::simpleNack("LASER_UNAVAILABLE");
+        return false;
+      }
       stateMachine_->setLeaveStopEnabled(command.leaveProtection.enabled);
       outAck = HubAckBuilder::leaveProtection(
           stateMachine_->leaveStopEnabled(),

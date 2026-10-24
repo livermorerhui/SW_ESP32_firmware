@@ -93,20 +93,16 @@ internal fun shouldTreatSafetyAsWaveStopped(event: Event.Safety): Boolean {
         event.effect == SafetyEffect.RECOVERABLE_PAUSE
 }
 
-// Lifecycle-triggered snapshot refresh is used to reconcile formal control/session truth and
-// should not permanently clear an already-known pre-start ready state with a transient false.
+// Every non-null SNAPSHOT value is the device's current readiness truth.  A lifecycle
+// refresh is not allowed to keep an old true value after the ESP32 reports false.
 internal fun resolveSnapshotStartReady(
     currentStartReady: Boolean?,
     snapshotStartReady: Boolean?,
-    mergeContext: SnapshotStartReadyMergeContext,
+    @Suppress("UNUSED_PARAMETER") mergeContext: SnapshotStartReadyMergeContext,
 ): Boolean? {
-    return when {
-        snapshotStartReady == null -> currentStartReady
-        snapshotStartReady -> true
-        mergeContext == SnapshotStartReadyMergeContext.CONTROL_LIFECYCLE_REFRESH &&
-            currentStartReady == true -> currentStartReady
-        else -> false
-    }
+    // The lifecycle context is retained for call-site compatibility, but APP renders only
+    // the latest value supplied by the ESP32.
+    return snapshotStartReady ?: currentStartReady
 }
 
 internal fun mergeProtocolMode(
