@@ -3,17 +3,18 @@
 #include "CommandBus.h"
 #include "EventBus.h"
 #include "PlatformSnapshot.h"
+#include "ProtocolSupport.h"
 #include "config/GlobalConfig.h"
 
 class ProtocolCodec {
 public:
-  static constexpr uint16_t kSingleNotifyBudgetMtu = 185;
-  static constexpr uint16_t kSingleNotifyPayloadBudget = kSingleNotifyBudgetMtu - 3;
-  static constexpr size_t kCapTruthPayloadBudgetBytes = kSingleNotifyPayloadBudget;
-  static constexpr size_t kConnectSnapshotPayloadBudgetBytes = kSingleNotifyPayloadBudget;
-  static constexpr uint8_t kStreamDefaultRateHz = 10;
-  static constexpr uint8_t kStreamMinRateHz = 1;
-  static constexpr uint8_t kStreamMaxRateHz = 20;
+  static constexpr uint16_t kSingleNotifyBudgetMtu = ProtocolSupport::kSingleNotifyBudgetMtu;
+  static constexpr uint16_t kSingleNotifyPayloadBudget = ProtocolSupport::kSingleNotifyPayloadBudget;
+  static constexpr size_t kCapTruthPayloadBudgetBytes = ProtocolSupport::kCapTruthPayloadBudgetBytes;
+  static constexpr size_t kConnectSnapshotPayloadBudgetBytes = ProtocolSupport::kConnectSnapshotPayloadBudgetBytes;
+  static constexpr uint8_t kStreamDefaultRateHz = ProtocolSupport::kStreamDefaultRateHz;
+  static constexpr uint8_t kStreamMinRateHz = ProtocolSupport::kStreamMinRateHz;
+  static constexpr uint8_t kStreamMaxRateHz = ProtocolSupport::kStreamMaxRateHz;
 
   static bool isSnapshotQuery(const String& in);
   static void logTruthPayloadBudgetWarningIfNeeded(

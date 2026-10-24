@@ -2114,6 +2114,7 @@ def run() -> None:
       str(ROOT / "src"),
       str(main_cpp),
       str(ROOT / "src/core/ProtocolCodec.cpp"),
+      str(ROOT / "src/core/ProtocolSupport.cpp"),
       str(ROOT / "src/core/ProtocolBoundary.cpp"),
       str(ROOT / "src/core/CommandDecoder.cpp"),
       str(ROOT / "src/core/EventEncoder.cpp"),

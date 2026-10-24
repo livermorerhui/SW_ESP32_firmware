@@ -8,7 +8,7 @@
 #include "core/MeasurementFacts.h"
 #include "core/LaserStatePort.h"
 #include "core/EventBus.h"
-#include "core/ProtocolCodec.h"
+#include "core/ProtocolSupport.h"
 #include "core/WaveObservation.h"
 #include "modules/laser/BaselineContractDiagnostics.h"
 #include "modules/laser/BaselineEvidenceEvaluator.h"
@@ -317,7 +317,7 @@ private:
   const char* lastInvalidReason = nullptr;
   uint32_t calibrationCaptureCounter = 0;
   volatile bool streamEnabled = false;
-  volatile uint8_t streamRateHz = ProtocolCodec::kStreamDefaultRateHz;
+  volatile uint8_t streamRateHz = ProtocolSupport::kStreamDefaultRateHz;
   uint32_t lastStreamPublishedAtMs = 0;
   // Primary Judgment Owner：
   // MA12 / deviation / ratio / main_state / duration 统一由 RhythmStateJudge 维护。

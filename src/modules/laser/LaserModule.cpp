@@ -1173,7 +1173,7 @@ bool LaserModule::captureCalibrationPoint(float referenceWeightKg, CalibrationCa
 }
 
 bool LaserModule::setStreamSubscription(bool enabled, uint8_t rateHz, String& reason) {
-  if (rateHz < ProtocolCodec::kStreamMinRateHz || rateHz > ProtocolCodec::kStreamMaxRateHz) {
+  if (rateHz < ProtocolSupport::kStreamMinRateHz || rateHz > ProtocolSupport::kStreamMaxRateHz) {
     reason = "INVALID_PARAM";
     return false;
   }
@@ -1190,7 +1190,7 @@ bool LaserModule::setStreamSubscription(bool enabled, uint8_t rateHz, String& re
 void LaserModule::resetStreamSubscription(const char* reason) {
   const bool wasEnabled = streamEnabled;
   streamEnabled = false;
-  streamRateHz = ProtocolCodec::kStreamDefaultRateHz;
+  streamRateHz = ProtocolSupport::kStreamDefaultRateHz;
   lastStreamPublishedAtMs = 0;
   SW_VERBOSE_SERIAL_PRINTF(
       "[STREAM_CONTROL] action=reset enabled=0 rate_hz=%u previous_enabled=%d reason=%s\n",
@@ -1350,8 +1350,23 @@ void LaserModule::logLatestMeasurementPlaneSummary(const char* trigger) {
 }
 
 void LaserModule::loadDeviceConfig() {
-  const DeviceConfigLoadResult result =
+  DeviceConfigLoadResult result =
       deviceConfigStore.load(preferences, preferencesOpened);
+  // A blank factory board must leave durable legacy-compatible evidence before
+  // any OTA to an older firmware.  Otherwise an older image cannot distinguish
+  // this board from its historical default (PLUS) and may change the model on
+  // upgrade.  save() writes cfg_model/cfg_laser and the schema-1 slot, then
+  // verifies both through a readback.
+  if (result.status == DeviceConfigStoreStatus::BLANK && preferencesOpened) {
+    const DeviceConfigSaveResult materialized = deviceConfigStore.save(
+        preferences, true, result.config, PlatformModel::BASE,
+        SensorProfileId::NONE);
+    if (materialized.ok()) {
+      result = deviceConfigStore.load(preferences, true);
+    } else {
+      result.status = DeviceConfigStoreStatus::CONFIG_ERROR;
+    }
+  }
   deviceConfig = result.config;
   configStatus = result.status;
   SW_VERBOSE_SERIAL_PRINTF(

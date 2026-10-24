@@ -14,7 +14,7 @@
 #include "core/EventBus.h"
 #include "core/FirmwareLogPolicy.h"
 #include "core/CommandBus.h"
-#include "core/ProtocolCodec.h"
+#include "core/ProtocolSupport.h"
 #include "ota/FirmwareOtaManager.h"
 #include "transport/ble/BleIdentityTag.h"
 

@@ -2,7 +2,7 @@
 
 #include <math.h>
 
-#include "core/ProtocolCodec.h"
+#include "core/ProtocolSupport.h"
 
 bool CommandDecoder::decode(const String& in, Command& out, String& err) {
     String s = in; s.trim();
@@ -66,7 +66,7 @@ bool CommandDecoder::decode(const String& in, Command& out, String& err) {
       return false;
     }
     if (s.startsWith("DEVICE:SET_CONFIG ") &&
-        ProtocolCodec::containsAsciiIgnoreCase(s, "sensor_profile")) {
+        ProtocolSupport::containsAsciiIgnoreCase(s, "sensor_profile")) {
       // Profile-aware SET has exactly two named fields. The old SET parser
       // intentionally remains separate so laser_installed cannot act as an
       // implicit sensor selection. Reject duplicate/unknown fields instead of
@@ -198,14 +198,14 @@ bool CommandDecoder::decode(const String& in, Command& out, String& err) {
         return false;
       }
 
-      int rateHz = ProtocolCodec::kStreamDefaultRateHz;
+      int rateHz = ProtocolSupport::kStreamDefaultRateHz;
       if (readParam("rate_hz=", rateStr) || readParam("rate=", rateStr) || readParam("hz=", rateStr)) {
-        if (!ProtocolCodec::parseStrictInt(rateStr, rateHz)) {
+        if (!ProtocolSupport::parseStrictInt(rateStr, rateHz)) {
           err = "INVALID_PARAM";
           return false;
         }
       }
-      if (rateHz < ProtocolCodec::kStreamMinRateHz || rateHz > ProtocolCodec::kStreamMaxRateHz) {
+      if (rateHz < ProtocolSupport::kStreamMinRateHz || rateHz > ProtocolSupport::kStreamMaxRateHz) {
         err = "INVALID_PARAM";
         return false;
       }
@@ -229,7 +229,7 @@ bool CommandDecoder::decode(const String& in, Command& out, String& err) {
 
       float f = 0.0f;
       int a = 0;
-      if (!ProtocolCodec::parseStrictFloat(fStr, f) || !ProtocolCodec::parseStrictInt(iStr, a)) {
+      if (!ProtocolSupport::parseStrictFloat(fStr, f) || !ProtocolSupport::parseStrictInt(iStr, a)) {
         err = "INVALID_PARAM";
         return false;
       }
@@ -276,7 +276,7 @@ bool CommandDecoder::decode(const String& in, Command& out, String& err) {
       bool hasZ = readParam("z=", zStr);
       bool hasK = readParam("k=", kStr);
       if (!hasZ || !hasK) { err = "INVALID_PARAM"; return false; }
-      if (!ProtocolCodec::parseStrictFloat(zStr, out.p1) || !ProtocolCodec::parseStrictFloat(kStr, out.p2)) {
+      if (!ProtocolSupport::parseStrictFloat(zStr, out.p1) || !ProtocolSupport::parseStrictFloat(kStr, out.p2)) {
         err = "INVALID_PARAM";
         return false;
       }
@@ -287,7 +287,7 @@ bool CommandDecoder::decode(const String& in, Command& out, String& err) {
       String wStr;
       bool hasW = readParam("w=", wStr) || readParam("ref=", wStr);
       if (!hasW) { err = "INVALID_PARAM"; return false; }
-      if (!ProtocolCodec::parseStrictFloat(wStr, out.capture.referenceWeightKg)) {
+      if (!ProtocolSupport::parseStrictFloat(wStr, out.capture.referenceWeightKg)) {
         err = "INVALID_PARAM";
         return false;
       }
@@ -316,7 +316,7 @@ bool CommandDecoder::decode(const String& in, Command& out, String& err) {
         err = "INVALID_PARAM";
         return false;
       }
-      if (!ProtocolCodec::parseStrictFloat(distanceStr, out.emptyDistance.distanceMm) ||
+      if (!ProtocolSupport::parseStrictFloat(distanceStr, out.emptyDistance.distanceMm) ||
           !isfinite(out.emptyDistance.distanceMm) ||
           out.emptyDistance.distanceMm <= 0.0f) {
         err = "INVALID_PARAM";
@@ -355,10 +355,10 @@ bool CommandDecoder::decode(const String& in, Command& out, String& err) {
         return false;
       }
 
-      if (!ProtocolCodec::parseStrictFloat(refStr, out.model.referenceDistance) ||
-          !ProtocolCodec::parseStrictFloat(c0Str, out.model.coefficients[0]) ||
-          !ProtocolCodec::parseStrictFloat(c1Str, out.model.coefficients[1]) ||
-          !ProtocolCodec::parseStrictFloat(c2Str, out.model.coefficients[2])) {
+      if (!ProtocolSupport::parseStrictFloat(refStr, out.model.referenceDistance) ||
+          !ProtocolSupport::parseStrictFloat(c0Str, out.model.coefficients[0]) ||
+          !ProtocolSupport::parseStrictFloat(c1Str, out.model.coefficients[1]) ||
+          !ProtocolSupport::parseStrictFloat(c2Str, out.model.coefficients[2])) {
         err = "INVALID_PARAM";
         return false;
       }
@@ -417,8 +417,8 @@ bool CommandDecoder::decode(const String& in, Command& out, String& err) {
       String p = s.substring(7);
       int idx = p.indexOf(',');
       if (idx <= 0) { err = "INVALID_PARAM"; return false; }
-      if (!ProtocolCodec::parseStrictFloat(p.substring(0, idx), out.p1) ||
-          !ProtocolCodec::parseStrictFloat(p.substring(idx + 1), out.p2)) {
+      if (!ProtocolSupport::parseStrictFloat(p.substring(0, idx), out.p1) ||
+          !ProtocolSupport::parseStrictFloat(p.substring(idx + 1), out.p2)) {
         err = "INVALID_PARAM";
         return false;
       }
@@ -434,7 +434,7 @@ bool CommandDecoder::decode(const String& in, Command& out, String& err) {
       if (fIndex != -1) {
         int comma = s.indexOf(",", fIndex);
         String sub = (comma == -1) ? s.substring(fIndex + 2) : s.substring(fIndex + 2, comma);
-        if (!ProtocolCodec::parseStrictFloat(sub, out.wave.freqHz)) {
+        if (!ProtocolSupport::parseStrictFloat(sub, out.wave.freqHz)) {
           err = "INVALID_PARAM";
           return false;
         }
@@ -444,7 +444,7 @@ bool CommandDecoder::decode(const String& in, Command& out, String& err) {
       if (iIndex != -1) {
         int comma = s.indexOf(",", iIndex);
         String sub = (comma == -1) ? s.substring(iIndex + 2) : s.substring(iIndex + 2, comma);
-        if (!ProtocolCodec::parseStrictInt(sub, out.wave.intensity)) {
+        if (!ProtocolSupport::parseStrictInt(sub, out.wave.intensity)) {
           err = "INVALID_PARAM";
           return false;
         }
@@ -455,7 +455,7 @@ bool CommandDecoder::decode(const String& in, Command& out, String& err) {
         int comma = s.indexOf(",", eIndex);
         String sub = (comma == -1) ? s.substring(eIndex + 2) : s.substring(eIndex + 2, comma);
         int enableInt = 0;
-        if (!ProtocolCodec::parseStrictInt(sub, enableInt)) {
+        if (!ProtocolSupport::parseStrictInt(sub, enableInt)) {
           err = "INVALID_PARAM";
           return false;
         }

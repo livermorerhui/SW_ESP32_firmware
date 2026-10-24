@@ -1,7 +1,7 @@
 # ESP32-S3 固件完整重构施工蓝图
 
-版本：2026-10-21  
-状态：施工基线  
+版本：2026-10-22
+状态：阶段 1–8 源码施工和构建门禁完成；阶段 9 等待目标板回归；阶段 10 授权核心范围已固化，施工未开始
 适用分支：`codex/construct/esp32-architecture`
 
 ## 1. 目标
@@ -50,16 +50,16 @@ LaserModule 持续报告在位、稳定、离位和测量故障事实
 
 | 区域 | 当前实现 | 重构判断 |
 |---|---|---|
-| BLE | `BleTransport` 已有 RX、控制、OTA、TX 任务和 session/conn fence | 保留，协议策略继续下沉 |
-| 命令 | `CommandBus` 只有一个处理器，`HubHandler` 在 `main.cpp` 承载大量分支 | 必须拆成命令服务和兼容适配器 |
-| 协议 | `ProtocolCodec.h` 同时负责解析、编码和兼容 | 拆出解码、编码、旧协议适配 |
+| BLE | `BleTransport` 保留 RX、控制、OTA、TX 任务和 session/conn fence；快照通过 `PlatformSnapshotOwner` 获取 | 连接和发送归 BLE，业务状态不再由传输层直接依赖具体状态机 |
+| 命令 | `main.cpp` 组装多个命令服务，`LegacyCommandAdapter` 只负责按命令类型转交 | 服务承担命令族业务，旧命令入口保留兼容 |
+| 协议 | `CommandDecoder`、`EventEncoder` 已承载真实解析和编码；`ProtocolCodec` 保留旧调用门面及通用解析/兼容工具 | 旧 APP 字段与语义保持，避免双份解析/编码实现 |
 | 状态 | `SystemStateMachine` 管理启停、保护、恢复和快照 | 保留为唯一安全启停 Owner |
 | 波形 | `WaveModule` 独占 I2S/DDS/Cue 任务 | 保留，禁止其他模块直接启动/停止 |
-| 激光 | `LaserModule` 已有测量、稳定、校准、配置和摘要子模块，但门面仍很大 | 保留过渡门面，逐步下沉策略 |
+| 激光 | `LaserModule` 通过测量、稳定、配置、判断和运行零点 runtime 子对象持有职责，门面仍负责编排和兼容字段 | 保留门面作为调用入口，不重复拥有运行零点观察器 |
 | 事件 | `EventBus` 当前单 sink、同步发布 | 明确线程、背压和事件丢失策略 |
 | 授权 | 旧授权原型在归档分支，不在当前重构分支 | 完整重构后重新接入，不原样搬运 |
 
-当前架构裁决：`architecture-partial`。前三批已完成边界基础设施，但不代表完整重构完成。
+当前架构裁决：`source-and-build-pass / target-board-pending`。阶段 1–8 的源码施工、主机构建及已有主机测试已通过；阶段 9 仍需用户按既定流程烧录后检查声音、连接、律动、激光、安全和 OTA。目标板证据未回收前，不宣称运行验收完成；阶段 10 授权尚未施工。
 
 ## 4. 目标分层
 
@@ -184,70 +184,71 @@ APP 登录并输入订单号
 
 ### 阶段 0：基线冻结
 
-- 固化命令矩阵、事件矩阵、任务矩阵和旧 APP 行为。
-- 建立重构前固件构建产物和版本哈希。
-- 不改变业务行为。
+- 既有 BLE 协议 golden frames、旧 APP 行为合同和回归工具作为行为基线。
+- 已新增任务、队列、锁和构建资源源码审计；目标板高水位和等待数据待采集。
+- 重构前构建产物与固件哈希仍需从可确认的基线提交/产物中核对归档；不可追溯时明确登记证据缺口，不以当前产物代替。
+- 本阶段的剩余基线证据纳入阶段 9 对照，不改变业务行为。
 
 ### 阶段 1：入口和生命周期收口
 
-- 已完成 BLE 生命周期协调器。
-- `HubHandler` 不再承载 BLE 连接/断连动作。
-- 保持旧协议和状态机行为。
+- 已完成 `BleLifecycleCoordinator`；BLE 连接/断连事件经控制队列交由协调器。
+- `LegacyCommandAdapter` 不承载 BLE 连接/断连动作。
+- 保持旧协议和状态机行为，目标板连接提示音/断连提示音仍待阶段 9 验收。
 
 ### 阶段 2：协议边界
 
-- 已建立 `CommandDecoder`、`EventEncoder` 适配边界。
-- 下一步把真实解析/编码实现拆入独立文件。
-- `ProtocolCodec` 暂作兼容门面。
+- 已完成真实实现拆分：`CommandDecoder.cpp` 负责命令解析，`EventEncoder.cpp` 负责事件和快照编码。
+- `ProtocolCodec` 的旧 API 委托给新实现，作为兼容门面；共享的严格数值解析、协议常量和兼容文案由 `ProtocolSupport` 提供。
+- `BleTransport` 已改为消费解码器、编码器及注入的快照接口，不直接依赖具体状态机。
 
 ### 阶段 3：设备能力依赖隔离
 
-- 已完成 `WaveObservation` 只读接口。
-- 下一步将 `LaserModule` 对 FSM 的多项写入收口为事实 Sink。
-- 禁止激光模块直接控制波形。
+- 已完成 `WaveControl`、`WaveObservation`、`MeasurementFacts`、`LaserStatePort` 等窄接口。
+- `LaserModule` 使用事实接口向状态机报告测量/状态，不直接控制波形输出。
+- `SystemStateMachine` 继续是启动、停止和安全动作的唯一 Owner。
 
 ### 阶段 4：命令服务拆分
 
 - 按能力拆出 `CapabilityService`、`WaveCommandService`、`ConfigService`、`CalibrationService`、`ProtectionService`。
 - `HubHandler` 变为 `LegacyCommandAdapter`。
-- 所有服务返回统一 `ServiceResult`，由适配器生成旧 ACK/NACK。
+- 服务目前以 `bool handle(command, outAck)` 维持兼容 ACK/NACK；尚未改成统一 `ServiceResult`，这不改变旧协议，但属于未来授权接入前可再评审的接口整洁度事项。
 
-当前进度：已完成第一步 `WaveCommandService`，迁移 `WAVE_SET`、`WAVE_START`、`WAVE_STOP`、`AUDIO_CUE` 和 `LEGACY_FIE`；已完成第二步 `CapabilityCommandService`，迁移能力、身份、安全版本和降级启动命令；其余命令族继续按本阶段顺序迁移。
+当前进度：已迁移波形、能力/身份、安全版本/降级启动、校准与空载、设备配置、实时流、保护命令；`LegacyCommandAdapter` 对每条命令只做一次服务分派，不保留重复业务 fallback。
 
 ### 阶段 5：状态机接口化
 
 - 保留 `SystemStateMachine` 为唯一安全 Owner。
-- 抽象 `WaveControl`、`MeasurementFacts`、`AuthorizationGate`、`SafetyEventSink`。
-- 移除对具体模块的非必要反向依赖。
+- 已使用 `WaveControl`、`MeasurementFacts`、`LaserStatePort` 和 `PlatformSnapshotOwner` 收窄模块依赖。
+- `AuthorizationGate` 是后续接口预留方向，当前未实现、未接入启动判定；不以空壳代码提前改变旧行为。
+- 源码审计确认 BLE 传输不再直接依赖 `SystemStateMachine` 具体类型。
 
 ### 阶段 6：LaserModule 内部拆分
 
-- `MeasurementRuntime`：采样和健康状态。
-- `PresenceStabilityPolicy`：在位、稳定、开始准备。
-- `CalibrationService`：校准模型和空载距离。
-- `LaserConfigStore`：配置持久化。
-- `RunSummaryCollector`：运行摘要。
-- `LaserModule` 只保留编排和兼容外观。
+- 已拆分 `LaserMeasurementRuntime`、`LaserStabilityRuntime`、`LaserConfigurationRuntime`、`LaserDecisionRuntime`、`LaserRuntimeZeroRuntime`，分别持有测量、稳定、配置/存储、判断/摘要和运行零点窗口职责。
+- `LaserModule` 保留编排、对外 `MeasurementFacts` 和兼容访问外观；运行零点观察器仅由 `LaserRuntimeZeroRuntime` 拥有。
+- 此次为结构迁移，未改变激光阈值、状态判断和波形控制合同。
 
 ### 阶段 7：协议实现拆分
 
-- `CommandDecoder`、`EventEncoder`、`LegacyProtocolAdapter` 成为真实实现。
-- 保留旧字符串、字段顺序、错误文案和事件语义。
+- `CommandDecoder`、`EventEncoder` 已是真实解析/编码实现；旧 ACK/NACK 兼容路由由 `LegacyCommandAdapter` 提供。
+- 保留旧字符串、字段顺序、错误文案和事件语义；golden frame 与主机测试作为源码级证据。
 
 ### 阶段 8：任务与资源审计
 
-- 固化任务栈高水位、队列水位、堆内存、事件延迟和阻塞时长。
-- 处理所有 `portMAX_DELAY` 的实时影响。
-- 明确事件可丢失等级和控制事件不可丢失等级。
+- 已完成任务/队列/阻塞点源码盘点并记录构建 RAM/Flash 占用，见 [`firmware_task_resource_audit.md`](firmware_task_resource_audit.md)。
+- 已区分控制帧与可覆盖测量流的满队策略，并确认当前重构未新增任务、队列或长等待点。
+- 任务栈高水位、队列峰值、事件延迟、锁/I2S 等待时长及最低堆内存必须由目标板采集，源码盘点不等于运行时审计完成。
 
 ### 阶段 9：重构完成评审
 
-- 旧 APP 回归通过。
-- BLE、波形、激光、安全和 OTA 回归通过。
-- 无双 Owner、无未解释直接依赖。
-- 形成最终架构文档和测试报告。
+- 源码评审和 `esp32s3_unified` 编译已通过；Evaluator、E8 maintenance bridge、Stage B stream/stop 主机测试已有通过记录。
+- 仍需目标板回归 BLE 连接/断开提示音、旧 APP 命令、波形输出/软停、激光在位/稳定/离位保护、安全恢复、OTA，以及任务资源数据。
+- 重构前固件哈希若无法从既有记录追溯，应登记该对照证据缺口。
+- 目标板验收由用户统一执行；结果未回收前，阶段 9 保持“待目标板验收”，授权不开始。
 
 ### 阶段 10：授权模块开发
+
+当前结论：已完成核心授权 MVP 的讨论收口，尚未新增授权源码。施工顺序为：先完成后端签发、APP 获取与 BLE 传输、ESP32 验签与持久化的技术闭环，再补支付、管理和运营能力。ESP32 自行 Wi-Fi/MQTT 核验仍为后续备用能力。
 
 仅在阶段 0–9 全部通过后进行：
 
@@ -492,6 +493,18 @@ algorithm, nonce, signature
 历史说明、归档授权原型和候选蓝图不能覆盖当前源码事实；每次阶段收口时同步架构说明、施工蓝图和测试证据。
 
 ## 19. 实际施工记录
+
+### 阶段 1–8 施工收口（2026-10-22）
+
+- 分支：`codex/construct/esp32-architecture`，独立 worktree；主仓和 `main` 未修改。
+- 命令服务：波形、能力、校准、设备配置、测量流和保护命令分别由服务承接，旧入口只分派。
+- 协议边界：命令解码、事件/快照编码各有真实实现；BLE 使用边界实现，快照通过 `PlatformSnapshotOwner` 注入接口获取。
+- 状态边界：激光通过窄接口提供测量事实；状态机仍唯一决定运行与安全动作。
+- 激光职责：测量、稳定、配置、判断、运行零点窗口分别拆到 runtime 子对象；去除重复的运行零点观察器所有权。
+- 资源审计：新增 [`firmware_task_resource_audit.md`](firmware_task_resource_audit.md)，明确源码已知配置和需真机采集的指标。
+- 授权：未新增授权服务、授权命令、授权 Store 或启动门禁。
+
+验证记录：`python3 -m platformio run -e esp32s3_unified` 通过；Evaluator、E8 maintenance bridge 和 Stage B stream/stop 主机测试通过。构建/主机测试不代表目标板功能验收。
 
 ### 阶段 4 第一子批次：波形命令服务化
 

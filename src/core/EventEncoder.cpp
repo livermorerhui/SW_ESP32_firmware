@@ -1,6 +1,6 @@
 #include "EventEncoder.h"
 
-#include "core/ProtocolCodec.h"
+#include "core/ProtocolSupport.h"
 #include "core/VerboseSerial.h"
 #include "config/GlobalConfig.h"
 
@@ -25,10 +25,10 @@ String EventEncoder::encodeSnapshot(const PlatformSnapshot& snapshot) {
     s += snapshot.degradedStartEnabled ? "1" : "0";
     s += " leave_stop_enabled=";
     s += snapshot.leaveStopEnabled ? "1" : "0";
-    ProtocolCodec::logTruthPayloadBudgetWarningIfNeeded(
+    ProtocolSupport::logTruthPayloadBudgetWarningIfNeeded(
         "runtime_truth",
         s.length() + 1,
-        ProtocolCodec::kConnectSnapshotPayloadBudgetBytes,
+        ProtocolSupport::kConnectSnapshotPayloadBudgetBytes,
         s);
     return s;
   }
@@ -49,7 +49,7 @@ String EventEncoder::encode(const Event& e) {
       case EventType::FAULT:
         s = "EVT:FAULT ";
         s += String((uint16_t)e.fault);
-        if (const char* compatReason = ProtocolCodec::minimalCompatFaultReason(e.fault)) {
+        if (const char* compatReason = ProtocolSupport::minimalCompatFaultReason(e.fault)) {
           s += " reason=";
           s += compatReason;
           SW_VERBOSE_SERIAL_PRINTF("[FAULT_COMPAT] export code=%u reason=%s route=EVT:FAULT\n",

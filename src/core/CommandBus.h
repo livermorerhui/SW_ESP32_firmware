@@ -34,7 +34,7 @@ enum class CmdType : uint8_t {
 };
 
 // One-shot audio cues are separate from the low-frequency WAVE control path.
-// Keep the identifier in the command contract so the parser, HubHandler and
+// Keep the identifier in the command contract so the parser, command adapter and
 // WaveModule cannot silently invent different spellings or meanings.
 enum class AudioCueId : uint8_t {
   CONNECT = 0,

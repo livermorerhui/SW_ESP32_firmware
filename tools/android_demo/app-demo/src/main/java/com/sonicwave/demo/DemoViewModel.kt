@@ -975,7 +975,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateSelectedSensorProfile(profile: SensorProfile) {
         _uiState.update { state ->
-            if (state.devicePlatformModel != PlatformModel.PLUS) state
+            if (state.selectedPlatformModel != PlatformModel.PLUS) state
             else state.copy(selectedSensorProfile = profile)
         }
     }
@@ -2021,15 +2021,14 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
         val state = _uiState.value
         val model = state.selectedPlatformModel
         if (model != PlatformModel.BASE && model != PlatformModel.PLUS) return
-        val profile = if (model == PlatformModel.BASE) SensorProfile.NONE else
-            if (state.devicePlatformModel == PlatformModel.PLUS) state.deviceSensorProfile ?: SensorProfile.NONE
-            else SensorProfile.NONE
+        val profile = if (model == PlatformModel.BASE) SensorProfile.NONE
+            else state.selectedSensorProfile
         sendProfileConfig(model, profile)
     }
 
     fun sendSensorProfileConfig() {
         val state = _uiState.value
-        if (state.devicePlatformModel != PlatformModel.PLUS) return
+        if (state.selectedPlatformModel != PlatformModel.PLUS) return
         sendProfileConfig(PlatformModel.PLUS, state.selectedSensorProfile)
     }
 
@@ -3405,8 +3404,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 faultStatus = faultStatus,
                                 deviceReasonCode = faultStatus.codeName,
                                 deviceDegradedStartAvailable = if (measurementUnavailable &&
-                                    it.devicePlatformModel != PlatformModel.BASE &&
-                                    it.deviceLaserInstalled == true
+                                    it.devicePlatformModel == PlatformModel.PLUS
                                 ) {
                                     true
                                 } else {
@@ -3460,8 +3458,7 @@ class DemoViewModel(application: Application) : AndroidViewModel(application) {
                                 deviceReasonCode = safetyStatus.reasonCode,
                                 deviceSafetyEffectCode = safetyStatus.effectCode,
                                 deviceDegradedStartAvailable = if (measurementUnavailable &&
-                                    it.devicePlatformModel != PlatformModel.BASE &&
-                                    it.deviceLaserInstalled == true
+                                    it.devicePlatformModel == PlatformModel.PLUS
                                 ) {
                                     true
                                 } else {
