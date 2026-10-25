@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "version": "SW-ESP32-1.1.3",
+  "version": "SW-ESP32-1.1.4",
   "environment": "esp32s3_unified",
   "board": "sonicwave_esp32s3_n16r8"
 }
