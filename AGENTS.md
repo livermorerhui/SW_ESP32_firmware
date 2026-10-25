@@ -96,25 +96,16 @@
   - 当前订阅状态只能看 `ACK:STREAM` 或设备侧 `[STREAM_CONTROL]` 执行证据
   - 禁止靠 APP 名称、BLE 设备名、连接来源或 Demo / SW APP 猜测来决定是否发送实时流
   - 关闭实时流只影响 BLE `EVT:STREAM` 上行，不得被解释为停止 MAX485 测量、baseline、稳定体重或 safety 判断
-- 如果本轮开发尚未正式收官，除非用户明确提出，否则 AI 不得自行执行：
-  - `git commit`
-  - `git push`
-  - 任何等价的远端发布动作
-- 默认先完成：
-  - 代码
-  - 验证
-  - 文档/报告
-  再由用户决定是否提交、如何分组提交、是否推送
-- 后续固件开发默认采用短生命周期分支，避免长期分支堆积：
-  - 完整跨仓流程入口看 SW 仓 `docs/system/SW项目轻量成熟工程开发流程.md`
-  - 开新工作前必须从最新 `main` 创建分支：`git switch main`、`git pull --ff-only origin main`、`git switch -c <type>/<short-topic>`
-  - 分支类型默认使用 `feature/`、`fix/`、`docs/`、`audit/`、`release/`、`backup/`
-  - 一个分支只承载一个主题；跨仓联调时与 SW 仓使用同一个短主题后缀
-  - 合并回 `main` 前必须先跑固件 focused gate，例如 `git diff --check`、`python3 tools/run_evaluator_unit_tests.py`、`python3 -m platformio run -e esp32s3_unified`；`esp32s3` 等旧环境仅作明确指定的维护/回退用途，不替代产品环境验证
-  - 合并优先使用 `--no-ff` 保留交付边界；高风险合并前可创建 `backup/main-before-<topic>-YYYYMMDD`
-  - `backup/*` 只作短期保险，不作为长期开发入口；合并并确认 `main` 正常后，应清理已合并的本地功能分支，远端功能分支确认不再用于 PR / 回溯后再删除
-  - 禁止从过期功能分支继续开新长期分支，禁止把多个无关主题堆进同一个分支，禁止把 `backup/*` 当作日常主线
-  - AI 可以自动开分支、实现、验证和分类 commit；只有用户明确说“验收通过，合并 main”或“按完整流程交付”后，才允许合并并 push `main`
+- Git 分支、worktree、发布来源和清理统一遵守 SW 仓 [Git 分支与 Worktree 管理规则](https://github.com/livermorerhui/SW-Co-development/blob/main/docs/system/Git分支与Worktree管理规则.md)；本机入口是相邻 SW 仓 `docs/system/Git分支与Worktree管理规则.md`。
+  - 开工先核仓库根、全部相关 worktree、分支/HEAD、staged/未暂存/未跟踪和主线关系；清理时追加 ignored 资产。main 同步不能代替工作树干净，文件名不能证明会话归属。
+  - 当前主工程默认保持 main；有并行修改时，从最新 origin/main 在 `/Volumes/MACminiSSD/SW_ESP3_Firmware_worktrees/<主题>` 建短期独立分支/工作树。禁止在他人脏目录盲目 switch、pull、stash 或 reset，也不强制重复检出同一分支。
+  - 一个分支一个主题；跨仓任务使用同一主题后缀。本轮文件白名单、归属未知和其他任务修改分开核对，禁止混合暂存。
+  - 完成必要实现、对应验证和文档后按主题提交。用户明确的仓库/主题合并推送授权持续有效，不重复要求固定“验收口令”；其他仓库、未审查业务包和生产发布不自动扩展授权。
+  - 验证按实际范围和用户分工选择：文档包做差异、索引和链接检查；固件代码包按影响运行 focused gate，产品环境为 `esp32s3_unified`。不为纯 Git/文档治理机械构建或烧录。
+  - 合并前从最终目标审完整提交与文件差异；按交付边界选择合并方式，备份引用只为具体风险创建并注明退出条件。推送后核对远端 SHA、main 同步和剩余工作树状态。
+  - 发布候选、已发布源码、历史归档分别记录。固定历史 ref 落后 main、或本地准备候选没有 upstream，不能单独判为错误，也不能以分支名证明已部署。
+  - 历史来源优先固定为含用途、日期和SHA的注释标签。未集成授权原型继续冻结，local-only标签不得用 `push --tags` 自动外传；backup/archive不作日常开发基线。
+  - 移除 worktree 前核必要配置、bin/ELF和ignored构建产物；失效gitdir先repair，跨盘迁移逐文件核对。仍承担回放/产物保留的detached目录固定archive tag并lock。已集成远端分支在核PR/用途和归档SHA后，按预期SHA清理。
 - 只要开发进入“需要真机测试”的阶段，AI 必须明确提出已经进入真机验证阶段，并先准备好自己后续分析需要的自动采集脚本或命令
 - 真机测试阶段的默认分工固定为：
   - AI 负责准备日志采集、标记、停止、回收证据的脚本或命令
