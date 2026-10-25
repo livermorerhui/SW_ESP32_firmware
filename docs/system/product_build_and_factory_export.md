@@ -2,9 +2,11 @@
 
 本说明对应 2026-10-24 至 2026-10-25 的构建入口收口；不修改 Base/Plus、ready、保护、波形和 OTA 协议。
 
+当前版本入口已按用户要求更新为 `SW-ESP32-1.1.4 / u114-a15d71403ddb`，用于测试原工厂 1.1.3 经 APP 升级。全部构建输入相对 1.1.3 只差 `firmware_release.json`；启动程序、分区表、OTA 初始化数据不变。原 1.1.3 工厂 ZIP 保持不变，当前 Default Upload 是 1.1.4，不能作为该工厂首件的 1.1.3 烧录来源。发布、证据和用户测试统一见[本版验证记录](../../../SW/docs/system/firmware-release/esp32-113-to-114-factory-ota-validation.md)。以下 1.1.3 精确产物描述保留历史基线。
+
 ## 操作顺序
 
-1. VSCode 打开固件仓 `main`，使用默认 `esp32s3_unified` 环境。`firmware_release.json` 是产品版本和正式构建环境的唯一入口，当前版本为 `SW-ESP32-1.1.3`。
+1. VSCode 打开固件仓 `main`，使用默认 `esp32s3_unified` 环境。`firmware_release.json` 是产品版本和正式构建环境的唯一入口，当前版本为 `SW-ESP32-1.1.4`。
 2. Build/Upload 读取当前源码与固定构建配置，生成 `u113-<12位内容摘要>` 构建号。文档或 Git 提交号变化不改构建号；源码、版本文件、CMake、平台配置、引脚或分区变化会改构建号。
 3. 构建入口把版本、构建号、UNIFIED 后端选择写入构建目录中的生成头；`src/CMakeLists.txt` 强制让每个应用编译单元包含它。根 CMake 也使用同一产品版本设置 ESP-IDF app descriptor。
 4. 构建成功后，检查实际 component 编译命令、当前源码清单、实际 SDK 配置和镜像内身份，生成 `.pio/build/esp32s3_unified/product_build.json`。
