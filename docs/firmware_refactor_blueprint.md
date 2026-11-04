@@ -107,7 +107,7 @@ LaserModule 持续报告在位、稳定、离位和测量故障事实
 | `EventEncoder` | Event、Snapshot | 旧协议字符串 | 类型和协议常量 | 不读取硬件或状态内部字段 |
 | `LegacyProtocolAdapter` | 旧命令/旧 ACK | 标准命令/兼容响应 | Decoder/Encoder | 不新增业务规则 |
 | `CommandRouter` | typed command | ServiceResult/ACK | 各服务接口 | 不直接碰硬件 |
-| `AuthorizationService` | 凭据、设备身份、时间事实 | `AuthorizationSnapshot` | Store、Verifier、Policy | 不直接停波、不改安全故障 |
+| `AuthorizationService` | 凭据、设备身份、时间事实、当前周期额度总量与累计使用量 | `AuthorizationSnapshot` | Store、Verifier、Policy | 不直接停波、不改安全故障；不要求持久化“剩余额度”字段 |
 | `SystemStateMachine` | 用户启停、授权资格、在位、传感器和安全事实 | 状态、输出许可、事件 | WaveControl、EventBus | 不解析 BLE、不读订单 |
 | `WaveModule` | 波形参数、FSM 输出许可、Cue | I2S、波形事件、只读摘要 | I2S、FreeRTOS | 不读授权、不读订单 |
 | `LaserMeasurementReader` | 传感器配置 | 原始/有效测量 | Modbus/I2C、锁 | 不调用 Wave/FSM |
@@ -254,13 +254,44 @@ APP 登录并输入订单号
 
 仅在阶段 0–9 全部通过后进行：
 
+- `AuthorizationService`（唯一业务编排入口，不新增独立线程）
+- `AuthorizationTransferManager`（授权传输层组件，负责有界分片、ACK/NACK、重试和资源上限）
 - `AuthorizationVerifier`
 - `AuthorizationPolicy`
 - `AuthorizationStore`
-- `AuthorizationService`
+- `UsageMeter`（纯逻辑组件，根据运行事实更新内存用量并触发检查点）
 - `AuthorizationSnapshotProjection`
 - 授权命令和 ACK/NACK
 - 启动资格接入 `SystemStateMachine`
+
+授权功能在业务上保持为一个 `AuthorizationService`，固件内部只按职责拆分组件，不为每个组件新增任务或线程：
+
+```text
+AuthorizationService
+  ├─ AuthorizationTransferManager
+  ├─ AuthorizationVerifier
+  ├─ AuthorizationPolicy
+  ├─ AuthorizationStore
+  └─ UsageMeter
+
+AuthorizationEligibilityPort       → SystemStateMachine 的窄接口
+AuthorizationSnapshotProjection    → 查询/回报的只读投影
+```
+
+边界约束：
+
+- `AuthorizationTransferManager` 只处理授权二进制分片、ACK/NACK、重试、超时和资源上限，不解析业务授权字段；
+- `AuthorizationVerifier` 负责严格 CBOR/COSE 验签、环境、用途、设备绑定和版本输入校验；
+- `AuthorizationPolicy` 负责授权状态、版本回退、额度和操作号判断；
+- `AuthorizationStore` 负责版本化记录、双槽/提交标记、CRC、读回和失败恢复，不直接做业务决策；
+- `UsageMeter` 只接收实际开始、暂停、继续、停止、断连和离线确认等运行事实，更新内存用量并按检查点触发保存，不单独建立任务；
+- `AuthorizationEligibilityPort` 只向 `SystemStateMachine` 提供是否允许启动/恢复和商业原因，不是独立业务模块；
+- `AuthorizationSnapshotProjection` 负责生成查询和实际回报，原先的 `AuthorizationReport` 不单独建立 Owner；
+- 授权组件不得直接操作 `WaveModule`、I2S 或 `LaserModule`，启停和受控停机仍由 `SystemStateMachine` 统一负责。
+
+授权 BLE 传输的施工候选已归档：新增独立 Auth GATT Service，保留旧 NUS/WAVE 和 OTA 通道；按 `AUTH_OPEN → TRANSFER_BEGIN → DATA → COMMIT → AUTH_RESULT` 工作流传输完整 COSE 包。MVP 候选上限为 COSE 1536 字节、传输总长 2048 字节、有效 MTU 至少 64、单连接一个 transfer、约 2KB 临时重组缓冲；未提交数据不得写入正式授权区。具体 UUID、帧头布局、端序、CRC、错误码和兼容矩阵仍需在授权协议合同中冻结，当前不代表已实现。
+
+授权施工还必须满足以下运行约束：旧/新 APP 的原有 WAVE 和设备功能保持兼容；Auth Service 不改变广播、NUS 或 OTA 合同；BLE callback 不执行验签、NVS 或耗时策略；授权处理不得等待或占用 I2S、Wave、Laser 和安全状态机的实时资源；单连接资源有界，忙时返回明确 `BUSY`；授权传输与波形、激光测量、安全停波并发时不得产生欠载、延迟或语义变化。阶段 10 的性能验收必须与无授权基线对照，不能只凭编译通过。
 
 ## 9. 测试蓝图
 
@@ -469,6 +500,25 @@ algorithm, nonce, signature
 - `CAP/SNAPSHOT` 的旧字段语义和首包长度不能静默改变。
 - 授权状态优先通过版本化能力查询或独立状态命令返回，不直接塞入固定长度的旧 `SNAPSHOT`，除非完成 MTU、字段兼容和旧 APP 忽略规则评审。
 - 设备身份始终由 `FirmwareDeviceIdentityProvider` 提供，APP 传入的设备 ID 只作为匹配条件，不能成为真相源。
+
+当前业务存量边界：目前没有已销售的分期设备；已售设备全部是全款旧固件设备。因此，旧固件默认保持原有启动和输出行为，不能因授权模块尚未存在而锁定。未来分期设备只有在新固件具备 Auth Service、配套 APP 能完成 `AUTH_OPEN`、首次授权已持久化并回报成功后，Backend 才能启用 `authorization_required=true`。
+
+版本组合原则：
+
+| APP/固件 | 全款旧设备 | 未来分期设备 |
+|---|---|---|
+| 旧/旧 | 原功能保持 | 不作为授权销售组合 |
+| 新/旧 | 原功能保持，授权数据不进入旧NUS | 只允许连接和升级提示，不能冒充已完成授权 |
+| 旧/新 | 新固件继续接受旧WAVE | 授权设备不能绕过升级APP门禁 |
+| 新/新 | 原功能保持，可执行存量迁移 | 执行完整授权闭环 |
+
+固件只执行签名授权凭据中的实际资格，不直接执行 Backend 的 `authorization_required` 布尔目标。首次授权、授权更新、锁定、结清和存量迁移都必须经过 `AuthorizationVerifier`、`AuthorizationPolicy`、`AuthorizationStore`，成功持久化后再通过 `AuthorizationEligibilityPort` 提供给 `SystemStateMachine`；目标值未送达时不得覆盖本机当前有效状态。
+
+ESP32本地授权快照建议保存设备绑定、`authorization_required`、`entitlement`、`contract_mode`、`grant_id`、`grant_version`、payload 指纹、有效期、当前周期额度总量、累计次数/秒数、已处理 `quota_update_id`、运行同步状态以及 generation/提交标记/CRC。订单手机号、验证码、付款流水不进入快照。上电时只恢复最新完整快照；不清零用量、不降低版本、不自动恢复中断训练；快照损坏时保留旧有效记录并对已启用授权门禁的设备拒绝启动。旧全款免授权设备的存量迁移另列为 MVP 后专题。
+
+NVS施工建议：授权/额度更新写入非活动槽位，完成读回和完整性校验后再切换活动槽位；用量检查点使用有界的小记录，不能按秒写Flash；所有写入在非实时上下文完成，Wave/I2S、Laser和BLE callback不直接写NVS。掉电时无提交标记的新槽位必须被丢弃，不能覆盖旧有效授权。NVS的掉电恢复和磨损均衡能力不能替代生产阶段的NVS Encryption、Flash Encryption和防整片回滚措施。
+
+当前固件的 `DeviceConfigStore` 已采用双槽、generation、提交标记和 CRC；授权建议复用这一存储模式，但使用独立 `AuthorizationStore`、独立 namespace 和独立字段。推荐把授权资格/额度放在 `AuthSlot` 双槽，把累计次数/秒数放在带 `auth_generation`、`grant_version` 和 `quota_period_id` 绑定的 `UsageSlot` 双槽。这样授权更新只在必要时写大记录，离线检查点只写小记录；上电发现两者代际不一致时，使用授权快照定义的安全基线，不把旧周期用量套入新授权。
 
 ## 17. 证据与放行门禁
 

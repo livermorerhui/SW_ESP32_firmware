@@ -44,7 +44,12 @@
 | `WaveModule` | I2S、DDS、软停、提示音 | 参数、状态机控制、Cue 请求 | PCM/I2S、波形事件 | I2S、EventBus | BLE、订单、授权规则 |
 | `LaserMeasurementReader` | 传感器读写与有效性 | 传感器配置 | 原始/有效测量 | 硬件驱动、锁 | Wave、BLE、订单 |
 | `LaserModule`（过渡门面） | 编排测量子模块并向 FSM 提供事实 | 读数、配置命令 | 在位/稳定/故障事件 | 测量子模块、FSM、EventBus | 协议字符串、授权判定 |
-| `DeviceAuthorization`（后续） | 保存并评估设备资格 | APP 下发的授权凭据、设备身份、时间/版本事实 | 资格快照、授权 ACK/NACK | 独立 NVS、设备身份、窄策略接口 | 改写安全故障、直接控制 I2S |
+| `AuthorizationService`（后续） | 编排设备授权功能 | APP 下发的授权凭据、设备身份、运行事实 | 资格快照、授权 ACK/NACK | `AuthorizationTransferManager`、`AuthorizationVerifier`、`AuthorizationPolicy`、`AuthorizationStore`、`UsageMeter` | 改写安全故障、直接控制 I2S |
+| `AuthorizationTransferManager`（后续） | 有界接收、分片、ACK/NACK、重试和资源上限 | 独立授权 BLE 二进制帧 | 完整授权包、传输结果 | `BleTransport` 窄接口、有限队列 | 解析业务授权、改写授权状态 |
+| `AuthorizationVerifier`（后续） | 严格 CBOR/COSE 验签、环境和设备绑定 | 完整授权包、信任公钥、设备身份 | 验证结果和解析后的候选快照 | 密码库、`FirmwareDeviceIdentityProvider` | 直接写 NVS、直接控制 Wave/Laser |
+| `AuthorizationPolicy`（后续） | 判断状态、版本、额度和操作号 | 候选快照、当前授权快照、用量 | 资格决定和商业原因 | `AuthorizationStore` 只读快照 | 直接控制硬件、伪造安全故障 |
+| `AuthorizationStore`（后续） | 版本化授权/用量原子持久化 | 授权快照、用量、generation | 持久化结果和恢复快照 | 独立 NVS 命名空间、双槽/提交标记 | 业务状态判断、直接控制 Wave |
+| `UsageMeter`（后续） | 根据运行事实更新内存用量并触发检查点 | 实际开始、暂停、继续、停止、断连、离线确认 | 当前周期计次/秒数 | `AuthorizationStore`、运行事实接口 | 新增独立任务、直接控制 I2S |
 | `FirmwareDeviceIdentityProvider` | 提供不可变设备身份 | 芯片/固件事实 | 设备身份 | ESP-IDF | 业务订单状态 |
 | `FirmwareDiagnostics` | 有界日志与诊断 | 事件、错误 | 中文日志/诊断摘要 | 诊断存储 | 阻塞实时任务 |
 
